@@ -1,18 +1,20 @@
-const crawlService = require('../services/crawlService');
 const Result = require('../models/Result');
+const crawlService = require('../services/crawlService');
+
+exports.getAllResults = async (req, res) => {
+  try {
+    const results = await Result.find().sort({ ngay: -1 });
+    res.json(results);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Lỗi server', error: err.toString() });
+  }
+};
 
 exports.updateResults = async (req, res) => {
-  console.log('🚀 [Backend] Bắt đầu cập nhật dữ liệu...');
+  console.log('🔹 [Backend] Request POST /api/xs/update');
   try {
-    const data = await crawlService.extractXsData(); // hoặc crawlService.extract_xs_data()
-    console.log(`🟢 [Backend] Crawl xong, tổng số kết quả: ${data.length}`);
-
-    if (!data || data.length === 0) {
-      console.log('⚠️ [Backend] Không có dữ liệu mới để lưu');
-      return res.status(200).json({ message: 'Không có dữ liệu mới để lưu' });
-    }
-
-    // Lưu chỉ những ngày chưa có
+    const data = await crawlService.extractXsData();
     let insertedCount = 0;
     for (const item of data) {
       const exists = await Result.findOne({ ngay: item.ngay, giai: item.giai });
@@ -21,23 +23,10 @@ exports.updateResults = async (req, res) => {
         insertedCount++;
       }
     }
-
-    console.log(`✅ [Backend] Đã thêm ${insertedCount} bản ghi mới`);
-    return res.json({ message: `Cập nhật xong, thêm ${insertedCount} kết quả mới` });
-
+    console.log(`✅ [Backend] Thêm ${insertedCount} bản ghi mới`);
+    res.json({ message: `Cập nhật xong, thêm ${insertedCount} kết quả mới` });
   } catch (err) {
-    console.error('❌ [Backend] Lỗi khi cập nhật dữ liệu:', err);
-    return res.status(500).json({ message: 'Lỗi server khi cập nhật dữ liệu', error: err.toString() });
-  }
-};
-
-exports.getAllResults = async (req, res) => {
-  try {
-    const results = await Result.find().sort({ ngay: -1, giai: 1 });
-    console.log(`📊 [Backend] Trả về tổng ${results.length} kết quả`);
-    res.json(results);
-  } catch (err) {
-    console.error('❌ [Backend] Lỗi khi lấy dữ liệu:', err);
-    res.status(500).json({ message: 'Lỗi server khi lấy dữ liệu', error: err.toString() });
+    console.error(err);
+    res.status(500).json({ message: 'Lỗi server khi cập nhật dữ liệu', error: err.toString() });
   }
 };
