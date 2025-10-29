@@ -1,35 +1,33 @@
-const Result = require('../models/Result');
-const { fetchXSData } = require('../services/crawlService');
+// controllers/xsController.js
+const crawlService = require('../services/crawlService');
+const XsResult = require('../models/xsResult');
 
-// GET tất cả dữ liệu
-const getAllResults = async (req, res) => {
+exports.updateResults = async (req, res) => {
+  console.log('🚀 [Backend] Bắt đầu cập nhật dữ liệu...');
   try {
-    const results = await Result.find().sort({ ngay: -1, giai: 1 });
-    res.json(results);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-};
+    const data = await crawlService.extractXsData(); // hoặc crawlService.extract_xs_data()
+    console.log(`🟢 [Backend] Crawl xong, tổng số kết quả: ${data.length}`);
 
-// POST cập nhật dữ liệu mới (crawl + save)
-const updateResults = async (req, res) => {
-  try {
-    const data = await fetchXSData(); // trả về mảng object như CSV cũ
-    let newCount = 0;
-    for (const item of data) {
-      try {
-        await Result.updateOne(
-          { ngay: item.ngay, giai: item.giai },
-          { $setOnInsert: item },
-          { upsert: true }
-        );
-        newCount++;
-      } catch {}
+    if (!data || data.length === 0) {
+      console.log('⚠️ [Backend] Không có dữ liệu mới để lưu');
+      return res.status(200).json({ message: 'Không có dữ liệu mới để lưu' });
     }
-    res.json({ message: `Cập nhật xong, ${newCount} bản ghi mới` });
+
+    // Lưu chỉ những ngày chưa có
+    let insertedCount = 0;
+    for (const item of data) {
+      const exists = await XsResult.findOne({ ngay: item.ngay, giai: item.giai });
+      if (!exists) {
+        await XsResult.create(item);
+        insertedCount++;
+      }
+    }
+
+    console.log(`✅ [Backend] Đã thêm ${insertedCount} bản ghi mới`);
+    return res.json({ message: `Cập nhật xong, thêm ${insertedCount} kết quả mới` });
+
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('❌ [Backend] Lỗi khi cập nhật dữ liệu:', err);
+    return res.status(500).json({ message: 'Lỗi server khi cập nhật dữ liệu', error: err.toString() });
   }
 };
-
-module.exports = { getAllResults, updateResults };
