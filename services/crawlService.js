@@ -4,15 +4,11 @@ const cheerio = require('cheerio');
 const mongoose = require('mongoose');
 const { DateTime } = require('luxon');
 
-// Config từ biến môi trường
 const MONGO_URI = process.env.MONGO_URI;
 const CRAWL_URL = process.env.CRAWL_URL || 'https://ketqua04.net/so-ket-qua';
 
 // Kết nối MongoDB
-mongoose.connect(MONGO_URI, {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
-});
+mongoose.connect(MONGO_URI);
 const db = mongoose.connection;
 db.on('error', console.error.bind(console, 'MongoDB connection error:'));
 db.once('open', () => console.log('✅ MongoDB connected'));
@@ -28,55 +24,55 @@ const prizeSchema = new mongoose.Schema({
 }, { versionKey: false });
 
 prizeSchema.index({ ngay: 1, giai: 1 }, { unique: true });
-
 const Prize = mongoose.model('Prize', prizeSchema);
 
-// Chuyển số 3 chữ số thành C/L
+// Tạo C/L cho số 3 chữ số
 function getChanLe(numberStr) {
   if (numberStr.length !== 3) return '';
   return numberStr.split('').map(d => (parseInt(d) % 2 === 0 ? 'C' : 'L')).join('');
 }
 
-// Tạo record cho DB
+// Tạo record DB
 function createPrizeRecord(ngay, prizeCode, index, number) {
   let giai = prizeCode;
-  if (prizeCode === 'G2') giai = `G2${index === 0 ? 'a' : 'b'}`;
-  else if (prizeCode.startsWith('G3') || prizeCode.startsWith('G4') ||
-           prizeCode.startsWith('G5') || prizeCode.startsWith('G6') ||
-           prizeCode.startsWith('G7')) giai = `${prizeCode}${String.fromCharCode(97 + index)}`;
-  
+
+  // Suffix theo index
+  if (prizeCode === 'G2') giai += index === 0 ? 'a' : 'b';
+  else if (['G3','G4','G5','G6','G7'].includes(prizeCode)) giai += String.fromCharCode(97 + index);
+
   let basocuoi = number, haisocuoi = number;
   if (number.length === 5) { basocuoi = number.slice(2); haisocuoi = number.slice(3); }
   else if (number.length === 4) { basocuoi = number.slice(1); haisocuoi = number.slice(2); }
   else if (number.length === 3) { basocuoi = number; haisocuoi = number.slice(1); }
   else if (number.length === 2) { basocuoi = number; haisocuoi = number; }
 
-  const chanle = basocuoi.length === 3 ? getChanLe(basocuoi) : '';
+  // Chỉ tạo chanle nếu 3 chữ số và không phải G7
+  const chanle = (number.length === 3 && prizeCode !== 'G7') ? getChanLe(basocuoi) : '';
 
   return { ngay, giai, so: number, basocuoi, haisocuoi, chanle };
 }
 
-// Parse dữ liệu ngày
+// Parse kết quả 1 ngày
 function parseDayResults(dayText, ngay) {
   const resultData = [];
   const prizeNames = ['Đặc biệt','Giải nhất','Giải nhì','Giải ba','Giải tư','Giải năm','Giải sáu','Giải bảy'];
-  const positions = [];
-  for (let name of prizeNames) {
-    const idx = dayText.indexOf(name);
-    if (idx !== -1) positions.push([idx, name]);
-  }
-  if (!positions.length) return [];
-
-  positions.sort((a,b) => a[0]-b[0]);
-  positions.push([dayText.length, null]);
-
   const slices = {};
-  for (let i = 0; i < positions.length-1; i++) {
-    slices[positions[i][1]] = dayText.slice(positions[i][0], positions[i+1][0]);
+
+  // Tách từng giải
+  let lastIdx = 0;
+  for (let i = 0; i < prizeNames.length; i++) {
+    const name = prizeNames[i];
+    const idx = dayText.indexOf(name,lastIdx);
+    if (idx !== -1) {
+      let endIdx = (i < prizeNames.length-1) ? dayText.indexOf(prizeNames[i+1], idx) : dayText.length;
+      slices[name] = dayText.slice(idx,endIdx);
+      lastIdx = idx;
+    }
   }
 
   const findAllLen = (txt,n) => txt.match(new RegExp(`\\d{${n}}`,'g')) || [];
 
+  // Sắp xếp theo thứ tự chuẩn: ĐB - G1 - G2a/b - G3a-d - G4a-d - G5a-d - G6a-c - G7a-d
   if (slices['Đặc biệt']) findAllLen(slices['Đặc biệt'],5).forEach((num,i)=>resultData.push(createPrizeRecord(ngay,'ĐB',i,num)));
   if (slices['Giải nhất']) findAllLen(slices['Giải nhất'],5).forEach((num,i)=>resultData.push(createPrizeRecord(ngay,'G1',i,num)));
   if (slices['Giải nhì']) findAllLen(slices['Giải nhì'],5).forEach((num,i)=>resultData.push(createPrizeRecord(ngay,'G2',i,num)));
@@ -103,8 +99,7 @@ async function extractXsData() {
     for (let dm of dateMatches) {
       const dateStr = dm[0].replace(/-/g,'/');
       const startPos = dm.index + dm[0].length;
-      const endPos = undefined; // lấy đến hết text
-      const dayText = allText.slice(startPos, endPos);
+      const dayText = allText.slice(startPos);
       const dayData = parseDayResults(dayText,dateStr);
       if (dayData.length) resultData.push(...dayData);
     }
@@ -116,7 +111,7 @@ async function extractXsData() {
   }
 }
 
-// Lưu dữ liệu vào MongoDB, chỉ insert các ngày chưa có
+// Lưu DB
 async function saveToDb(data) {
   if (!data.length) return;
   for (let item of data) {
@@ -130,16 +125,7 @@ async function saveToDb(data) {
       console.error('Lỗi insert:', e.message, item);
     }
   }
-  console.log(`✅ Cập nhật xong ${data.length} bản ghi mới`);
+  console.log(`✅ Cập nhật xong ${data.length} bản ghi`);
 }
-
-// Chạy trực tiếp
-async function run() {
-  const data = await extractXsData();
-  await saveToDb(data);
-  mongoose.disconnect();
-}
-
-if (require.main === module) run();
 
 module.exports = { extractXsData, saveToDb };
