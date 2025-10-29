@@ -1,6 +1,6 @@
 // controllers/xsController.js
 const crawlService = require('../services/crawlService');
-const XsResult = require('../models/xsResult');
+const XsResult = require('../models/Result');
 
 exports.updateResults = async (req, res) => {
   console.log('🚀 [Backend] Bắt đầu cập nhật dữ liệu...');
@@ -31,3 +31,4 @@ exports.updateResults = async (req, res) => {
     return res.status(500).json({ message: 'Lỗi server khi cập nhật dữ liệu', error: err.toString() });
   }
 };
+
