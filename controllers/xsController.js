@@ -1,4 +1,3 @@
-// controllers/xsController.js
 const crawlService = require('../services/crawlService');
 const Result = require('../models/Result');
 
@@ -18,7 +17,7 @@ exports.updateResults = async (req, res) => {
     for (const item of data) {
       const exists = await Result.findOne({ ngay: item.ngay, giai: item.giai });
       if (!exists) {
-        await XsResult.create(item);
+        await Result.create(item);
         insertedCount++;
       }
     }
@@ -32,4 +31,13 @@ exports.updateResults = async (req, res) => {
   }
 };
 
-
+exports.getAllResults = async (req, res) => {
+  try {
+    const results = await Result.find().sort({ ngay: -1, giai: 1 });
+    console.log(`📊 [Backend] Trả về tổng ${results.length} kết quả`);
+    res.json(results);
+  } catch (err) {
+    console.error('❌ [Backend] Lỗi khi lấy dữ liệu:', err);
+    res.status(500).json({ message: 'Lỗi server khi lấy dữ liệu', error: err.toString() });
+  }
+};
