@@ -32,9 +32,12 @@ router.post('/train-next-day', xsController.trainPredictionForNextDay);
 
 
 // --- 3. NHÓM LẤY DỮ LIỆU DỰ ĐOÁN ---
+// Lấy ngày của bản ghi dự đoán mới nhất (ví dụ: "01/10/2025")
+router.get('/latest-prediction-date', xsController.getLatestPredictionDate);
 
 // Lấy bản ghi dự đoán cho một ngày cụ thể (ví dụ: /api/xs/prediction-by-date?date=30/10/2025)
 router.get('/prediction-by-date', xsController.getPredictionByDate);
 
 
 module.exports = router;
+
