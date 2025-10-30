@@ -4,5 +4,7 @@ const { getAllResults, updateResults } = require('../controllers/xsController');
 
 router.get('/results', getAllResults);      // GET /api/xs/results
 router.post('/update', updateResults);      // POST /api/xs/update
+router.get('/train-advanced', xsController.trainAdvancedModel); // ✅ API ML nâng cao
 
 module.exports = router;
+
