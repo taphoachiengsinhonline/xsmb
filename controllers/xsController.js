@@ -144,7 +144,11 @@ exports.trainHistoricalPredictions = async (req, res) => {
 exports.trainPredictionForNextDay = async (req, res) => {
     console.log('🔔 [trainPredictionForNextDay] Start (with MEMORY)');
     try {
-        const latestResultArr = await Result.aggregate([...]); // Giữ nguyên logic aggregate
+        const latestResultArr = await Result.aggregate([
+            { $addFields: { convertedDate: { $dateFromString: { dateString: '$ngay', format: '%d/%m/%Y', timezone: 'Asia/Ho_Chi_Minh' } } } },
+            { $sort: { convertedDate: -1 } },
+            { $limit: 1 }
+        ]);
         if (!latestResultArr || latestResultArr.length === 0) return res.status(400).json({ message: 'Không có dữ liệu results.' });
         const latestDay = latestResultArr[0].ngay;
         const nextDayStr = `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
@@ -283,6 +287,7 @@ exports.getLatestPredictionDate = async (req, res) => {
     res.status(500).json({ message: 'Lỗi server', error: err.toString() });
   }
 };
+
 
 
 
