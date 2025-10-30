@@ -28,7 +28,6 @@ exports.updateResults = async (req, res) => {
         insertedCount++;
       }
     }
-    console.log(`✅ Thêm ${insertedCount} bản ghi mới`);
     res.json({ message: `Cập nhật xong, thêm ${insertedCount} kết quả mới` });
   } catch (err) {
     console.error(err);
@@ -99,7 +98,6 @@ exports.trainHistoricalPredictions = async (req, res) => {
       created++;
     }
 
-    console.log(`✅ [trainHistoricalPredictions] Done, created/updated ${created} predictions`);
     return res.json({ message: `Huấn luyện lịch sử hoàn tất, đã tạo/cập nhật ${created} bản ghi.`, created });
   } catch (err) {
     console.error('❌ [trainHistoricalPredictions] Error:', err);
@@ -133,15 +131,11 @@ exports.trainPredictionForNextDay = async (req, res) => {
     }
 
     const latestDay = latestResultArr[0].ngay;
-    console.log(`✅ [trainPredictionForNextDay] Tìm thấy ngày kết quả mới nhất là: ${latestDay}`);
-
-    // Tính toán ngày tiếp theo
+     // Tính toán ngày tiếp theo
     const parts = latestDay.split('/');
     const d = new Date(`${parts[2]}-${parts[1]}-${parts[0]}`);
     d.setDate(d.getDate() + 1);
     const nextDayStr = `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
-    console.log(`🔮 [trainPredictionForNextDay] Sẽ tạo dự đoán cho ngày: ${nextDayStr}`);
-
     // Lấy tất cả kết quả của ngày mới nhất để phân tích
     const prevResults = await Result.find({ ngay: latestDay }).lean();
     if (!prevResults.length) {
@@ -183,7 +177,6 @@ exports.trainPredictionForNextDay = async (req, res) => {
       { upsert: true, new: true }
     );
 
-    console.log(`✅ [trainPredictionForNextDay] Saved prediction for ${nextDayStr}`);
     return res.json({ message: 'Tạo dự đoán cho ngày tiếp theo thành công!', ngayDuDoan: nextDayStr });
   } catch (err) {
     console.error('❌ [trainPredictionForNextDay] Error:', err);
@@ -193,7 +186,6 @@ exports.trainPredictionForNextDay = async (req, res) => {
 
 // ----------------- HÀM CẬP NHẬT WEIGHTS (LOGIC SO SÁNH CHÉO) -----------------
 exports.updatePredictionWeights = async (req, res) => {
-  console.log('🔔 [updatePredictionWeights] Start');
   try {
     const predsToUpdate = await Prediction.find({ danhDauDaSo: false }).lean();
     if (!predsToUpdate.length) return res.json({ message: 'Không có dự đoán nào cần cập nhật.' });
@@ -202,7 +194,6 @@ exports.updatePredictionWeights = async (req, res) => {
     for (const p of predsToUpdate) {
       const actualResults = await Result.find({ ngay: p.ngayDuDoan }).lean();
       if (!actualResults.length) {
-        console.log(`⚠️ Không tìm thấy kết quả cho ngày ${p.ngayDuDoan}, bỏ qua.`);
         continue;
       }
       const dbRec = actualResults.find(r => r.giai === 'ĐB');
@@ -241,7 +232,6 @@ exports.updatePredictionWeights = async (req, res) => {
       predDoc.danhDauDaSo = true;
       await predDoc.save();
       updatedCount++;
-      console.log(`✅ Đã cập nhật prediction ngày ${p.ngayDuDoan}, tổng weight tăng: ${incrTotal}`);
     }
 
     return res.json({ message: `Cập nhật weights hoàn tất. Đã xử lý ${updatedCount} bản ghi.`, updatedCount });
@@ -268,21 +258,16 @@ exports.getPredictionByDate = async (req, res) => {
 // ----------------- LẤY NGÀY DỰ ĐOÁN MỚI NHẤT (VỚI LOG DEBUG) -----------------
 exports.getLatestPredictionDate = async (req, res) => {
   try {
-    console.log('🔍 [Backend] API /latest-prediction-date được gọi.');
     // Sắp xếp theo `ngayDuDoan` giảm dần. Sử dụng collation để sắp xếp chuỗi dd/mm/yyyy đúng.
     const latestPrediction = await Prediction.findOne()
       .sort({ ngayDuDoan: -1 })
       .collation({ locale: 'vi', numericOrdering: true }) // Rất quan trọng để sort chuỗi ngày tháng
       .lean();
-      
-    console.log('📄 [Backend] Bản ghi dự đoán tìm thấy:', latestPrediction); // LOG QUAN TRỌNG
 
     if (!latestPrediction) {
-      console.log('⚠️ [Backend] Không tìm thấy bản ghi dự đoán nào trong DB.');
       return res.status(404).json({ message: 'Không tìm thấy bản ghi dự đoán nào.' });
     }
-    
-    console.log('✅ [Backend] Trả về ngày:', latestPrediction.ngayDuDoan);
+
     res.json({ latestDate: latestPrediction.ngayDuDoan });
 
   } catch (err) {
@@ -290,11 +275,5 @@ exports.getLatestPredictionDate = async (req, res) => {
     res.status(500).json({ message: 'Lỗi server', error: err.toString() });
   }
 };
-
-// Các hàm cũ hơn có thể được giữ lại hoặc xóa đi nếu không dùng
-// exports.trainAdvancedModel = ...
-// exports.getLatestPrediction = ...
-// exports.getPrediction = ...
-
 
 
