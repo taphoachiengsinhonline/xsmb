@@ -214,3 +214,198 @@ exports.getPrediction = async (req,res)=>{
     res.status(500).json({ message:'Lỗi server', error: err.toString() });
   }
 };
+
+exports.trainHistoricalPredictions = async (req, res) => {
+  console.log('🔔 [trainHistoricalPredictions] Start');
+  try {
+    // Lấy toàn bộ kết quả, sắp theo ngày tăng dần
+    const results = await Result.find().sort({ ngay: 1 }).lean();
+    if (!results.length) return res.status(400).json({ message: 'Không có dữ liệu results' });
+
+    // group theo ngày
+    const grouped = {};
+    for (const r of results) {
+      grouped[r.ngay] = grouped[r.ngay] || [];
+      grouped[r.ngay].push(r);
+    }
+    const days = Object.keys(grouped).sort((a,b) => a.split('/').reverse().join('-').localeCompare(b.split('/').reverse().join('-')));
+    if (days.length < 2) return res.status(400).json({ message: 'Không đủ ngày để train historical' });
+
+    let created = 0;
+    for (let i = 1; i < days.length; i++) {
+      const prevDay = days[i-1];    // dùng prevDay để predict day
+      const targetDay = days[i];   // prediction for targetDay
+      const prevResults = grouped[prevDay] || [];
+
+      // build counts per digit position (trăm, chục, đơn vị)
+      const countTram = {}, countChuc = {}, countDonVi = {};
+      const chiTiet = [];
+
+      prevResults.forEach((r, idx) => {
+        const num = String(r.so).padStart(3,'0');
+        const [tram,chuc,donvi] = num.split('');
+        countTram[tram] = (countTram[tram] || 0) + 1;
+        countChuc[chuc] = (countChuc[chuc] || 0) + 1;
+        countDonVi[donvi] = (countDonVi[donvi] || 0) + 1;
+
+        chiTiet.push({
+          number: num,
+          group: Math.floor(idx/9)+1,
+          positionInPrize: idx+1,
+          tram, chuc, donvi,
+          weight: 1
+        });
+      });
+
+      const sortTop = (obj) => Object.entries(obj).map(([k,v])=>({k,v})).sort((a,b)=>b.v-a.v).slice(0,5).map(o=>o.k);
+
+      const topTram = sortTop(countTram);
+      const topChuc = sortTop(countChuc);
+      const topDonVi = sortTop(countDonVi);
+
+      // upsert prediction for targetDay
+      const up = await Prediction.findOneAndUpdate(
+        { ngayDuDoan: targetDay },
+        { ngayDuDoan: targetDay, topTram, topChuc, topDonVi, chiTiet, danhDauDaSo: false },
+        { upsert: true, new: true }
+      );
+      created++;
+    }
+
+    console.log(`✅ [trainHistoricalPredictions] Done, created/updated ${created} predictions`);
+    return res.json({ message: 'Train historical finished', created });
+  } catch (err) {
+    console.error('❌ [trainHistoricalPredictions] Error:', err);
+    return res.status(500).json({ message: 'Lỗi server', error: err.toString() });
+  }
+};
+
+// ----------------- HÀM MỚI: trainPredictionForNextDay -----------------
+// Tạo prediction cho "ngày tiếp theo" dựa trên ngày mới nhất có trong DB.results
+exports.trainPredictionForNextDay = async (req, res) => {
+  console.log('🔔 [trainPredictionForNextDay] Start');
+  try {
+    // lấy toàn bộ ngày có kết quả, tìm ngày mới nhất
+    const daysRes = await Result.aggregate([
+      { $group: { _id: '$ngay' } },
+      { $sort: { '_id': -1 } },
+      { $limit: 1 }
+    ]);
+    if (!daysRes || !daysRes.length) return res.status(400).json({ message: 'Không có dữ liệu results' });
+
+    const latestDay = daysRes[0]._id; // format dd/mm/yyyy
+    // compute next day (string)
+    const parts = latestDay.split('/');
+    const d = new Date(`${parts[2]}-${parts[1]}-${parts[0]}`);
+    const next = new Date(d.getTime() + 24*3600*1000);
+    const dd = String(next.getDate()).padStart(2,'0');
+    const mm = String(next.getMonth()+1).padStart(2,'0');
+    const yyyy = next.getFullYear();
+    const nextDayStr = `${dd}/${mm}/${yyyy}`;
+
+    // lấy kết quả của latestDay
+    const prevResults = await Result.find({ ngay: latestDay }).lean();
+    if (!prevResults || !prevResults.length) return res.status(400).json({ message: 'Không có dữ liệu ngày trước để dự đoán' });
+
+    // build as trainHistoricalPredictions did
+    const countTram = {}, countChuc = {}, countDonVi = {};
+    const chiTiet = [];
+    prevResults.forEach((r, idx) => {
+      const num = String(r.so).padStart(3,'0');
+      const [tram,chuc,donvi] = num.split('');
+      countTram[tram] = (countTram[tram] || 0) + 1;
+      countChuc[chuc] = (countChuc[chuc] || 0) + 1;
+      countDonVi[donvi] = (countDonVi[donvi] || 0) + 1;
+      chiTiet.push({
+        number: num,
+        group: Math.floor(idx/9)+1,
+        positionInPrize: idx+1,
+        tram,chuc,donvi,
+        weight: 1
+      });
+    });
+    const sortTop = (obj) => Object.entries(obj).map(([k,v])=>({k,v})).sort((a,b)=>b.v-a.v).slice(0,5).map(o=>o.k);
+    const topTram = sortTop(countTram);
+    const topChuc = sortTop(countChuc);
+    const topDonVi = sortTop(countDonVi);
+
+    const pred = await Prediction.findOneAndUpdate(
+      { ngayDuDoan: nextDayStr },
+      { ngayDuDoan: nextDayStr, topTram, topChuc, topDonVi, chiTiet, danhDauDaSo: false },
+      { upsert: true, new: true }
+    );
+
+    console.log(`✅ [trainPredictionForNextDay] Saved prediction for ${nextDayStr}`);
+    return res.json({ message: 'Prediction for next day created', ngayDuDoan: nextDayStr, topTram, topChuc, topDonVi });
+  } catch (err) {
+    console.error('❌ [trainPredictionForNextDay] Error:', err);
+    return res.status(500).json({ message: 'Lỗi server', error: err.toString() });
+  }
+};
+
+// ----------------- HÀM updatePredictionWeights (CẬP NHẬT) -----------------
+// duyệt predictions chưa đánh dấu (danhDauDaSo=false), lấy kết quả thực tế của ngày đó,
+// so sánh và tăng weight cho chiTiet tương ứng, đồng thời lưu metrics nhỏ (correctParts)
+exports.updatePredictionWeights = async (req, res) => {
+  console.log('🔔 [updatePredictionWeights] Start');
+  try {
+    const preds = await Prediction.find({ danhDauDaSo: false }).lean();
+    if (!preds.length) return res.json({ message: 'Không có prediction chưa đánh dấu' });
+
+    let updatedCount = 0;
+    for (const p of preds) {
+      // lấy kết quả thực tế cho ngayDuDoan
+      const actualResults = await Result.find({ ngay: p.ngayDuDoan }).lean();
+      if (!actualResults || !actualResults.length) {
+        console.log(`⚠️ No results for ${p.ngayDuDoan}, skip`);
+        continue;
+      }
+      const dbRec = actualResults.find(r => r.giai === 'ĐB') || actualResults[0];
+      if (!dbRec || !dbRec.so) continue;
+      const dbStr = String(dbRec.so).padStart(3,'0');
+      const actual = { tram: dbStr[0], chuc: dbStr[1], donVi: dbStr[2] };
+
+      // load the prediction doc (not lean) to update
+      const predDoc = await Prediction.findOne({ _id: p._id });
+      if (!predDoc) continue;
+
+      let incrTotal = 0;
+      predDoc.chiTiet = predDoc.chiTiet.map(ct => {
+        let inc = 0;
+        // if matchedPosition equals actual digit at that position -> inc
+        if (ct.positionInPrize === 1 && ct.tram === actual.tram) inc = 1;
+        if (ct.positionInPrize === 2 && ct.chuc === actual.chuc) inc = 1;
+        if (ct.positionInPrize === 3 && ct.donvi === actual.donVi) inc = 1;
+        if (inc) {
+          ct.weight = (ct.weight || 0) + inc;
+          incrTotal++;
+        }
+        return ct;
+      });
+
+      predDoc.danhDauDaSo = true;
+      await predDoc.save();
+      updatedCount++;
+      console.log(`✅ Updated prediction ${p.ngayDuDoan}, increased ${incrTotal} chiTiet entries`);
+    }
+
+    return res.json({ message: 'Update weights done', updatedCount });
+  } catch (err) {
+    console.error('❌ [updatePredictionWeights] Error:', err);
+    return res.status(500).json({ message: 'Lỗi server', error: err.toString() });
+  }
+};
+
+// ----------------- GET Prediction theo ngày (nếu cần) -----------------
+exports.getPredictionByDate = async (req, res) => {
+  try {
+    const { date } = req.query; // date = dd/mm/yyyy (ngayDuDoan)
+    if (!date) return res.status(400).json({ message: 'Thiếu param date' });
+    const pred = await Prediction.findOne({ ngayDuDoan: date }).lean();
+    if (!pred) return res.status(404).json({ message: 'Không tìm thấy prediction cho ngày này' });
+    return res.json(pred);
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: 'Lỗi server', error: err.toString() });
+  }
+};
