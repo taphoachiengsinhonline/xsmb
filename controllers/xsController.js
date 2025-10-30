@@ -247,15 +247,17 @@ exports.trainHistoricalPredictions = async (req, res) => {
         countTram[tram] = (countTram[tram] || 0) + 1;
         countChuc[chuc] = (countChuc[chuc] || 0) + 1;
         countDonVi[donvi] = (countDonVi[donvi] || 0) + 1;
+        const nhomNho = Math.floor(idx / 3) + 1; // 0-2 -> 1; 3-5 -> 2; ...; 24-26 -> 9
+        const nhomTo = Math.floor((nhomNho - 1) / 3) + 1; // 1-3 -> 1; 4-6 -> 2; 7-9 -> 3
 
         chiTiet.push({
           number: num,
-          group: Math.floor(idx/9)+1,
-          positionInPrize: idx+1,
+          nhomNho: nhomNho, // Thêm
+          nhomTo: nhomTo,     // Thêm
+          positionInPrize: idx + 1,
           tram, chuc, donvi,
           weight: 1
-        });
-      });
+  });
 
       const sortTop = (obj) => Object.entries(obj).map(([k,v])=>({k,v})).sort((a,b)=>b.v-a.v).slice(0,5).map(o=>o.k);
 
@@ -425,4 +427,5 @@ exports.getPredictionByDate = async (req, res) => {
     return res.status(500).json({ message: 'Lỗi server', error: err.toString() });
   }
 };
+
 
