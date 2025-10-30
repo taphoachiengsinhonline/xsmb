@@ -241,16 +241,28 @@ exports.getPredictionByDate = async (req, res) => {
   }
 };
 
-// ----------------- LẤY NGÀY DỰ ĐOÁN MỚI NHẤT -----------------
+// ----------------- LẤY NGÀY DỰ ĐOÁN MỚI NHẤT (VỚI LOG DEBUG) -----------------
 exports.getLatestPredictionDate = async (req, res) => {
   try {
-    const latestPrediction = await Prediction.findOne().sort({ ngayDuDoan: -1 }).lean();
+    console.log('🔍 [Backend] API /latest-prediction-date được gọi.');
+    // Sắp xếp theo `ngayDuDoan` giảm dần. Sử dụng collation để sắp xếp chuỗi dd/mm/yyyy đúng.
+    const latestPrediction = await Prediction.findOne()
+      .sort({ ngayDuDoan: -1 })
+      .collation({ locale: 'vi', numericOrdering: true }) // Rất quan trọng để sort chuỗi ngày tháng
+      .lean();
+      
+    console.log('📄 [Backend] Bản ghi dự đoán tìm thấy:', latestPrediction); // LOG QUAN TRỌNG
+
     if (!latestPrediction) {
+      console.log('⚠️ [Backend] Không tìm thấy bản ghi dự đoán nào trong DB.');
       return res.status(404).json({ message: 'Không tìm thấy bản ghi dự đoán nào.' });
     }
+    
+    console.log('✅ [Backend] Trả về ngày:', latestPrediction.ngayDuDoan);
     res.json({ latestDate: latestPrediction.ngayDuDoan });
+
   } catch (err) {
-    console.error('❌ getLatestPredictionDate error:', err);
+    console.error('❌ [Backend] Lỗi trong getLatestPredictionDate:', err);
     res.status(500).json({ message: 'Lỗi server', error: err.toString() });
   }
 };
@@ -259,4 +271,5 @@ exports.getLatestPredictionDate = async (req, res) => {
 // exports.trainAdvancedModel = ...
 // exports.getLatestPrediction = ...
 // exports.getPrediction = ...
+
 
