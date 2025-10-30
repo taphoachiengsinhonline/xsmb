@@ -3,14 +3,16 @@
 const mongoose = require('mongoose');
 
 const chiTietSchema = new mongoose.Schema({
-  number: String,           // '123'
-  group: Number,            // 1..3
-  positionInPrize: Number,  // index of prize in today's list (1..27)
+  number: String,
+  // group: Number, // Trường này có thể bỏ đi hoặc giữ lại nếu muốn
+  nhomNho: Number,          // MỚI: Nhóm nhỏ (1-9)
+  nhomTo: Number,           // MỚI: Nhóm to (1-3)
+  positionInPrize: Number,
   tram: String,
   chuc: String,
   donvi: String,
-  matchedDigit: String,     // digit matched (if any)
-  weight: { type: Number, default: 1 } // score/weight, tăng lên khi đúng
+  matchedDigit: String,
+  weight: { type: Number, default: 1 }
 }, { _id: false });
 
 const predictionSchema = new mongoose.Schema({
