@@ -111,18 +111,42 @@ exports.trainHistoricalPredictions = async (req, res) => {
 exports.trainPredictionForNextDay = async (req, res) => {
   console.log('🔔 [trainPredictionForNextDay] Start');
   try {
-    // Sắp xếp theo ngày dd/mm/yyyy giảm dần để lấy ngày mới nhất
-    const latestResult = await Result.findOne().sort({ ngay: -1 });
-    if (!latestResult) return res.status(400).json({ message: 'Không có dữ liệu results' });
+    // SỬ DỤNG AGGREGATION ĐỂ TÌM NGÀY MỚI NHẤT CHÍNH XÁC
+    const latestResultArr = await Result.aggregate([
+      {
+        $addFields: {
+          convertedDate: {
+            $dateFromString: {
+              dateString: '$ngay',
+              format: '%d/%m/%Y',
+              timezone: 'Asia/Ho_Chi_Minh'
+            }
+          }
+        }
+      },
+      { $sort: { convertedDate: -1 } },
+      { $limit: 1 }
+    ]);
 
-    const latestDay = latestResult.ngay;
+    if (!latestResultArr || latestResultArr.length === 0) {
+      return res.status(400).json({ message: 'Không có dữ liệu results để tạo dự đoán.' });
+    }
+
+    const latestDay = latestResultArr[0].ngay;
+    console.log(`✅ [trainPredictionForNextDay] Tìm thấy ngày kết quả mới nhất là: ${latestDay}`);
+
+    // Tính toán ngày tiếp theo
     const parts = latestDay.split('/');
     const d = new Date(`${parts[2]}-${parts[1]}-${parts[0]}`);
-    d.setDate(d.getDate() + 1); // Tăng lên 1 ngày
+    d.setDate(d.getDate() + 1);
     const nextDayStr = `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+    console.log(`🔮 [trainPredictionForNextDay] Sẽ tạo dự đoán cho ngày: ${nextDayStr}`);
 
+    // Lấy tất cả kết quả của ngày mới nhất để phân tích
     const prevResults = await Result.find({ ngay: latestDay }).lean();
-    if (!prevResults.length) return res.status(400).json({ message: 'Không có dữ liệu ngày trước để dự đoán' });
+    if (!prevResults.length) {
+      return res.status(400).json({ message: 'Không có dữ liệu của ngày mới nhất để phân tích.' });
+    }
 
     const countTram = {}, countChuc = {}, countDonVi = {};
     const chiTiet = [];
@@ -271,5 +295,6 @@ exports.getLatestPredictionDate = async (req, res) => {
 // exports.trainAdvancedModel = ...
 // exports.getLatestPrediction = ...
 // exports.getPrediction = ...
+
 
 
