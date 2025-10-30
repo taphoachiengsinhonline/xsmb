@@ -36,21 +36,51 @@ exports.updateResults = async (req, res) => {
 };
 
 
-// ----------------- HÀM HUẤN LUYỆN LỊCH SỬ (ĐÃ SỬA LỖI + CẬP NHẬT LOGIC) -----------------
+/*
+ * =================================================================
+ * HELPER FUNCTION: TẠO DÀN SỐ DỰ ĐOÁN CUỐI CÙNG (LOGIC MỚI)
+ * =================================================================
+ */
+const generateFinalPrediction = (counts) => {
+  const allDigits = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'];
+
+  // Chuyển object counts thành mảng để sắp xếp
+  const sortedCounts = Object.entries(counts).map(([k, v]) => ({ k, v }));
+
+  // Bước 1: Tìm 5 số "Nóng" (tần suất cao nhất)
+  const top5Hot = sortedCounts.sort((a, b) => b.v - a.v).slice(0, 5).map(o => o.k);
+
+  // Bước 2: Tìm 5 số "Lạnh" (tần suất thấp nhất)
+  const top5Cold = sortedCounts.sort((a, b) => a.v - b.v).slice(0, 5).map(o => o.k);
+
+  // Bước 3: Suy ra 5 số "Giữ Lại"
+  const keeperSet = allDigits.filter(d => !top5Cold.includes(d));
+
+  // Bước 4: Tìm Giao Điểm
+  const intersection = top5Hot.filter(d => keeperSet.includes(d));
+
+  // Bước 5: Tạo dàn số cuối cùng
+  const remainingHot = top5Hot.filter(d => !intersection.includes(d));
+  const finalPrediction = [...intersection, ...remainingHot];
+
+  return finalPrediction.slice(0, 5); // Đảm bảo luôn trả về đúng 5 số
+};
+
+
+
+
+
+// ----------------- HÀM HUẤN LUYỆN LỊCH SỬ (ÁP DỤNG LOGIC MỚI) -----------------
 exports.trainHistoricalPredictions = async (req, res) => {
-  console.log('🔔 [trainHistoricalPredictions] Start');
+  console.log('🔔 [trainHistoricalPredictions] Start (with new logic)');
   try {
     const results = await Result.find().sort({ ngay: 1 }).lean();
-    if (!results.length) return res.status(400).json({ message: 'Không có dữ liệu results' });
+    if (results.length < 2) return res.status(400).json({ message: 'Không đủ ngày để train historical' });
 
     const grouped = {};
-    for (const r of results) {
-      grouped[r.ngay] = grouped[r.ngay] || [];
-      grouped[r.ngay].push(r);
-    }
+    results.forEach(r => { grouped[r.ngay] = grouped[r.ngay] || []; grouped[r.ngay].push(r); });
     const days = Object.keys(grouped).sort((a, b) => a.split('/').reverse().join('-').localeCompare(b.split('/').reverse().join('-')));
-    if (days.length < 2) return res.status(400).json({ message: 'Không đủ ngày để train historical' });
-
+    
     let created = 0;
     for (let i = 1; i < days.length; i++) {
       const prevDay = days[i - 1];
@@ -60,44 +90,39 @@ exports.trainHistoricalPredictions = async (req, res) => {
       const countTram = {}, countChuc = {}, countDonVi = {};
       const chiTiet = [];
 
-      // BƯỚC 1: Dùng forEach để thu thập dữ liệu
       prevResults.forEach((r, idx) => {
         const num = String(r.so).padStart(3, '0');
         const [tram, chuc, donvi] = num.split('');
         countTram[tram] = (countTram[tram] || 0) + 1;
         countChuc[chuc] = (countChuc[chuc] || 0) + 1;
         countDonVi[donvi] = (countDonVi[donvi] || 0) + 1;
-
+        
         const nhomNho = Math.floor(idx / 3) + 1;
         const nhomTo = Math.floor((nhomNho - 1) / 3) + 1;
+        chiTiet.push({ number: num, nhomNho, nhomTo, positionInPrize: idx + 1, tram, chuc, donvi, weight: 1 });
+      });
 
-        chiTiet.push({
-          number: num,
-          nhomNho: nhomNho,
-          nhomTo: nhomTo,
-          positionInPrize: idx + 1,
-          tram,
-          chuc,
-          donvi,
-          weight: 1
-        });
-      }); // <-- Đóng forEach ở đây
-
-      // BƯỚC 2: Sau khi forEach xong, tính toán và gọi await
-      const sortTop = (obj) => Object.entries(obj).map(([k, v]) => ({ k, v })).sort((a, b) => b.v - a.v).slice(0, 5).map(o => o.k);
-
-      const topTram = sortTop(countTram);
-      const topChuc = sortTop(countChuc);
-      const topDonVi = sortTop(countDonVi);
+      // TẠO DÀN SỐ CUỐI CÙNG BẰNG LOGIC MỚI
+      const finalTopTram = generateFinalPrediction(countTram);
+      const finalTopChuc = generateFinalPrediction(countChuc);
+      const finalTopDonVi = generateFinalPrediction(countDonVi);
 
       await Prediction.findOneAndUpdate(
         { ngayDuDoan: targetDay },
-        { ngayDuDoan: targetDay, topTram, topChuc, topDonVi, chiTiet, danhDauDaSo: false },
+        { 
+          ngayDuDoan: targetDay, 
+          topTram: finalTopTram, 
+          topChuc: finalTopChuc, 
+          topDonVi: finalTopDonVi, 
+          chiTiet, 
+          danhDauDaSo: false 
+        },
         { upsert: true, new: true }
       );
       created++;
     }
 
+    console.log(`✅ [trainHistoricalPredictions] Done, created/updated ${created} predictions.`);
     return res.json({ message: `Huấn luyện lịch sử hoàn tất, đã tạo/cập nhật ${created} bản ghi.`, created });
   } catch (err) {
     console.error('❌ [trainHistoricalPredictions] Error:', err);
@@ -105,83 +130,64 @@ exports.trainHistoricalPredictions = async (req, res) => {
   }
 };
 
-// ----------------- HÀM TẠO DỰ ĐOÁN NGÀY TIẾP THEO (ĐÃ CẬP NHẬT LOGIC) -----------------
+
+// ----------------- HÀM TẠO DỰ ĐOÁN NGÀY TIẾP THEO (ÁP DỤNG LOGIC MỚI) -----------------
 exports.trainPredictionForNextDay = async (req, res) => {
-  console.log('🔔 [trainPredictionForNextDay] Start');
-  try {
-    // SỬ DỤNG AGGREGATION ĐỂ TÌM NGÀY MỚI NHẤT CHÍNH XÁC
-    const latestResultArr = await Result.aggregate([
-      {
-        $addFields: {
-          convertedDate: {
-            $dateFromString: {
-              dateString: '$ngay',
-              format: '%d/%m/%Y',
-              timezone: 'Asia/Ho_Chi_Minh'
-            }
-          }
-        }
-      },
-      { $sort: { convertedDate: -1 } },
-      { $limit: 1 }
-    ]);
+    console.log('🔔 [trainPredictionForNextDay] Start (with new logic)');
+    try {
+        const latestResultArr = await Result.aggregate([
+            { $addFields: { convertedDate: { $dateFromString: { dateString: '$ngay', format: '%d/%m/%Y', timezone: 'Asia/Ho_Chi_Minh' } } } },
+            { $sort: { convertedDate: -1 } },
+            { $limit: 1 }
+        ]);
+        if (!latestResultArr || latestResultArr.length === 0) return res.status(400).json({ message: 'Không có dữ liệu results.' });
+        const latestDay = latestResultArr[0].ngay;
 
-    if (!latestResultArr || latestResultArr.length === 0) {
-      return res.status(400).json({ message: 'Không có dữ liệu results để tạo dự đoán.' });
+        const parts = latestDay.split('/');
+        const d = new Date(`${parts[2]}-${parts[1]}-${parts[0]}`);
+        d.setDate(d.getDate() + 1);
+        const nextDayStr = `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+        
+        const prevResults = await Result.find({ ngay: latestDay }).lean();
+        if (!prevResults.length) return res.status(400).json({ message: 'Không có dữ liệu ngày trước để dự đoán.' });
+
+        const countTram = {}, countChuc = {}, countDonVi = {};
+        const chiTiet = [];
+        prevResults.forEach((r, idx) => {
+            const num = String(r.so).padStart(3, '0');
+            const [tram, chuc, donvi] = num.split('');
+            countTram[tram] = (countTram[tram] || 0) + 1;
+            countChuc[chuc] = (countChuc[chuc] || 0) + 1;
+            countDonVi[donvi] = (countDonVi[donvi] || 0) + 1;
+            const nhomNho = Math.floor(idx / 3) + 1;
+            const nhomTo = Math.floor((nhomNho - 1) / 3) + 1;
+            chiTiet.push({ number: num, nhomNho, nhomTo, positionInPrize: idx + 1, tram, chuc, donvi, weight: 1 });
+        });
+
+        // TẠO DÀN SỐ CUỐI CÙNG BẰNG LOGIC MỚI
+        const finalTopTram = generateFinalPrediction(countTram);
+        const finalTopChuc = generateFinalPrediction(countChuc);
+        const finalTopDonVi = generateFinalPrediction(countDonVi);
+        
+        await Prediction.findOneAndUpdate(
+            { ngayDuDoan: nextDayStr },
+            { 
+                ngayDuDoan: nextDayStr, 
+                topTram: finalTopTram, 
+                topChuc: finalTopChuc, 
+                topDonVi: finalTopDonVi, 
+                chiTiet, 
+                danhDauDaSo: false 
+            },
+            { upsert: true, new: true }
+        );
+
+        console.log(`✅ [trainPredictionForNextDay] Đã lưu dự đoán cho ngày ${nextDayStr}`);
+        return res.json({ message: 'Tạo dự đoán cho ngày tiếp theo thành công!', ngayDuDoan: nextDayStr });
+    } catch (err) {
+        console.error('❌ [trainPredictionForNextDay] Error:', err);
+        return res.status(500).json({ message: 'Lỗi server', error: err.toString() });
     }
-
-    const latestDay = latestResultArr[0].ngay;
-     // Tính toán ngày tiếp theo
-    const parts = latestDay.split('/');
-    const d = new Date(`${parts[2]}-${parts[1]}-${parts[0]}`);
-    d.setDate(d.getDate() + 1);
-    const nextDayStr = `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
-    // Lấy tất cả kết quả của ngày mới nhất để phân tích
-    const prevResults = await Result.find({ ngay: latestDay }).lean();
-    if (!prevResults.length) {
-      return res.status(400).json({ message: 'Không có dữ liệu của ngày mới nhất để phân tích.' });
-    }
-
-    const countTram = {}, countChuc = {}, countDonVi = {};
-    const chiTiet = [];
-    prevResults.forEach((r, idx) => {
-      const num = String(r.so).padStart(3, '0');
-      const [tram, chuc, donvi] = num.split('');
-      countTram[tram] = (countTram[tram] || 0) + 1;
-      countChuc[chuc] = (countChuc[chuc] || 0) + 1;
-      countDonVi[donvi] = (countDonVi[donvi] || 0) + 1;
-
-      const nhomNho = Math.floor(idx / 3) + 1;
-      const nhomTo = Math.floor((nhomNho - 1) / 3) + 1;
-
-      chiTiet.push({
-        number: num,
-        nhomNho: nhomNho,
-        nhomTo: nhomTo,
-        positionInPrize: idx + 1,
-        tram,
-        chuc,
-        donvi,
-        weight: 1
-      });
-    });
-
-    const sortTop = (obj) => Object.entries(obj).map(([k, v]) => ({ k, v })).sort((a, b) => b.v - a.v).slice(0, 5).map(o => o.k);
-    const topTram = sortTop(countTram);
-    const topChuc = sortTop(countChuc);
-    const topDonVi = sortTop(countDonVi);
-
-    await Prediction.findOneAndUpdate(
-      { ngayDuDoan: nextDayStr },
-      { ngayDuDoan: nextDayStr, topTram, topChuc, topDonVi, chiTiet, danhDauDaSo: false },
-      { upsert: true, new: true }
-    );
-
-    return res.json({ message: 'Tạo dự đoán cho ngày tiếp theo thành công!', ngayDuDoan: nextDayStr });
-  } catch (err) {
-    console.error('❌ [trainPredictionForNextDay] Error:', err);
-    return res.status(500).json({ message: 'Lỗi server', error: err.toString() });
-  }
 };
 
 // ----------------- HÀM CẬP NHẬT WEIGHTS (LOGIC SO SÁNH CHÉO) -----------------
@@ -275,5 +281,6 @@ exports.getLatestPredictionDate = async (req, res) => {
     res.status(500).json({ message: 'Lỗi server', error: err.toString() });
   }
 };
+
 
 
