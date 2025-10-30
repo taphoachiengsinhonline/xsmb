@@ -193,3 +193,31 @@ exports.updatePredictionWeights = async (req, res) => {
   }
 };
 
+/**
+ * GET /api/xs/prediction
+ * Lấy dự đoán 3 số mới nhất
+ */
+exports.getLatestPrediction = async (req, res) => {
+  try {
+    const pred = await Prediction.findOne().sort({ ngayDuDoan: -1 }).lean();
+    if (!pred) return res.status(404).json({ message: "Chưa có dự đoán nào" });
+
+    // top theo weight
+    const topTram = [...new Set(pred.chiTiet.filter(ct=>ct.positionInPrize===1).sort((a,b)=>b.weight-a.weight).map(ct=>ct.matchedDigit))].slice(0,5);
+    const topChuc = [...new Set(pred.chiTiet.filter(ct=>ct.positionInPrize===2).sort((a,b)=>b.weight-a.weight).map(ct=>ct.matchedDigit))].slice(0,5);
+    const topDonVi = [...new Set(pred.chiTiet.filter(ct=>ct.positionInPrize===3).sort((a,b)=>b.weight-a.weight).map(ct=>ct.matchedDigit))].slice(0,5);
+
+    res.json({
+      ngayDuDoan: pred.ngayDuDoan,
+      topTram,
+      topChuc,
+      topDonVi,
+      chiTiet: pred.chiTiet
+    });
+
+  } catch(err) {
+    console.error('❌ getLatestPrediction error:', err);
+    res.status(500).json({ message: 'Lỗi server', error: err.toString() });
+  }
+};
+
