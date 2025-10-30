@@ -1,4 +1,5 @@
 const Result = require('../models/Result');
+const Prediction = require('../models/Prediction');
 const crawlService = require('../services/crawlService');
 
 exports.getAllResults = async (req, res) => {
@@ -33,113 +34,111 @@ exports.updateResults = async (req, res) => {
 
 // --- thêm/replace hàm trainAdvancedModel với logging chi tiết ---
 exports.trainAdvancedModel = async (req, res) => {
-  console.log('🔔 [trainAdvancedModel] Bắt đầu request trainAdvancedModel');
+  console.log('🔔 [trainAdvancedModel] Start');
+
   try {
-    // Lấy toàn bộ dữ liệu (sắp tăng dần theo ngày)
     const results = await Result.find().sort({ ngay: 1 }).lean();
-    console.log(`🔎 [trainAdvancedModel] Tổng bản ghi lấy từ DB: ${results.length}`);
+    console.log(`🔎 Total results: ${results.length}`);
 
     if (results.length < 2) {
-      console.log('⚠️ [trainAdvancedModel] Không đủ dữ liệu để phân tích (<2)');
       return res.status(400).json({ message: "Không đủ dữ liệu để phân tích" });
     }
 
-    // Group theo ngày
+    // --- Group theo ngày ---
     const grouped = {};
     for (const r of results) {
       grouped[r.ngay] = grouped[r.ngay] || [];
       grouped[r.ngay].push(r);
     }
-    const days = Object.keys(grouped).sort((a,b) => {
-  const ka = a.split('/').reverse().join('-');
-  const kb = b.split('/').reverse().join('-');
-  return kb.localeCompare(ka); // đảo ngược
-});
 
-    console.log(`📆 [trainAdvancedModel] Tổng ngày: ${days.length}`);
+    const days = Object.keys(grouped).sort((a,b)=> {
+      const ka = a.split('/').reverse().join('-');
+      const kb = b.split('/').reverse().join('-');
+      return ka.localeCompare(kb);
+    });
+    console.log(`📆 Total days: ${days.length}`);
 
     const analysis = [];
-    // duyệt từng cặp (day -> nextDay)
+
     for (let i = 0; i < days.length - 1; i++) {
       const day = days[i];
       const nextDay = days[i+1];
       const today = grouped[day] || [];
       const tomorrow = grouped[nextDay] || [];
 
-      // log kích thước
-      console.log(`➡️ [trainAdvancedModel] Phân tích: prev=${day}(${today.length}) -> next=${nextDay}(${tomorrow.length})`);
+      console.log(`➡️ Analyze ${day} -> ${nextDay}: today=${today.length}, next=${tomorrow.length}`);
 
       const dbTomorrowRec = tomorrow.find(r => r.giai === 'ĐB');
-      if (!dbTomorrowRec || !dbTomorrowRec.so) {
-        console.log(`   ⚠️ [trainAdvancedModel] Next day ${nextDay} không có ĐB, bỏ qua`);
-        continue;
-      }
+      if (!dbTomorrowRec || !dbTomorrowRec.so) continue;
 
-      const dbStr = String(dbTomorrowRec.so).padStart(2, '0');
-      const hangChuc = dbStr.length >= 2 ? dbStr[dbStr.length - 2] : dbStr[0];
-      const hangDonVi = dbStr[dbStr.length - 1];
+      const dbStr = String(dbTomorrowRec.so).padStart(3,'0'); // 3 số
+      const hangTram = dbStr.length >= 3 ? dbStr[0] : '0';
+      const hangChuc = dbStr.length >= 2 ? dbStr[1] : '0';
+      const hangDonVi = dbStr[2];
 
-      // scan 27 results of today (if some missing we still scan)
       const positions = [];
-      // create ordered list by known prize order if needed (assume 'today' may be unordered)
-      // build map giai->index using expected order if you have PRIZE_ORDER; else rely on array order
-      for (let idx = 0; idx < today.length; idx++) {
-        const r = today[idx];
-        if (!r || !r.so) continue;
-        const numStr = String(r.so);
-        const group = Math.floor(idx / 9) + 1; // 1..3 groups of 9 (as user requested)
-        for (let pos = 0; pos < numStr.length; pos++) {
-          const ch = numStr[pos];
-          if (ch === hangChuc || ch === hangDonVi) {
+
+      today.forEach((r, idx) => {
+        if (!r.so) return;
+        const numStr = String(r.so).padStart(3,'0');
+
+        ['trăm','chục','đơn vị'].forEach((pos, pIdx) => {
+          const digit = numStr[pIdx];
+          if ([hangTram, hangChuc, hangDonVi].includes(digit)) {
             positions.push({
-              ngayPrev: day,
-              ngayNext: nextDay,
-              matchedDigit: ch,
-              group,
-              prizeIndex: idx + 1,
-              positionInPrize: pos + 1,
-              prizeCode: r.giai || null,
-              number: numStr
+              matchedDigit: digit,
+              group: Math.floor(idx/9)+1,
+              prizeIndex: idx+1,
+              positionInPrize: pIdx+1,
+              prizeCode: r.giai,
+              number: numStr,
+              weight: 1
             });
-            console.log(`     ✅ Match found: prev=${day} idx=${idx+1} giai=${r.giai} num=${numStr} pos=${pos+1} digit=${ch}`);
           }
-        }
-      }
+        });
+      });
 
       analysis.push({
         ngay: nextDay,
         giaiDB: dbStr,
+        hangTram,
         hangChuc,
         hangDonVi,
         tanSuat: positions.length,
         chiTiet: positions
       });
-
-      console.log(`   🔢 [trainAdvancedModel] Day ${day} -> next ${nextDay}: matches=${positions.length}`);
     }
 
-    // tổng hợp top5
-    const freqChuc = {}, freqDV = {};
-    for (const a of analysis) {
+    // --- Thống kê top 5 trăm/chục/đơn vị ---
+    const freqTram = {}, freqChuc = {}, freqDV = {};
+    analysis.forEach(a => {
+      freqTram[a.hangTram] = (freqTram[a.hangTram] || 0) + 1;
       freqChuc[a.hangChuc] = (freqChuc[a.hangChuc] || 0) + 1;
       freqDV[a.hangDonVi] = (freqDV[a.hangDonVi] || 0) + 1;
-    }
-    const sortTop = (freq) => Object.entries(freq).map(([k,v])=>({k,v})).sort((a,b)=>b.v-a.v).slice(0,5);
-    const topChuc = sortTop(freqChuc);
-    const topDonVi = sortTop(freqDV);
-
-    console.log('🏁 [trainAdvancedModel] Hoàn tất. Top hàng chục:', topChuc, 'Top đơn vị:', topDonVi);
-
-    return res.json({
-      message: "Huấn luyện nâng cao hoàn tất",
-      topChuc,
-      topDonVi,
-      analysis
     });
 
-  } catch (err) {
-    console.error('❌ [trainAdvancedModel] Lỗi:', err);
+    const top5 = freq => Object.entries(freq).map(([k,v])=>({k,v})).sort((a,b)=>b.v-a.v).slice(0,5);
+
+    const topTram = top5(freqTram);
+    const topChuc = top5(freqChuc);
+    const topDonVi = top5(freqDV);
+
+    console.log('🏁 Done trainAdvancedModel:', { topTram, topChuc, topDonVi });
+
+    // --- Lưu dự đoán vào DB ---
+    const todayStr = new Date().toLocaleDateString('vi-VN'); // ngày dự đoán: hôm nay
+    const pred = await Prediction.findOneAndUpdate(
+      { ngayDuDoan: todayStr },
+      { ngayDuDoan: todayStr, topTram, topChuc, topDonVi, chiTiet: analysis.flatMap(a=>a.chiTiet), danhDauDaSo: false },
+      { upsert: true, new: true }
+    );
+
+    return res.json({ message: "Huấn luyện nâng cao hoàn tất", topTram, topChuc, topDonVi, analysis });
+
+  } catch(err) {
+    console.error('❌ trainAdvancedModel error:', err);
     return res.status(500).json({ message: 'Lỗi server', error: err.toString() });
   }
 };
+
 
