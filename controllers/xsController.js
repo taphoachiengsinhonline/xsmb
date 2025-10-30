@@ -51,11 +51,11 @@ exports.trainAdvancedModel = async (req, res) => {
       grouped[r.ngay].push(r);
     }
     const days = Object.keys(grouped).sort((a,b) => {
-      // chuẩn dd/mm/yyyy -> yyyy-mm-dd so sánh
-      const ka = a.split('/').reverse().join('-');
-      const kb = b.split('/').reverse().join('-');
-      return ka.localeCompare(kb);
-    });
+  const ka = a.split('/').reverse().join('-');
+  const kb = b.split('/').reverse().join('-');
+  return kb.localeCompare(ka); // đảo ngược
+});
+
     console.log(`📆 [trainAdvancedModel] Tổng ngày: ${days.length}`);
 
     const analysis = [];
@@ -142,3 +142,4 @@ exports.trainAdvancedModel = async (req, res) => {
     return res.status(500).json({ message: 'Lỗi server', error: err.toString() });
   }
 };
+
