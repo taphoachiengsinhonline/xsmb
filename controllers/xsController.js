@@ -141,4 +141,55 @@ exports.trainAdvancedModel = async (req, res) => {
   }
 };
 
+exports.updatePredictionWeights = async (req, res) => {
+  console.log('🔔 [updatePredictionWeights] Start');
+
+  try {
+    // Lấy tất cả dự đoán chưa đánh dấu
+    const predictions = await Prediction.find({ danhDauDaSo: false }).lean();
+    console.log(`📌 Dự đoán chưa đánh dấu: ${predictions.length}`);
+
+    for (const pred of predictions) {
+      const ngay = pred.ngayDuDoan;
+      const results = await Result.find({ ngay }).lean();
+      if (!results || results.length === 0) {
+        console.log(`⚠️ Không có kết quả thực tế cho ngày ${ngay}, bỏ qua`);
+        continue;
+      }
+
+      // tìm ĐB
+      const dbResult = results.find(r => r.giai === 'ĐB');
+      if (!dbResult || !dbResult.so) continue;
+
+      const dbStr = String(dbResult.so).padStart(3,'0');
+      const actual = {
+        tram: dbStr[0],
+        chuc: dbStr[1],
+        donVi: dbStr[2]
+      };
+
+      // update weight cho chiTiet
+      const updatedChiTiet = pred.chiTiet.map(ct => {
+        let inc = 0;
+        if (ct.positionInPrize === 1 && ct.matchedDigit === actual.tram) inc = 1;
+        if (ct.positionInPrize === 2 && ct.matchedDigit === actual.chuc) inc = 1;
+        if (ct.positionInPrize === 3 && ct.matchedDigit === actual.donVi) inc = 1;
+        return { ...ct, weight: ct.weight + inc };
+      });
+
+      await Prediction.updateOne(
+        { _id: pred._id },
+        { chiTiet: updatedChiTiet, danhDauDaSo: true }
+      );
+
+      console.log(`✅ Update weight prediction ngày ${ngay}, tăng ${updatedChiTiet.filter(ct=>ct.weight>1).length} entries`);
+    }
+
+    res.json({ message: "Cập nhật weights dự đoán xong" });
+
+  } catch(err) {
+    console.error('❌ updatePredictionWeights error:', err);
+    res.status(500).json({ message: 'Lỗi server', error: err.toString() });
+  }
+};
 
