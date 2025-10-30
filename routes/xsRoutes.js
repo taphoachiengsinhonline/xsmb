@@ -1,11 +1,10 @@
 const express = require('express');
 const router = express.Router();
-const xsController = require('../controllers/xsController');
+const xsController = require('../controllers/xsController'); // ✅ Lấy toàn bộ controller
 
-router.get('/results', getAllResults);      // GET /api/xs/results
-router.post('/update', updateResults);      // POST /api/xs/update
-router.get('/train-advanced', xsController.trainAdvancedModel); // ✅ API ML nâng cao
+// ✅ Định nghĩa routes đúng chuẩn
+router.get('/results', xsController.getAllResults);
+router.post('/update', xsController.updateResults);
+router.get('/train-advanced', xsController.trainAdvancedModel); // ✅ Phương pháp ML nâng cao
 
 module.exports = router;
-
-
