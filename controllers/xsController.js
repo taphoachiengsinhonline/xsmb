@@ -241,8 +241,22 @@ exports.getPredictionByDate = async (req, res) => {
   }
 };
 
+// ----------------- LẤY NGÀY DỰ ĐOÁN MỚI NHẤT -----------------
+exports.getLatestPredictionDate = async (req, res) => {
+  try {
+    const latestPrediction = await Prediction.findOne().sort({ ngayDuDoan: -1 }).lean();
+    if (!latestPrediction) {
+      return res.status(404).json({ message: 'Không tìm thấy bản ghi dự đoán nào.' });
+    }
+    res.json({ latestDate: latestPrediction.ngayDuDoan });
+  } catch (err) {
+    console.error('❌ getLatestPredictionDate error:', err);
+    res.status(500).json({ message: 'Lỗi server', error: err.toString() });
+  }
+};
 
 // Các hàm cũ hơn có thể được giữ lại hoặc xóa đi nếu không dùng
 // exports.trainAdvancedModel = ...
 // exports.getLatestPrediction = ...
 // exports.getPrediction = ...
+
