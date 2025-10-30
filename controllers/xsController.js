@@ -221,3 +221,80 @@ exports.getLatestPrediction = async (req, res) => {
   }
 };
 
+exports.getPrediction = async (req, res) => {
+  try {
+    const { date } = req.query;
+    if (!date) return res.status(400).json({ message: 'Thiếu tham số date' });
+
+    // Lấy tất cả kết quả từ DB, sắp xếp theo ngày tăng dần
+    const results = await Result.find().sort({ ngay: 1 }).lean();
+    if (!results.length) return res.json({ message: 'Chưa có dữ liệu dự đoán', prediction: [] });
+
+    // Group theo ngày
+    const grouped = {};
+    results.forEach(r => {
+      grouped[r.ngay] = grouped[r.ngay] || [];
+      grouped[r.ngay].push(r);
+    });
+
+    const sortedDates = Object.keys(grouped).sort((a,b)=>{
+      return a.split('/').reverse().join('-').localeCompare(b.split('/').reverse().join('-'));
+    });
+
+    // Tìm ngày muốn dự đoán
+    const idx = sortedDates.indexOf(date);
+    if (idx === -1 || idx === 0) {
+      return res.json({ message: 'Không đủ dữ liệu trước đó để dự đoán', prediction: [] });
+    }
+
+    const today = grouped[sortedDates[idx-1]];  // dữ liệu ngày trước
+    const nextDay = date;
+
+    // --- Phân tích dự đoán ---
+    const countTram = {}, countChuc = {}, countDonVi = {};
+
+    today.forEach((r, prizeIdx)=>{
+      const numStr = String(r.so).padStart(3,'0'); // đảm bảo 3 chữ số
+      const [tram, chuc, donvi] = numStr.split('');
+      countTram[tram] = (countTram[tram] || 0) + 1;
+      countChuc[chuc] = (countChuc[chuc] || 0) + 1;
+      countDonVi[donvi] = (countDonVi[donvi] || 0) + 1;
+    });
+
+    const sortTop = (obj) =>
+      Object.entries(obj)
+        .map(([k,v])=>({k,v}))
+        .sort((a,b)=>b.v-a.v)
+        .slice(0,5);
+
+    const topTram = sortTop(countTram).map(o=>o.k);
+    const topChuc = sortTop(countChuc).map(o=>o.k);
+    const topDonVi = sortTop(countDonVi).map(o=>o.k);
+
+    const chiTiet = [];
+    today.forEach((r, prizeIdx)=>{
+      const numStr = String(r.so).padStart(3,'0');
+      const [tram, chuc, donvi] = numStr.split('');
+      chiTiet.push({
+        number: numStr,
+        group: Math.floor(prizeIdx/9)+1,
+        weight: 1,
+        positionInPrize: prizeIdx+1,
+        tram, chuc, donvi
+      });
+    });
+
+    // Trả về mảng prediction để frontend safe join
+    return res.json([{
+      ngayDuDoan: nextDay,
+      topTram,
+      topChuc,
+      topDonVi,
+      chiTiet
+    }]);
+
+  } catch(err) {
+    console.error('❌ Lỗi getPrediction:', err);
+    return res.status(500).json({ message:'Lỗi server', error: err.toString() });
+  }
+};
