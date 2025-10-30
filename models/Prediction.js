@@ -1,22 +1,26 @@
+// models/Prediction.js
+// Schema cho predictions: mỗi document = 1 ngày dự đoán (ngayDuDoan)
 const mongoose = require('mongoose');
 
-const ChiTietSchema = new mongoose.Schema({
-  matchedDigit: String,     // số trùng với giải ĐB hôm sau
-  group: Number,            // nhóm 3 giải
-  prizeIndex: Number,       // số thứ mấy trong nhóm
-  positionInPrize: Number,  // vị trí trăm/chục/đơn vị
-  prizeCode: String,        // tên giải (ĐB, G1,...)
-  number: String,           // số quay của giải
-  weight: { type: Number, default: 1 } // trọng số tự học
+const chiTietSchema = new mongoose.Schema({
+  number: String,           // '123'
+  group: Number,            // 1..3
+  positionInPrize: Number,  // index of prize in today's list (1..27)
+  tram: String,
+  chuc: String,
+  donvi: String,
+  matchedDigit: String,     // digit matched (if any)
+  weight: { type: Number, default: 1 } // score/weight, tăng lên khi đúng
 }, { _id: false });
 
-const PredictionSchema = new mongoose.Schema({
-  ngayDuDoan: { type: String, required: true, unique: true }, // ngày dự đoán
+const predictionSchema = new mongoose.Schema({
+  ngayDuDoan: { type: String, required: true, unique: true }, // dd/mm/yyyy for predicted day
   topTram: [String],
   topChuc: [String],
   topDonVi: [String],
-  chiTiet: [ChiTietSchema],
-  danhDauDaSo: { type: Boolean, default: false } // đã so kết quả thực tế chưa
-});
+  chiTiet: [chiTietSchema],
+  danhDauDaSo: { type: Boolean, default: false }, // đã so sánh với kết quả thật?
+  createdAt: { type: Date, default: Date.now }
+}, { versionKey: false });
 
-module.exports = mongoose.model('Prediction', PredictionSchema);
+module.exports = mongoose.model('Prediction', predictionSchema);
