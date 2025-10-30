@@ -370,18 +370,34 @@ exports.updatePredictionWeights = async (req, res) => {
       if (!predDoc) continue;
 
       let incrTotal = 0;
-      predDoc.chiTiet = predDoc.chiTiet.map(ct => {
-        let inc = 0;
-        // if matchedPosition equals actual digit at that position -> inc
-        if (ct.positionInPrize === 1 && ct.tram === actual.tram) inc = 1;
-        if (ct.positionInPrize === 2 && ct.chuc === actual.chuc) inc = 1;
-        if (ct.positionInPrize === 3 && ct.donvi === actual.donVi) inc = 1;
-        if (inc) {
-          ct.weight = (ct.weight || 0) + inc;
-          incrTotal++;
-        }
-        return ct;
-      });
+predDoc.chiTiet = predDoc.chiTiet.map(ct => {
+  let originalWeight = ct.weight || 1;
+  let newWeight = originalWeight;
+
+  // ct.tram, ct.chuc, ct.donvi là các chữ số của giải ngày N-1
+  // actual.tram, actual.chuc, actual.donVi là các chữ số của GĐB ngày N
+
+  // So sánh hàng trăm của GĐB với cả 3 vị trí của giải hôm trước
+  if (ct.tram === actual.tram) newWeight++;
+  if (ct.chuc === actual.tram) newWeight++;
+  if (ct.donvi === actual.tram) newWeight++;
+
+  // So sánh hàng chục của GĐB với cả 3 vị trí của giải hôm trước
+  if (ct.tram === actual.chuc) newWeight++;
+  if (ct.chuc === actual.chuc) newWeight++;
+  if (ct.donvi === actual.chuc) newWeight++;
+
+  // So sánh hàng đơn vị của GĐB với cả 3 vị trí của giải hôm trước
+  if (ct.tram === actual.donVi) newWeight++;
+  if (ct.chuc === actual.donVi) newWeight++;
+  if (ct.donvi === actual.donVi) newWeight++;
+
+  if (newWeight > originalWeight) {
+    ct.weight = newWeight;
+    incrTotal += (newWeight - originalWeight);
+  }
+  return ct;
+});
 
       predDoc.danhDauDaSo = true;
       await predDoc.save();
@@ -409,3 +425,4 @@ exports.getPredictionByDate = async (req, res) => {
     return res.status(500).json({ message: 'Lỗi server', error: err.toString() });
   }
 };
+
