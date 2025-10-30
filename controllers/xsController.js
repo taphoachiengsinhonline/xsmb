@@ -44,26 +44,33 @@ exports.updateResults = async (req, res) => {
 const generateFinalPrediction = (counts) => {
   const allDigits = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'];
 
-  // Chuyển object counts thành mảng để sắp xếp
-  const sortedCounts = Object.entries(counts).map(([k, v]) => ({ k, v }));
+  // Chuyển object counts thành mảng. Nếu một số không xuất hiện, gán count = 0
+  const allCounts = allDigits.map(digit => ({
+    k: digit,
+    v: counts[digit] || 0
+  }));
 
   // Bước 1: Tìm 5 số "Nóng" (tần suất cao nhất)
-  const top5Hot = sortedCounts.sort((a, b) => b.v - a.v).slice(0, 5).map(o => o.k);
+  const top5Hot = [...allCounts].sort((a, b) => b.v - a.v).slice(0, 5).map(o => o.k);
 
   // Bước 2: Tìm 5 số "Lạnh" (tần suất thấp nhất)
-  const top5Cold = sortedCounts.sort((a, b) => a.v - b.v).slice(0, 5).map(o => o.k);
+  const top5Cold = [...allCounts].sort((a, b) => a.v - b.v).slice(0, 5).map(o => o.k);
 
-  // Bước 3: Suy ra 5 số "Giữ Lại"
+  // Bước 3: Suy ra 5 số "Giữ Lại" (dàn số an toàn)
   const keeperSet = allDigits.filter(d => !top5Cold.includes(d));
 
-  // Bước 4: Tìm Giao Điểm
+  // Bước 4: Tìm Giao Điểm (những số "vàng", ưu tiên cao nhất)
   const intersection = top5Hot.filter(d => keeperSet.includes(d));
 
-  // Bước 5: Tạo dàn số cuối cùng
-  const remainingHot = top5Hot.filter(d => !intersection.includes(d));
-  const finalPrediction = [...intersection, ...remainingHot];
+  // Bước 5 (LOGIC MỚI): Tạo dàn số cuối cùng
+  // Lấy các số còn lại từ chính keeperSet để bù vào nếu thiếu
+  const remainingKeepers = keeperSet.filter(d => !intersection.includes(d));
+  
+  // Ghép phần giao điểm và phần còn lại của keeperSet
+  const finalPrediction = [...intersection, ...remainingKeepers];
 
-  return finalPrediction.slice(0, 5); // Đảm bảo luôn trả về đúng 5 số
+  // Luôn đảm bảo trả về đúng 5 số
+  return finalPrediction.slice(0, 5);
 };
 
 
@@ -281,6 +288,7 @@ exports.getLatestPredictionDate = async (req, res) => {
     res.status(500).json({ message: 'Lỗi server', error: err.toString() });
   }
 };
+
 
 
 
