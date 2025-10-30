@@ -77,56 +77,62 @@ const generateFinalPrediction = (counts) => {
 
 
 
-// Sửa hàm này trong file: controllers/xsController.js
-
+// ----------------- HÀM HUẤN LUYỆN LỊCH SỬ (VỚI "TRÍ NHỚ" - ĐÃ SỬA) -----------------
 exports.trainHistoricalPredictions = async (req, res) => {
-  console.log('🔔 [Node.js] Bắt đầu huấn luyện lịch sử bằng ML...');
+  console.log('🔔 [trainHistoricalPredictions] Start (with MEMORY)');
   try {
-    // 1. Xóa hết các dự đoán cũ để làm lại từ đầu
-    await Prediction.deleteMany({});
-    console.log('   -> Đã xóa các dự đoán cũ.');
-
-    // 2. Gọi Python service để tính toán toàn bộ lịch sử
-    const mlResponse = await axios.post('http://localhost:5000/train_historical');
-    const historicalPredictions = mlResponse.data;
-
-    if (!Array.isArray(historicalPredictions) || historicalPredictions.length === 0) {
-      throw new Error("Không nhận được dữ liệu lịch sử từ ML service.");
-    }
-    console.log(`   -> Nhận được ${historicalPredictions.length} bản ghi dự đoán lịch sử từ Python.`);
-
-    // 3. Lấy dữ liệu chiTiet (để xem lại)
     const results = await Result.find().sort({ ngay: 1 }).lean();
-    const groupedResults = {};
-    results.forEach(r => { groupedResults[r.ngay] = r; });
+    if (results.length < 2) return res.status(400).json({ message: 'Không đủ ngày để train historical' });
 
-    // 4. Lưu từng bản ghi dự đoán vào DB
-    for (const pred of historicalPredictions) {
-      const prevDayData = groupedResults[getPreviousDay(pred.ngayDuDoan)] || [];
-      const chiTiet = prevDayData.map((r, idx) => { /* ... logic tạo chiTiet như cũ ... */ });
-      
-      pred.chiTiet = chiTiet; // Thêm chiTiet vào
-      pred.danhDauDaSo = false; // Mặc định
+    const grouped = {};
+    results.forEach(r => { grouped[r.ngay] = grouped[r.ngay] || []; grouped[r.ngay].push(r); });
+    const days = Object.keys(grouped).sort((a, b) => a.split('/').reverse().join('-').localeCompare(b.split('/').reverse().join('-')));
+    
+    let created = 0;
+    for (let i = 1; i < days.length; i++) {
+      const prevDay = days[i - 1];
+      const targetDay = days[i];
+
+      const previousPrediction = await Prediction.findOne({ ngayDuDoan: prevDay }).lean();
+      const prevResults = grouped[prevDay] || [];
+      const countTram = {}, countChuc = {}, countDonVi = {};
+      const chiTiet = [];
+
+      prevResults.forEach((r, idx) => {
+        const num = String(r.so).padStart(3, '0');
+        const [tram, chuc, donvi] = num.split('');
+        
+        const memoryChiTiet = previousPrediction?.chiTiet?.find(ct => ct.positionInPrize === idx + 1);
+        const weight = memoryChiTiet?.weight || 1;
+
+        countTram[tram] = (countTram[tram] || 0) + weight;
+        countChuc[chuc] = (countChuc[chuc] || 0) + weight;
+        countDonVi[donvi] = (countDonVi[donvi] || 0) + weight;
+        
+        const nhomNho = Math.floor(idx / 3) + 1;
+        const nhomTo = Math.floor((nhomNho - 1) / 3) + 1;
+        chiTiet.push({ number: num, nhomNho, nhomTo, positionInPrize: idx + 1, tram, chuc, donvi, weight: 1 });
+      });
+
+      const finalTopTram = generateFinalPrediction(countTram);
+      const finalTopChuc = generateFinalPrediction(countChuc);
+      const finalTopDonVi = generateFinalPrediction(countDonVi);
+
+      await Prediction.findOneAndUpdate(
+        { ngayDuDoan: targetDay },
+        { ngayDuDoan: targetDay, topTram: finalTopTram, topChuc: finalTopChuc, topDonVi: finalTopDonVi, chiTiet, danhDauDaSo: false },
+        { upsert: true, new: true }
+      );
+      created++;
     }
 
-    await Prediction.insertMany(historicalPredictions);
-    
-    console.log(`✅ [Node.js] Đã lưu thành công ${historicalPredictions.length} dự đoán lịch sử vào DB.`);
-    return res.json({ message: `Huấn luyện lịch sử bằng ML thành công! Đã tạo ${historicalPredictions.length} bản ghi.` });
-
+    console.log(`✅ [trainHistoricalPredictions] Done, created/updated ${created} predictions.`);
+    return res.json({ message: `Huấn luyện lịch sử hoàn tất, đã tạo/cập nhật ${created} bản ghi.`, created });
   } catch (err) {
-    console.error('❌ [Node.js] Lỗi khi huấn luyện lịch sử bằng ML:', err.response ? err.response.data : err.message);
-    return res.status(500).json({ message: 'Lỗi khi huấn luyện lịch sử bằng ML', error: err.toString() });
+    console.error('❌ [trainHistoricalPredictions] Error:', err);
+    return res.status(500).json({ message: 'Lỗi server', error: err.toString() });
   }
 };
-
-// Bạn sẽ cần thêm một hàm helper để tính ngày hôm trước
-function getPreviousDay(dateString) { // dateString format: dd/mm/yyyy
-    const parts = dateString.split('/');
-    const d = new Date(parts[2], parts[1] - 1, parts[0]);
-    d.setDate(d.getDate() - 1);
-    return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
-}
 
 // ----------------- HÀM TẠO DỰ ĐOÁN NGÀY TIẾP THEO (VỚI "TRÍ NHỚ" - ĐÃ SỬA) -----------------
 exports.trainPredictionForNextDay = async (req, res) => {
@@ -278,7 +284,6 @@ exports.getLatestPredictionDate = async (req, res) => {
     res.status(500).json({ message: 'Lỗi server', error: err.toString() });
   }
 };
-
 
 
 
