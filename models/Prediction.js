@@ -1,34 +1,37 @@
 // file: models/Prediction.js
 const mongoose = require('mongoose');
 
-const chiTietSchema = new mongoose.Schema({
+// Schema cho chi tiết của riêng "Phương pháp Gốc" để học hỏi
+const chiTietGocSchema = new mongoose.Schema({
   number: String,
-  nhomNho: Number,
-  nhomTo: Number,
   positionInPrize: Number,
   tram: String,
   chuc: String,
   donvi: String,
-  matchedDigit: String,
   weight: { type: Number, default: 1 }
 }, { _id: false });
 
-const predictionSchema = new mongoose.Schema({
-  ngayDuDoan: { type: String, required: true, unique: true },
+// Schema cho kết quả dự đoán của một phương pháp
+const ketQuaPhuongPhapSchema = new mongoose.Schema({
   topTram: [String],
   topChuc: [String],
   topDonVi: [String],
-  chiTiet: [chiTietSchema],
-  danhDauDaSo: { type: Boolean, default: false },
+  // Chỉ "Phương pháp Gốc" mới có trường này
+  chiTietGoc: [chiTietGocSchema] 
+}, { _id: false });
 
-  // --- PHẦN BỊ THIẾU MÀ BẠN ĐÃ CHỈ RA ---
-  // Định nghĩa cấu trúc cho trường analysis để MongoDB có thể lưu nó
-  analysis: {
-    predictedCL: String,
-    cycle3DayDigits: [String],
+// Schema chính, mỗi document là một ngày
+const predictionSchema = new mongoose.Schema({
+  ngayDuDoan: { type: String, required: true, unique: true },
+
+  // Object chứa kết quả của TẤT CẢ các phương pháp
+  // Ví dụ: { "PHUONG_PHAP_GOC": { topTram: [...] }, "DEEP_30_DAY": { topTram: [...] } }
+  ketQuaPhanTich: {
+    type: Map,
+    of: ketQuaPhuongPhapSchema
   },
-  // -----------------------------------------
 
+  danhDauDaSo: { type: Boolean, default: false },
   createdAt: { type: Date, default: Date.now }
 }, { versionKey: false });
 
