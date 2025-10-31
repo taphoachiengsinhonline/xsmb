@@ -5,7 +5,6 @@ const Prediction = require('../models/Prediction');
 const { DateTime } = require('luxon');
 const crawlService = require('../services/crawlService');
 
-// --- Định danh cho các phương pháp ---
 const METHOD_GOC = 'PHUONG_PHAP_GOC';
 const METHOD_DEEP_30_DAY = 'DEEP_30_DAY';
 const METHOD_GDB_14_DAY = 'GDB_14_DAY';
@@ -15,10 +14,9 @@ const METHOD_CHAN_LE = 'MAU_HINH_CHAN_LE_90_DAY';
 
 const ALL_METHODS = [METHOD_GOC, METHOD_DEEP_30_DAY, METHOD_GDB_14_DAY, METHOD_TONG_CHAM, METHOD_BAC_NHO, METHOD_CHAN_LE];
 
-// --- Cấu hình cho Siêu Mô Hình ---
 const INITIAL_TRUST_SCORE = 1.0;
-const TRUST_SCORE_INCREMENT = 0.2; // Điểm cộng khi đoán đúng 1 vị trí
-const TRUST_SCORE_DECREMENT = 0.1; // Điểm trừ khi đoán sai cả 3
+const TRUST_SCORE_INCREMENT = 0.2;
+const TRUST_SCORE_DECREMENT = 0.1;
 const MIN_TRUST_SCORE = 0.1;
 const MAX_TRUST_SCORE = 5.0;
 
@@ -183,18 +181,24 @@ const runMetaLearner = (allMethodResults, trustScores) => {
 
 exports.trainHistoricalPredictions = async (req, res) => {
   console.log('🔔 [trainHistoricalPredictions] Start (Meta-Learner Model)');
-  const MIN_DAYS_REQUIRED = 90;
   try {
     const results = await Result.find().sort({ 'ngay': 1 }).lean();
-    if (results.length < MIN_DAYS_REQUIRED) return res.status(400).json({ message: `Không đủ dữ liệu, cần ít nhất ${MIN_DAYS_REQUIRED} ngày.` });
+    if (results.length < 1) return res.status(400).json({ message: `Không có dữ liệu kết quả để huấn luyện.` });
+    
     const grouped = {}; results.forEach(r => { grouped[r.ngay] = grouped[r.ngay] || []; grouped[r.ngay].push(r); }); const days = Object.keys(grouped).sort((a, b) => a.localeCompare(b, 'vi', { numeric: true }));
+    
     let created = 0;
-    for (let i = MIN_DAYS_REQUIRED; i < days.length; i++) {
+    for (let i = 1; i < days.length; i++) {
         const prevDayStr = days[i - 1]; const targetDayStr = days[i];
+        
+        // SỬA LỖI: Xóa bỏ điều kiện "if" sai lầm, vòng lặp sẽ chạy cho tất cả các ngày có thể.
+        
         const previousPrediction = await Prediction.findOne({ ngayDuDoan: prevDayStr }).lean();
         const trustScores = previousPrediction?.diemTinCay || {};
         ALL_METHODS.forEach(m => { if (trustScores[m] === undefined) trustScores[m] = INITIAL_TRUST_SCORE; });
+
         const prevDayResults = grouped[prevDayStr] || []; const prevDayGDB = prevDayResults.find(r => r.giai === 'ĐB');
+        
         const allMethodResults = {
             [METHOD_GOC]: runMethodGoc(prevDayResults),
             [METHOD_DEEP_30_DAY]: runMethodDeep30Day(i, days, grouped, prevDayGDB),
@@ -212,16 +216,20 @@ exports.trainHistoricalPredictions = async (req, res) => {
 };
 
 exports.trainPredictionForNextDay = async (req, res) => {
-    console.log('🔔 [trainPredictionForNextDay] Start (Meta-Learner Model)'); const MIN_DAYS_REQUIRED = 90;
+    console.log('🔔 [trainPredictionForNextDay] Start (Meta-Learner Model)');
     try {
         const allResults = await Result.find().sort({ 'ngay': 1 }).lean();
-        if (allResults.length < MIN_DAYS_REQUIRED) return res.status(400).json({ message: `Không đủ dữ liệu, cần ít nhất ${MIN_DAYS_REQUIRED} ngày.` });
+        if (allResults.length < 1) return res.status(400).json({ message: `Không có dữ liệu.` });
+
         const grouped = {}; allResults.forEach(r => { grouped[r.ngay] = grouped[r.ngay] || []; grouped[r.ngay].push(r); }); const days = Object.keys(grouped).sort((a, b) => a.localeCompare(b, 'vi', { numeric: true }));
         const latestDayStr = days[days.length - 1]; const latestDate = DateTime.fromFormat(latestDayStr, 'dd/MM/yyyy'); const nextDayStr = latestDate.plus({ days: 1 }).toFormat('dd/MM/yyyy');
+        
         const previousPrediction = await Prediction.findOne({ ngayDuDoan: latestDayStr }).lean();
         const trustScores = previousPrediction?.diemTinCay || {};
         ALL_METHODS.forEach(m => { if (trustScores[m] === undefined) trustScores[m] = INITIAL_TRUST_SCORE; });
+        
         const prevDayResults = grouped[latestDayStr] || []; const prevDayGDB = prevDayResults.find(r => r.giai === 'ĐB');
+        
         const allMethodResults = {
             [METHOD_GOC]: runMethodGoc(prevDayResults),
             [METHOD_DEEP_30_DAY]: runMethodDeep30Day(days.length, days, grouped, prevDayGDB),
@@ -277,7 +285,4 @@ exports.updateTrustScores = async (req, res) => {
  * ================================================================= */
 exports.getAllResults = async (req, res) => { try { const results = await Result.find().sort({ 'ngay': -1, 'giai': 1 }); res.json(results); } catch (err) { res.status(500).json({ message: 'Lỗi server', error: err.toString() }); } };
 exports.updateResults = async (req, res) => { console.log('🔹 [Backend] Request POST /api/xs/update'); try { const data = await crawlService.extractXsData(); let insertedCount = 0; for (const item of data) { const exists = await Result.findOne({ ngay: item.ngay, giai: item.giai }); if (!exists) { await Result.create(item); insertedCount++; } } res.json({ message: `Cập nhật xong, thêm ${insertedCount} kết quả mới` }); } catch (err) { console.error(err); res.status(500).json({ message: 'Lỗi server khi cập nhật dữ liệu', error: err.toString() }); } };
-exports.getPredictionByDate = async (req, res) => { try { const { date } = req.query; if (!date) return res.status(400).json({ message: 'Thiếu param date' }); const pred = await Prediction.findOne({ ngayDuDoan: date }).lean(); if (!pred) return res.status(404).json({ message: 'Không tìm thấy prediction cho ngày này' }); return res.json(pred); } catch (err) { return res.status(500).json({ message: 'Lỗi server', error: err.toString() }); } };
-exports.getLatestPredictionDate = async (req, res) => { try { const latestPrediction = await Prediction.findOne().sort({ ngayDuDoan: -1 }).collation({ locale: 'vi', numericOrdering: true }).lean(); if (!latestPrediction) return res.status(404).json({ message: 'Không tìm thấy bản ghi dự đoán nào.' }); res.json({ latestDate: latestPrediction.ngayDuDoan }); } catch (err) { res.status(500).json({ message: 'Lỗi server', error: err.toString() }); } };
-exports.getAllPredictions = async (req, res) => { try { const predictions = await Prediction.find({}).lean(); res.json(predictions); } catch (err) { res.status(500).json({ message: 'Lỗi server', error: err.toString() }); } };
-exports.updatePredictionWeights = (req, res) => res.status(404).json({ message: 'API đã lỗi thời, sử dụng /update-trust-scores' });
+exports.getPredictionByDate = async (req, res) => { try { const { date } = req.query; if (!date) return res.status(400).json({ message: 'Thiếu param date' }); const pred = await Prediction.findOne({ ngayDuDoan: date }).lean(); if (!pred) return res.status(404).json({ message: 'Không tìm thấy prediction cho ngày này' }); return res.json(pred); } catch (err) { return res.status(500).js
