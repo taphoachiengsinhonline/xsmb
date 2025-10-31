@@ -9,6 +9,8 @@
   "dependencies": {
     "axios": "^1.7.4",
     "cheerio": "^1.0.0",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
     "express": "^4.19.2",
     "luxon": "^3.7.2",
     "mongoose": "^8.5.1"
