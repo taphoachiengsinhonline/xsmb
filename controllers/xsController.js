@@ -3,18 +3,28 @@
 const Result = require('../models/Result');
 const Prediction = require('../models/Prediction');
 const crawlService = require('../services/crawlService');
-const { DateTime } = require('luxon');
+const { DateTime } = require('luxon'); // Dùng để xử lý ngày tháng dễ dàng hơn
 
-/* =================================================================
- * CÁC HẰNG SỐ CẤU HÌNH CHO MÔ HÌNH HYBRID
- * ================================================================= */
-const LOOKBACK_DAYS_GDB = 14; // Số ngày phân tích GĐB dài hạn
-const CYCLE_PERIOD_DAYS = 3;
+/*
+ * =================================================================
+ * CÁC HẰNG SỐ CẤU HÌNH CHO THUẬT TOÁN HỌC HỎI VÀ PHÂN TÍCH
+ * (Bạn có thể tinh chỉnh các giá trị này để thử nghiệm)
+ * =================================================================
+ */
 
-/* =================================================================
- * PHẦN 1: CÁC HÀM LẤY DỮ LIỆU VÀ CẬP NHẬT CƠ BẢN (Giữ nguyên)
- * ================================================================= */
+// --- Cấu hình cho việc cập nhật trọng số (Học hỏi) ---
+const REWARD_INCREMENT = 0.5;   // Điểm cộng cho mỗi lần khớp
+const PENALTY_DECREMENT = 0.1;  // Điểm trừ nếu không khớp chút nào
+const DECAY_FACTOR = 0.99;      // Hệ số suy giảm (ví dụ: 0.99 = giảm 1% mỗi lần)
+const MIN_WEIGHT = 0.2;         // Trọng số tối thiểu, không bao giờ xuống dưới mức này
+const MAX_WEIGHT = 10;          // Trọng số tối đa, tránh tăng vô hạn
 
+// --- Cấu hình cho việc phân tích nâng cao ---
+const CYCLE_PERIOD_DAYS = 3;    // Chu kỳ ngày để phân tích (3 ngày)
+const CYCLE_BOOST_VALUE = 3;    // Điểm "boost" cho các số từ phân tích chu kỳ
+const CL_HISTORY_DAYS = 60;     // Số ngày lịch sử để phân tích Chẵn/Lẻ
+
+// --- Lấy tất cả kết quả XSMB ---
 exports.getAllResults = async (req, res) => {
   try {
     const results = await Result.find().sort({ 'ngay': -1, 'giai': 1 });
@@ -25,6 +35,7 @@ exports.getAllResults = async (req, res) => {
   }
 };
 
+// --- Cập nhật kết quả mới từ crawl ---
 exports.updateResults = async (req, res) => {
   console.log('🔹 [Backend] Request POST /api/xs/update');
   try {
@@ -44,6 +55,7 @@ exports.updateResults = async (req, res) => {
   }
 };
 
+// --- GET Prediction theo ngày ---
 exports.getPredictionByDate = async (req, res) => {
   try {
     const { date } = req.query;
@@ -57,6 +69,7 @@ exports.getPredictionByDate = async (req, res) => {
   }
 };
 
+// --- LẤY NGÀY DỰ ĐOÁN MỚI NHẤT ---
 exports.getLatestPredictionDate = async (req, res) => {
   try {
     const latestPrediction = await Prediction.findOne()
@@ -75,6 +88,7 @@ exports.getLatestPredictionDate = async (req, res) => {
 
 exports.getAllPredictions = async (req, res) => {
   try {
+    // Lấy tất cả các bản ghi dự đoán, chỉ lấy các trường cần thiết để nhẹ hơn
     const predictions = await Prediction.find({}, 'ngayDuDoan topTram topChuc topDonVi').lean();
     res.json(predictions);
   } catch (err) {
@@ -83,108 +97,164 @@ exports.getAllPredictions = async (req, res) => {
   }
 };
 
+/*
+ * =================================================================
+ * CẢI TIẾN #1: HÀM PHÂN TÍCH NÂNG CAO (CHU KỲ & CHẴN/LẺ)
+ * =================================================================
+ */
+const performAdvancedAnalysis = async (previousDayStr, allGroupedResults) => {
+  const days = Object.keys(allGroupedResults).sort((a, b) => a.localeCompare(b, 'vi', { numeric: true }));
+  const previousDayIndex = days.indexOf(previousDayStr);
 
-/* =================================================================
- * PHẦN 2: CÁC MODULE PHÂN TÍCH RIÊNG LẺ
- * ================================================================= */
+  let predictedCL = null;
+  let cycle3DayDigits = [];
 
-// MODULE 1: Phân tích ngắn hạn (Logic gốc của bạn)
-const analyzeShortTermFromAllPrizes = (prevDayResults) => {
-  const counts = { tram: {}, chuc: {}, donvi: {} };
-  prevDayResults.forEach(r => {
-    const num = String(r.so).padStart(3, '0').slice(-3);
-    const [tram, chuc, donvi] = num.split('');
-    if (tram) counts.tram[tram] = (counts.tram[tram] || 0) + 1;
-    if (chuc) counts.chuc[chuc] = (counts.chuc[chuc] || 0) + 1;
-    if (donvi) counts.donvi[donvi] = (counts.donvi[donvi] || 0) + 1;
-  });
+  // 1. Phân tích chu kỳ 3 ngày
+  if (previousDayIndex >= CYCLE_PERIOD_DAYS - 1) {
+    const cycleDayStr = days[previousDayIndex - (CYCLE_PERIOD_DAYS - 1)];
+    const cycleDayResultDB = (allGroupedResults[cycleDayStr] || []).find(r => r.giai === 'ĐB');
+    if (cycleDayResultDB && cycleDayResultDB.so) {
+      cycle3DayDigits = String(cycleDayResultDB.so).slice(-3).split('');
+      console.log(`[Analysis] Chu kỳ ${CYCLE_PERIOD_DAYS} ngày (${cycleDayStr}): Gợi ý các số ${cycle3DayDigits.join(', ')}`);
+    }
+  }
 
-  const generatePredictionFromCounts = (initialCounts) => {
-    const allDigits = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'];
-    const allCounts = allDigits.map(digit => ({ k: digit, v: initialCounts[digit] || 0 }));
-    const top5Hot = [...allCounts].sort((a, b) => b.v - a.v).slice(0, 5).map(o => o.k);
-    const top5Cold = [...allCounts].sort((a, b) => a.v - b.v).slice(0, 5).map(o => o.k);
-    const keeperSet = allDigits.filter(d => !top5Cold.includes(d));
-    const intersection = top5Hot.filter(d => keeperSet.includes(d));
-    const remainingKeepers = keeperSet.filter(d => !intersection.includes(d));
-    return [...intersection, ...remainingKeepers].slice(0, 5);
-  };
+  // 2. Phân tích Chẵn/Lẻ
+  const prevDayResultDB = (allGroupedResults[previousDayStr] || []).find(r => r.giai === 'ĐB');
+  if (prevDayResultDB && prevDayResultDB.chanle) {
+    const prevDayCL = prevDayResultDB.chanle;
+    const clStats = {};
+    const relevantDays = days.slice(Math.max(0, previousDayIndex - CL_HISTORY_DAYS), previousDayIndex);
 
-  return {
-    tram: generatePredictionFromCounts(counts.tram),
-    chuc: generatePredictionFromCounts(counts.chuc),
-    donvi: generatePredictionFromCounts(counts.donvi),
-  };
-};
-
-// MODULE 2: Phân tích dài hạn (Logic GĐB)
-const analyzeLongTermFromGDB = (endDateIndex, days, groupedResults) => {
-  const allDigits = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'];
-  const frequencies = { tram: {}, chuc: {}, donvi: {} };
-  const startIndex = Math.max(0, endDateIndex - LOOKBACK_DAYS_GDB);
-  const analysisDays = days.slice(startIndex, endDateIndex);
-
-  analysisDays.forEach(day => {
-    const dbResult = (groupedResults[day] || []).find(r => r.giai === 'ĐB');
-    if (dbResult && dbResult.so) {
-      const numStr = String(dbResult.so).slice(-3);
-      if (numStr.length === 3) {
-        const [tram, chuc, donvi] = numStr.split('');
-        if (tram) frequencies.tram[tram] = (frequencies.tram[tram] || 0) + 1;
-        if (chuc) frequencies.chuc[chuc] = (frequencies.chuc[chuc] || 0) + 1;
-        if (donvi) frequencies.donvi[donvi] = (frequencies.donvi[donvi] || 0) + 1;
+    for (let i = 0; i < relevantDays.length - 1; i++) {
+      const day = relevantDays[i];
+      const nextDay = relevantDays[i + 1];
+      const dayDB = (allGroupedResults[day] || []).find(r => r.giai === 'ĐB');
+      if (dayDB && dayDB.chanle === prevDayCL) {
+        const nextDayDB = (allGroupedResults[nextDay] || []).find(r => r.giai === 'ĐB');
+        if (nextDayDB && nextDayDB.chanle) {
+          clStats[nextDayDB.chanle] = (clStats[nextDayDB.chanle] || 0) + 1;
+        }
       }
     }
-  });
+    if (Object.keys(clStats).length > 0) {
+      predictedCL = Object.entries(clStats).sort((a, b) => b[1] - a[1])[0][0];
+      console.log(`[Analysis] GĐB hôm trước có C/L là ${prevDayCL}. Thống kê dự đoán C/L hôm nay là: ${predictedCL}`);
+    }
+  }
 
-  const getTop5 = (freqs) => Object.entries(freqs).sort((a,b) => b[1] - a[1]).slice(0,5).map(e => e[0]);
-
-  return {
-      tram: getTop5(frequencies.tram),
-      chuc: getTop5(frequencies.chuc),
-      donvi: getTop5(frequencies.donvi),
-  };
+  return { predictedCL, cycle3DayDigits };
 };
 
 
-/* =================================================================
- * PHẦN 3: LOGIC HYBRID KẾT HỢP
- * ================================================================= */
+/*
+ * =================================================================
+ * CẢI TIẾN #2: NÂNG CẤP HÀM TẠO DÀN SỐ DỰ ĐOÁN
+ * (Thêm logic "boost" điểm cho các số được gợi ý)
+ * =================================================================
+ */
+const generateFinalPrediction = (initialCounts, options = {}) => {
+  const allDigits = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'];
+  const counts = { ...initialCounts }; // Tạo bản sao để không ảnh hưởng bản gốc
 
-const generateHybridPrediction = (shortTermPicks, longTermPicks) => {
-    const finalPrediction = { tram: [], chuc: [], donvi: [] };
-
-    ['tram', 'chuc', 'donvi'].forEach(position => {
-        const shortTermSet = shortTermPicks[position];
-        const longTermSet = longTermPicks[position];
-
-        // 1. Tìm những số "vàng" (xuất hiện ở cả 2 phương pháp)
-        const intersection = shortTermSet.filter(digit => longTermSet.includes(digit));
-        
-        // 2. Lấy những số còn lại từ mỗi phương pháp
-        const onlyShortTerm = shortTermSet.filter(digit => !intersection.includes(digit));
-        const onlyLongTerm = longTermSet.filter(digit => !intersection.includes(digit));
-
-        // 3. Kết hợp lại theo thứ tự ưu tiên: Vàng -> Ngắn hạn -> Dài hạn
-        const combined = [...intersection, ...onlyShortTerm, ...onlyLongTerm];
-        
-        // 4. Loại bỏ trùng lặp và lấy 5 số đầu tiên
-        finalPrediction[position] = [...new Set(combined)].slice(0, 5);
+  // >> LOGIC MỚI: Tăng điểm cho các số được gợi ý từ phân tích chu kỳ <<
+  if (options.boostDigits && Array.isArray(options.boostDigits)) {
+    options.boostDigits.forEach(digit => {
+      counts[digit] = (counts[digit] || 0) + CYCLE_BOOST_VALUE;
     });
+  }
 
-    return finalPrediction;
+  const allCounts = allDigits.map(digit => ({ k: digit, v: counts[digit] || 0 }));
+
+  const top5Hot = [...allCounts].sort((a, b) => b.v - a.v).slice(0, 5).map(o => o.k);
+  const top5Cold = [...allCounts].sort((a, b) => a.v - b.v).slice(0, 5).map(o => o.k);
+  const keeperSet = allDigits.filter(d => !top5Cold.includes(d));
+  const intersection = top5Hot.filter(d => keeperSet.includes(d));
+  const remainingKeepers = keeperSet.filter(d => !intersection.includes(d));
+  const finalPrediction = [...intersection, ...remainingKeepers];
+
+  return finalPrediction.slice(0, 5);
+};
+
+/*
+ * =================================================================
+ * CẢI TIẾN #3: HÀM CẬP NHẬT WEIGHTS VỚI LOGIC THƯỞNG/PHẠT/SUY GIẢM
+ * =================================================================
+ */
+exports.updatePredictionWeights = async (req, res) => {
+  console.log('🔔 [updatePredictionWeights] Start (with advanced logic)');
+  try {
+    const predsToUpdate = await Prediction.find({ danhDauDaSo: false }).lean();
+    if (!predsToUpdate.length) return res.json({ message: 'Không có dự đoán nào cần cập nhật.' });
+
+    let updatedCount = 0;
+    for (const p of predsToUpdate) {
+      const actualResults = await Result.find({ ngay: p.ngayDuDoan }).lean();
+      if (!actualResults.length) continue;
+      const dbRec = actualResults.find(r => r.giai === 'ĐB');
+      if (!dbRec || !dbRec.so) continue;
+
+      const dbStr = String(dbRec.so).slice(-3);
+      const actual = { tram: dbStr[0], chuc: dbStr[1], donVi: dbStr[2] };
+      const predDoc = await Prediction.findById(p._id);
+      if (!predDoc) continue;
+
+      predDoc.chiTiet.forEach(ct => {
+        let originalWeight = ct.weight || 1;
+        let newWeight = originalWeight;
+        
+        let matches = 0;
+        // So sánh chéo 9 lần
+        if (ct.tram === actual.tram) matches++;
+        if (ct.chuc === actual.tram) matches++;
+        if (ct.donvi === actual.tram) matches++;
+        if (ct.tram === actual.chuc) matches++;
+        if (ct.chuc === actual.chuc) matches++;
+        if (ct.donvi === actual.chuc) matches++;
+        if (ct.tram === actual.donVi) matches++;
+        if (ct.chuc === actual.donVi) matches++;
+        if (ct.donvi === actual.donVi) matches++;
+
+        if (matches > 0) {
+          // Thưởng
+          newWeight += matches * REWARD_INCREMENT;
+        } else {
+          // Phạt
+          newWeight -= PENALTY_DECREMENT;
+        }
+
+        // Luôn áp dụng suy giảm
+        newWeight *= DECAY_FACTOR;
+
+        // Áp dụng sàn và trần
+        ct.weight = Math.max(MIN_WEIGHT, Math.min(MAX_WEIGHT, newWeight));
+      });
+
+      predDoc.danhDauDaSo = true;
+      await predDoc.save();
+      updatedCount++;
+    }
+    console.log(`✅ [updatePredictionWeights] Done, processed ${updatedCount} records.`);
+    return res.json({ message: `Cập nhật weights hoàn tất. Đã xử lý ${updatedCount} bản ghi.`, updatedCount });
+  } catch (err) {
+    console.error('❌ [updatePredictionWeights] Error:', err);
+    return res.status(500).json({ message: 'Lỗi server', error: err.toString() });
+  }
 };
 
 
-/* =================================================================
- * PHẦN 4: CÁC HÀM HUẤN LUYỆN DÙNG MÔ HÌNH HYBRID
- * ================================================================= */
+/*
+ * =================================================================
+ * CẢI TIẾN #4: TÍCH HỢP LOGIC MỚI VÀO CÁC HÀM TRAIN
+ * =================================================================
+ */
 
+// ----------------- HÀM HUẤN LUYỆN LỊCH SỬ (ĐÃ NÂNG CẤP) -----------------
 exports.trainHistoricalPredictions = async (req, res) => {
-  console.log('🔔 [trainHistoricalPredictions] Start (with HYBRID MODEL)');
+  console.log('🔔 [trainHistoricalPredictions] Start (with ADVANCED ANALYSIS)');
   try {
     const results = await Result.find().sort({ 'ngay': 1 }).lean();
-    if (results.length < LOOKBACK_DAYS_GDB) return res.status(400).json({ message: `Không đủ dữ liệu, cần ít nhất ${LOOKBACK_DAYS_GDB} ngày.` });
+    if (results.length < 2) return res.status(400).json({ message: 'Không đủ dữ liệu để train historical' });
 
     const grouped = {};
     results.forEach(r => { grouped[r.ngay] = grouped[r.ngay] || []; grouped[r.ngay].push(r); });
@@ -192,37 +262,48 @@ exports.trainHistoricalPredictions = async (req, res) => {
     
     let created = 0;
     for (let i = 1; i < days.length; i++) {
-      const prevDayStr = days[i - 1];
-      const targetDayStr = days[i];
+      const prevDay = days[i - 1];
+      const targetDay = days[i];
 
-      // 1. Chạy phân tích ngắn hạn (logic gốc)
-      const shortTermPicks = analyzeShortTermFromAllPrizes(grouped[prevDayStr] || []);
+      // >> GỌI HÀM PHÂN TÍCH NÂNG CAO <<
+      const analysis = await performAdvancedAnalysis(prevDay, grouped);
 
-      // 2. Chạy phân tích dài hạn (logic GĐB)
-      const longTermPicks = analyzeLongTermFromGDB(i, days, grouped);
+      const previousPrediction = await Prediction.findOne({ ngayDuDoan: prevDay }).lean();
+      const prevResults = grouped[prevDay] || [];
+      const countTram = {}, countChuc = {}, countDonVi = {};
+      const chiTiet = [];
 
-      // 3. Kết hợp kết quả bằng mô hình Hybrid
-      const finalPrediction = generateHybridPrediction(shortTermPicks, longTermPicks);
+      prevResults.forEach((r, idx) => {
+        const num = String(r.so).padStart(3, '0').slice(-3); // Luôn lấy 3 số cuối
+        const [tram, chuc, donvi] = num.split('');
+        
+        const memoryChiTiet = previousPrediction?.chiTiet?.find(ct => ct.positionInPrize === idx);
+        const weight = memoryChiTiet?.weight || 1;
 
-      // Lấy thêm thông tin analysis để hiển thị
-      let cycle3DayDigits = [];
-      const cycleDayIndex = i - CYCLE_PERIOD_DAYS;
-      if (cycleDayIndex >= 0) {
-        const cycleDayResultDB = (grouped[days[cycleDayIndex]] || []).find(r => r.giai === 'ĐB');
-        if (cycleDayResultDB && cycleDayResultDB.so) {
-          cycle3DayDigits = String(cycleDayResultDB.so).slice(-3).split('');
-        }
-      }
+        countTram[tram] = (countTram[tram] || 0) + weight;
+        countChuc[chuc] = (countChuc[chuc] || 0) + weight;
+        countDonVi[donvi] = (countDonVi[donvi] || 0) + weight;
+        
+        const nhomNho = Math.floor(idx / 3) + 1;
+        const nhomTo = Math.floor((nhomNho - 1) / 3) + 1;
+        chiTiet.push({ number: r.so, nhomNho, nhomTo, positionInPrize: idx, tram, chuc, donvi, weight: 1 });
+      });
+
+      // >> TRUYỀN GỢI Ý VÀO HÀM TẠO DỰ ĐOÁN <<
+      const finalTopTram = generateFinalPrediction(countTram, { boostDigits: analysis.cycle3DayDigits });
+      const finalTopChuc = generateFinalPrediction(countChuc, { boostDigits: analysis.cycle3DayDigits });
+      const finalTopDonVi = generateFinalPrediction(countDonVi, { boostDigits: analysis.cycle3DayDigits });
 
       await Prediction.findOneAndUpdate(
-        { ngayDuDoan: targetDayStr },
+        { ngayDuDoan: targetDay },
         { 
-          ngayDuDoan: targetDayStr, 
-          topTram: finalPrediction.tram, 
-          topChuc: finalPrediction.chuc, 
-          topDonVi: finalPrediction.donvi,
-          danhDauDaSo: false, 
-          analysis: { cycle3DayDigits }
+          ngayDuDoan: targetDay, 
+          topTram: finalTopTram, 
+          topChuc: finalTopChuc, 
+          topDonVi: finalTopDonVi, 
+          chiTiet, 
+          danhDauDaSo: false,
+          analysis // Lưu kết quả phân tích
         },
         { upsert: true, new: true }
       );
@@ -237,47 +318,60 @@ exports.trainHistoricalPredictions = async (req, res) => {
   }
 };
 
+// ----------------- HÀM TẠO DỰ ĐOÁN NGÀY TIẾP THEO (ĐÃ NÂNG CẤP) -----------------
 exports.trainPredictionForNextDay = async (req, res) => {
-    console.log('🔔 [trainPredictionForNextDay] Start (with HYBRID MODEL)');
+    console.log('🔔 [trainPredictionForNextDay] Start (with ADVANCED ANALYSIS)');
     try {
         const allResults = await Result.find().sort({ 'ngay': 1 }).lean();
-        if (allResults.length < 1) return res.status(400).json({ message: 'Không có dữ liệu.' });
+        if (allResults.length < 1) return res.status(400).json({ message: 'Không có dữ liệu results.' });
 
         const grouped = {};
         allResults.forEach(r => { grouped[r.ngay] = grouped[r.ngay] || []; grouped[r.ngay].push(r); });
         const days = Object.keys(grouped).sort((a, b) => a.localeCompare(b, 'vi', { numeric: true }));
+        const latestDay = days[days.length - 1];
         
-        const latestDayStr = days[days.length - 1];
-        const latestDate = DateTime.fromFormat(latestDayStr, 'dd/MM/yyyy');
+        const latestDate = DateTime.fromFormat(latestDay, 'dd/MM/yyyy');
         const nextDayStr = latestDate.plus({ days: 1 }).toFormat('dd/MM/yyyy');
         
-        // 1. Chạy phân tích ngắn hạn (logic gốc)
-        const shortTermPicks = analyzeShortTermFromAllPrizes(grouped[latestDayStr] || []);
+        // >> GỌI HÀM PHÂN TÍCH NÂNG CAO <<
+        const analysis = await performAdvancedAnalysis(latestDay, grouped);
 
-        // 2. Chạy phân tích dài hạn (logic GĐB)
-        const longTermPicks = analyzeLongTermFromGDB(days.length, days, grouped);
-        
-        // 3. Kết hợp kết quả
-        const finalPrediction = generateHybridPrediction(shortTermPicks, longTermPicks);
+        const previousPrediction = await Prediction.findOne({ ngayDuDoan: latestDay }).lean();
+        const prevResults = grouped[latestDay];
 
-        let cycle3DayDigits = [];
-        const cycleDayIndex = days.length - CYCLE_PERIOD_DAYS;
-        if (cycleDayIndex >= 0) {
-            const cycleDayResultDB = (grouped[days[cycleDayIndex]] || []).find(r => r.giai === 'ĐB');
-            if (cycleDayResultDB && cycleDayResultDB.so) {
-                cycle3DayDigits = String(cycleDayResultDB.so).slice(-3).split('');
-            }
-        }
+        const countTram = {}, countChuc = {}, countDonVi = {};
+        const chiTiet = [];
+        prevResults.forEach((r, idx) => {
+            const num = String(r.so).padStart(3, '0').slice(-3);
+            const [tram, chuc, donvi] = num.split('');
+
+            const memoryChiTiet = previousPrediction?.chiTiet?.find(ct => ct.positionInPrize === idx);
+            const weight = memoryChiTiet?.weight || 1;
+
+            countTram[tram] = (countTram[tram] || 0) + weight;
+            countChuc[chuc] = (countChuc[chuc] || 0) + weight;
+            countDonVi[donvi] = (countDonVi[donvi] || 0) + weight;
+
+            const nhomNho = Math.floor(idx / 3) + 1;
+            const nhomTo = Math.floor((nhomNho - 1) / 3) + 1;
+            chiTiet.push({ number: r.so, nhomNho, nhomTo, positionInPrize: idx, tram, chuc, donvi, weight: 1 });
+        });
+
+        // >> TRUYỀN GỢI Ý VÀO HÀM TẠO DỰ ĐOÁN <<
+        const finalTopTram = generateFinalPrediction(countTram, { boostDigits: analysis.cycle3DayDigits });
+        const finalTopChuc = generateFinalPrediction(countChuc, { boostDigits: analysis.cycle3DayDigits });
+        const finalTopDonVi = generateFinalPrediction(countDonVi, { boostDigits: analysis.cycle3DayDigits });
         
         await Prediction.findOneAndUpdate(
             { ngayDuDoan: nextDayStr },
             { 
               ngayDuDoan: nextDayStr, 
-              topTram: finalPrediction.tram, 
-              topChuc: finalPrediction.chuc, 
-              topDonVi: finalPrediction.donvi, 
+              topTram: finalTopTram, 
+              topChuc: finalTopChuc, 
+              topDonVi: finalTopDonVi, 
+              chiTiet, 
               danhDauDaSo: false,
-              analysis: { cycle3DayDigits }
+              analysis // Lưu kết quả phân tích
             },
             { upsert: true, new: true }
         );
@@ -290,6 +384,5 @@ exports.trainPredictionForNextDay = async (req, res) => {
     }
 };
 
-exports.updatePredictionWeights = async (req, res) => {
-    return res.json({ message: 'Chức năng này không còn cần thiết trong mô hình Hybrid.' });
-};
+
+
