@@ -2,6 +2,7 @@
 
 const Result = require('../models/Result');
 const Prediction = require('../models/Prediction');
+const crawlService = require('../services/crawlService'); // Cần crawlService cho updateResults
 const { DateTime } = require('luxon');
 
 // --- Định danh cho các phương pháp ---
@@ -127,7 +128,7 @@ const runMethodGDB14Day = (endDateIndex, days, groupedResults) => {
 };
 
 /* =================================================================
- * PHẦN 2: CÁC HÀM ĐIỀU PHỐI VÀ LẤY DỮ LIỆU
+ * PHẦN 2: CÁC HÀM ĐIỀU PHỐI, HUẤN LUYỆN VÀ LẤY DỮ LIỆU
  * ================================================================= */
 
 exports.trainHistoricalPredictions = async (req, res) => {
@@ -224,6 +225,7 @@ exports.updatePredictionWeights = async (req, res) => {
             if (!dbRec?.so) continue;
 
             const dbStr = String(dbRec.so).slice(-3);
+            if (dbStr.length < 3) continue;
             const actual = { tram: dbStr[0], chuc: dbStr[1], donVi: dbStr[2] };
             
             const methodGocData = predDoc.ketQuaPhanTich.get(METHOD_GOC);
@@ -293,5 +295,27 @@ exports.getAllPredictions = async (req, res) => {
     res.json(predictions);
   } catch (err) {
     res.status(500).json({ message: 'Lỗi server', error: err.toString() });
+  }
+};
+
+// =================================================================
+// HÀM BỊ THIẾU ĐÃ ĐƯỢC BỔ SUNG LẠI
+// =================================================================
+exports.updateResults = async (req, res) => {
+  console.log('🔹 [Backend] Request POST /api/xs/update');
+  try {
+    const data = await crawlService.extractXsData();
+    let insertedCount = 0;
+    for (const item of data) {
+      const exists = await Result.findOne({ ngay: item.ngay, giai: item.giai });
+      if (!exists) {
+        await Result.create(item);
+        insertedCount++;
+      }
+    }
+    res.json({ message: `Cập nhật xong, thêm ${insertedCount} kết quả mới` });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Lỗi server khi cập nhật dữ liệu', error: err.toString() });
   }
 };
