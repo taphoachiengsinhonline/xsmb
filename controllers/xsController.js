@@ -191,8 +191,6 @@ exports.trainHistoricalPredictions = async (req, res) => {
     for (let i = 1; i < days.length; i++) {
         const prevDayStr = days[i - 1]; const targetDayStr = days[i];
         
-        // SỬA LỖI: Xóa bỏ điều kiện "if" sai lầm, vòng lặp sẽ chạy cho tất cả các ngày có thể.
-        
         const previousPrediction = await Prediction.findOne({ ngayDuDoan: prevDayStr }).lean();
         const trustScores = previousPrediction?.diemTinCay || {};
         ALL_METHODS.forEach(m => { if (trustScores[m] === undefined) trustScores[m] = INITIAL_TRUST_SCORE; });
@@ -285,4 +283,7 @@ exports.updateTrustScores = async (req, res) => {
  * ================================================================= */
 exports.getAllResults = async (req, res) => { try { const results = await Result.find().sort({ 'ngay': -1, 'giai': 1 }); res.json(results); } catch (err) { res.status(500).json({ message: 'Lỗi server', error: err.toString() }); } };
 exports.updateResults = async (req, res) => { console.log('🔹 [Backend] Request POST /api/xs/update'); try { const data = await crawlService.extractXsData(); let insertedCount = 0; for (const item of data) { const exists = await Result.findOne({ ngay: item.ngay, giai: item.giai }); if (!exists) { await Result.create(item); insertedCount++; } } res.json({ message: `Cập nhật xong, thêm ${insertedCount} kết quả mới` }); } catch (err) { console.error(err); res.status(500).json({ message: 'Lỗi server khi cập nhật dữ liệu', error: err.toString() }); } };
-exports.getPredictionByDate = async (req, res) => { try { const { date } = req.query; if (!date) return res.status(400).json({ message: 'Thiếu param date' }); const pred = await Prediction.findOne({ ngayDuDoan: date }).lean(); if (!pred) return res.status(404).json({ message: 'Không tìm thấy prediction cho ngày này' }); return res.json(pred); } catch (err) { return res.status(500).js
+exports.getPredictionByDate = async (req, res) => { try { const { date } = req.query; if (!date) return res.status(400).json({ message: 'Thiếu param date' }); const pred = await Prediction.findOne({ ngayDuDoan: date }).lean(); if (!pred) return res.status(404).json({ message: 'Không tìm thấy prediction cho ngày này' }); return res.json(pred); } catch (err) { return res.status(500).json({ message: 'Lỗi server', error: err.toString() }); } };
+exports.getLatestPredictionDate = async (req, res) => { try { const latestPrediction = await Prediction.findOne().sort({ ngayDuDoan: -1 }).collation({ locale: 'vi', numericOrdering: true }).lean(); if (!latestPrediction) return res.status(404).json({ message: 'Không tìm thấy bản ghi dự đoán nào.' }); res.json({ latestDate: latestPrediction.ngayDuDoan }); } catch (err) { res.status(500).json({ message: 'Lỗi server', error: err.toString() }); } };
+exports.getAllPredictions = async (req, res) => { try { const predictions = await Prediction.find({}).lean(); res.json(predictions); } catch (err) { res.status(500).json({ message: 'Lỗi server', error: err.toString() }); } };
+exports.updatePredictionWeights = (req, res) => res.status(404).json({ message: 'API đã lỗi thời, sử dụng /update-trust-scores' });
