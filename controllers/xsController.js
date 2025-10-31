@@ -6,21 +6,15 @@ const crawlService = require('../services/crawlService');
 const { DateTime } = require('luxon');
 
 /* =================================================================
- * CÁC HẰNG SỐ CẤU HÌNH CHO THUẬT TOÁN DỰ ĐOÁN GĐB
+ * CÁC HẰNG SỐ CẤU HÌNH CHO MÔ HÌNH HYBRID
  * ================================================================= */
-const LOOKBACK_DAYS = 14; // Số ngày nhìn lại lịch sử GĐB để phân tích
-// --- Trọng số cho hệ thống tính điểm (chỉ dành cho dự đoán GĐB) ---
-const SCORE_WEIGHTS = {
-  FREQUENCY: 1.0, // Điểm cho những số xuất hiện nhiều trong GĐB gần đây
-  GAP: 0.5,       // Điểm cho những số đã lâu không xuất hiện trong GĐB
-  CYCLE: 1.5,     // Điểm "boost" nếu số đó xuất hiện trong GĐB của 3 ngày trước
-};
+const LOOKBACK_DAYS_GDB = 14; // Số ngày phân tích GĐB dài hạn
 const CYCLE_PERIOD_DAYS = 3;
 
 /* =================================================================
- * PHẦN 1: CÁC HÀM LẤY DỮ LIỆU VÀ CẬP NHẬT CƠ BẢN
- * (Đây là những hàm gốc của bạn, được phục hồi đầy đủ)
+ * PHẦN 1: CÁC HÀM LẤY DỮ LIỆU VÀ CẬP NHẬT CƠ BẢN (Giữ nguyên)
  * ================================================================= */
+
 exports.getAllResults = async (req, res) => {
   try {
     const results = await Result.find().sort({ 'ngay': -1, 'giai': 1 });
@@ -91,99 +85,134 @@ exports.getAllPredictions = async (req, res) => {
 
 
 /* =================================================================
- * PHẦN 2: LOGIC DỰ ĐOÁN GĐB NÂNG CAO
+ * PHẦN 2: CÁC MODULE PHÂN TÍCH RIÊNG LẺ
  * ================================================================= */
 
-/**
- * Phân tích xu hướng của 3 số cuối GĐB trong N ngày gần nhất.
- */
-const analyzeLongTermTrends = (endDateIndex, days, groupedResults) => {
-  const allDigits = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'];
-  const frequencies = { tram: {}, chuc: {}, donvi: {} };
-  const lastSeen = { tram: {}, chuc: {}, donvi: {} };
-
-  allDigits.forEach(d => {
-    frequencies.tram[d] = 0; frequencies.chuc[d] = 0; frequencies.donvi[d] = 0;
-    lastSeen.tram[d] = LOOKBACK_DAYS; lastSeen.chuc[d] = LOOKBACK_DAYS; lastSeen.donvi[d] = LOOKBACK_DAYS;
+// MODULE 1: Phân tích ngắn hạn (Logic gốc của bạn)
+const analyzeShortTermFromAllPrizes = (prevDayResults) => {
+  const counts = { tram: {}, chuc: {}, donvi: {} };
+  prevDayResults.forEach(r => {
+    const num = String(r.so).padStart(3, '0').slice(-3);
+    const [tram, chuc, donvi] = num.split('');
+    if (tram) counts.tram[tram] = (counts.tram[tram] || 0) + 1;
+    if (chuc) counts.chuc[chuc] = (counts.chuc[chuc] || 0) + 1;
+    if (donvi) counts.donvi[donvi] = (counts.donvi[donvi] || 0) + 1;
   });
 
-  const startIndex = Math.max(0, endDateIndex - LOOKBACK_DAYS);
+  const generatePredictionFromCounts = (initialCounts) => {
+    const allDigits = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'];
+    const allCounts = allDigits.map(digit => ({ k: digit, v: initialCounts[digit] || 0 }));
+    const top5Hot = [...allCounts].sort((a, b) => b.v - a.v).slice(0, 5).map(o => o.k);
+    const top5Cold = [...allCounts].sort((a, b) => a.v - b.v).slice(0, 5).map(o => o.k);
+    const keeperSet = allDigits.filter(d => !top5Cold.includes(d));
+    const intersection = top5Hot.filter(d => keeperSet.includes(d));
+    const remainingKeepers = keeperSet.filter(d => !intersection.includes(d));
+    return [...intersection, ...remainingKeepers].slice(0, 5);
+  };
+
+  return {
+    tram: generatePredictionFromCounts(counts.tram),
+    chuc: generatePredictionFromCounts(counts.chuc),
+    donvi: generatePredictionFromCounts(counts.donvi),
+  };
+};
+
+// MODULE 2: Phân tích dài hạn (Logic GĐB)
+const analyzeLongTermFromGDB = (endDateIndex, days, groupedResults) => {
+  const allDigits = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'];
+  const frequencies = { tram: {}, chuc: {}, donvi: {} };
+  const startIndex = Math.max(0, endDateIndex - LOOKBACK_DAYS_GDB);
   const analysisDays = days.slice(startIndex, endDateIndex);
 
-  analysisDays.forEach((day, dayIndex) => {
-    const resultsForDay = groupedResults[day] || [];
-    // CHỈ LẤY KẾT QUẢ GĐB ĐỂ PHÂN TÍCH
-    const dbResult = resultsForDay.find(r => r.giai === 'ĐB');
+  analysisDays.forEach(day => {
+    const dbResult = (groupedResults[day] || []).find(r => r.giai === 'ĐB');
     if (dbResult && dbResult.so) {
       const numStr = String(dbResult.so).slice(-3);
       if (numStr.length === 3) {
         const [tram, chuc, donvi] = numStr.split('');
-        if(tram) { frequencies.tram[tram]++; lastSeen.tram[tram] = analysisDays.length - 1 - dayIndex; }
-        if(chuc) { frequencies.chuc[chuc]++; lastSeen.chuc[chuc] = analysisDays.length - 1 - dayIndex; }
-        if(donvi) { frequencies.donvi[donvi]++; lastSeen.donvi[donvi] = analysisDays.length - 1 - dayIndex; }
+        if (tram) frequencies.tram[tram] = (frequencies.tram[tram] || 0) + 1;
+        if (chuc) frequencies.chuc[chuc] = (frequencies.chuc[chuc] || 0) + 1;
+        if (donvi) frequencies.donvi[donvi] = (frequencies.donvi[donvi] || 0) + 1;
       }
     }
   });
 
-  return { frequencies, gaps: lastSeen };
-};
+  const getTop5 = (freqs) => Object.entries(freqs).sort((a,b) => b[1] - a[1]).slice(0,5).map(e => e[0]);
 
-
-/**
- * Hệ thống tính điểm để chọn ra 5 số tiềm năng nhất cho mỗi vị trí của GĐB.
- */
-const createScoringModel = (trends, cycleBoostDigits = []) => {
-    const allDigits = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'];
-    const finalScores = { tram: [], chuc: [], donvi: [] };
-
-    ['tram', 'chuc', 'donvi'].forEach(position => {
-        const scores = allDigits.map(digit => {
-            let score = 0;
-            score += (trends.frequencies[position][digit] || 0) * SCORE_WEIGHTS.FREQUENCY;
-            score += (trends.gaps[position][digit] || 0) * SCORE_WEIGHTS.GAP;
-            if (cycleBoostDigits.includes(digit)) {
-                score += SCORE_WEIGHTS.CYCLE;
-            }
-            return { digit, score };
-        });
-        
-        finalScores[position] = scores.sort((a, b) => b.score - a.score).slice(0, 5).map(s => s.digit);
-    });
-
-    return finalScores;
+  return {
+      tram: getTop5(frequencies.tram),
+      chuc: getTop5(frequencies.chuc),
+      donvi: getTop5(frequencies.donvi),
+  };
 };
 
 
 /* =================================================================
- * PHẦN 3: CÁC HÀM HUẤN LUYỆN ĐƯỢC CẬP NHẬT ĐỂ DÙNG LOGIC MỚI
+ * PHẦN 3: LOGIC HYBRID KẾT HỢP
+ * ================================================================= */
+
+const generateHybridPrediction = (shortTermPicks, longTermPicks) => {
+    const finalPrediction = { tram: [], chuc: [], donvi: [] };
+
+    ['tram', 'chuc', 'donvi'].forEach(position => {
+        const shortTermSet = shortTermPicks[position];
+        const longTermSet = longTermPicks[position];
+
+        // 1. Tìm những số "vàng" (xuất hiện ở cả 2 phương pháp)
+        const intersection = shortTermSet.filter(digit => longTermSet.includes(digit));
+        
+        // 2. Lấy những số còn lại từ mỗi phương pháp
+        const onlyShortTerm = shortTermSet.filter(digit => !intersection.includes(digit));
+        const onlyLongTerm = longTermSet.filter(digit => !intersection.includes(digit));
+
+        // 3. Kết hợp lại theo thứ tự ưu tiên: Vàng -> Ngắn hạn -> Dài hạn
+        const combined = [...intersection, ...onlyShortTerm, ...onlyLongTerm];
+        
+        // 4. Loại bỏ trùng lặp và lấy 5 số đầu tiên
+        finalPrediction[position] = [...new Set(combined)].slice(0, 5);
+    });
+
+    return finalPrediction;
+};
+
+
+/* =================================================================
+ * PHẦN 4: CÁC HÀM HUẤN LUYỆN DÙNG MÔ HÌNH HYBRID
  * ================================================================= */
 
 exports.trainHistoricalPredictions = async (req, res) => {
-  console.log('🔔 [trainHistoricalPredictions] Start (with ADVANCED GDB SCORING MODEL)');
+  console.log('🔔 [trainHistoricalPredictions] Start (with HYBRID MODEL)');
   try {
     const results = await Result.find().sort({ 'ngay': 1 }).lean();
-    if (results.length < LOOKBACK_DAYS) return res.status(400).json({ message: `Không đủ dữ liệu, cần ít nhất ${LOOKBACK_DAYS} ngày.` });
+    if (results.length < LOOKBACK_DAYS_GDB) return res.status(400).json({ message: `Không đủ dữ liệu, cần ít nhất ${LOOKBACK_DAYS_GDB} ngày.` });
 
     const grouped = {};
     results.forEach(r => { grouped[r.ngay] = grouped[r.ngay] || []; grouped[r.ngay].push(r); });
     const days = Object.keys(grouped).sort((a, b) => a.localeCompare(b, 'vi', { numeric: true }));
     
     let created = 0;
-    for (let i = LOOKBACK_DAYS; i < days.length; i++) {
+    for (let i = 1; i < days.length; i++) {
+      const prevDayStr = days[i - 1];
       const targetDayStr = days[i];
 
-      const trends = analyzeLongTermTrends(i, days, grouped);
+      // 1. Chạy phân tích ngắn hạn (logic gốc)
+      const shortTermPicks = analyzeShortTermFromAllPrizes(grouped[prevDayStr] || []);
 
-      let cycleBoostDigits = [];
+      // 2. Chạy phân tích dài hạn (logic GĐB)
+      const longTermPicks = analyzeLongTermFromGDB(i, days, grouped);
+
+      // 3. Kết hợp kết quả bằng mô hình Hybrid
+      const finalPrediction = generateHybridPrediction(shortTermPicks, longTermPicks);
+
+      // Lấy thêm thông tin analysis để hiển thị
+      let cycle3DayDigits = [];
       const cycleDayIndex = i - CYCLE_PERIOD_DAYS;
       if (cycleDayIndex >= 0) {
         const cycleDayResultDB = (grouped[days[cycleDayIndex]] || []).find(r => r.giai === 'ĐB');
         if (cycleDayResultDB && cycleDayResultDB.so) {
-          cycleBoostDigits = String(cycleDayResultDB.so).slice(-3).split('');
+          cycle3DayDigits = String(cycleDayResultDB.so).slice(-3).split('');
         }
       }
-
-      const finalPrediction = createScoringModel(trends, cycleBoostDigits);
 
       await Prediction.findOneAndUpdate(
         { ngayDuDoan: targetDayStr },
@@ -193,7 +222,7 @@ exports.trainHistoricalPredictions = async (req, res) => {
           topChuc: finalPrediction.chuc, 
           topDonVi: finalPrediction.donvi,
           danhDauDaSo: false, 
-          analysis: { cycle3DayDigits: cycleBoostDigits }
+          analysis: { cycle3DayDigits }
         },
         { upsert: true, new: true }
       );
@@ -209,10 +238,10 @@ exports.trainHistoricalPredictions = async (req, res) => {
 };
 
 exports.trainPredictionForNextDay = async (req, res) => {
-    console.log('🔔 [trainPredictionForNextDay] Start (with ADVANCED GDB SCORING MODEL)');
+    console.log('🔔 [trainPredictionForNextDay] Start (with HYBRID MODEL)');
     try {
         const allResults = await Result.find().sort({ 'ngay': 1 }).lean();
-        if (allResults.length < LOOKBACK_DAYS) return res.status(400).json({ message: `Không đủ dữ liệu, cần ít nhất ${LOOKBACK_DAYS} ngày.` });
+        if (allResults.length < 1) return res.status(400).json({ message: 'Không có dữ liệu.' });
 
         const grouped = {};
         allResults.forEach(r => { grouped[r.ngay] = grouped[r.ngay] || []; grouped[r.ngay].push(r); });
@@ -222,18 +251,23 @@ exports.trainPredictionForNextDay = async (req, res) => {
         const latestDate = DateTime.fromFormat(latestDayStr, 'dd/MM/yyyy');
         const nextDayStr = latestDate.plus({ days: 1 }).toFormat('dd/MM/yyyy');
         
-        const trends = analyzeLongTermTrends(days.length, days, grouped);
+        // 1. Chạy phân tích ngắn hạn (logic gốc)
+        const shortTermPicks = analyzeShortTermFromAllPrizes(grouped[latestDayStr] || []);
 
-        let cycleBoostDigits = [];
+        // 2. Chạy phân tích dài hạn (logic GĐB)
+        const longTermPicks = analyzeLongTermFromGDB(days.length, days, grouped);
+        
+        // 3. Kết hợp kết quả
+        const finalPrediction = generateHybridPrediction(shortTermPicks, longTermPicks);
+
+        let cycle3DayDigits = [];
         const cycleDayIndex = days.length - CYCLE_PERIOD_DAYS;
         if (cycleDayIndex >= 0) {
             const cycleDayResultDB = (grouped[days[cycleDayIndex]] || []).find(r => r.giai === 'ĐB');
             if (cycleDayResultDB && cycleDayResultDB.so) {
-                cycleBoostDigits = String(cycleDayResultDB.so).slice(-3).split('');
+                cycle3DayDigits = String(cycleDayResultDB.so).slice(-3).split('');
             }
         }
-
-        const finalPrediction = createScoringModel(trends, cycleBoostDigits);
         
         await Prediction.findOneAndUpdate(
             { ngayDuDoan: nextDayStr },
@@ -243,7 +277,7 @@ exports.trainPredictionForNextDay = async (req, res) => {
               topChuc: finalPrediction.chuc, 
               topDonVi: finalPrediction.donvi, 
               danhDauDaSo: false,
-              analysis: { cycle3DayDigits: cycleBoostDigits }
+              analysis: { cycle3DayDigits }
             },
             { upsert: true, new: true }
         );
@@ -257,5 +291,5 @@ exports.trainPredictionForNextDay = async (req, res) => {
 };
 
 exports.updatePredictionWeights = async (req, res) => {
-    return res.json({ message: 'Chức năng này không còn được sử dụng trong mô hình mới.' });
+    return res.json({ message: 'Chức năng này không còn cần thiết trong mô hình Hybrid.' });
 };
