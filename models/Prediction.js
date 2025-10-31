@@ -17,7 +17,6 @@ const ketQuaPhuongPhapSchema = new mongoose.Schema({
   topTram: [String],
   topChuc: [String],
   topDonVi: [String],
-  // Chỉ "Phương pháp Gốc" mới có trường này
   chiTietGoc: [chiTietGocSchema] 
 }, { _id: false });
 
@@ -38,10 +37,16 @@ const predictionSchema = new mongoose.Schema({
   },
   
   // 3. Điểm tin cậy của các phương pháp TẠI THỜI ĐIỂM dự đoán
-  // Đây là điểm số đã được học hỏi từ ngày hôm trước
   diemTinCay: {
     type: Map,
     of: Number
+  },
+
+  // 4. (MỚI) Kết quả phân tích các số trùng nhau
+  intersectionAnalysis: {
+    tram: mongoose.Schema.Types.Mixed,
+    chuc: mongoose.Schema.Types.Mixed,
+    donvi: mongoose.Schema.Types.Mixed,
   },
 
   danhDauDaSo: { type: Boolean, default: false },
