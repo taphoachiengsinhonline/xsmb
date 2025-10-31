@@ -138,7 +138,9 @@ const runIntersectionAnalysis = (allMethodResults) => {
     const counts = {};
     for (const methodKey in allMethodResults) {
       const result = allMethodResults[methodKey];
-      const positionKey = `top${position.charAt(0).toUpperCase() + position.slice(1)}`;
+      // <<< SỬA LỖI Ở ĐÂY >>>
+      // Xử lý trường hợp đặc biệt của 'donvi' để tạo ra key 'topDonVi'
+      const positionKey = `top${position === 'donvi' ? 'DonVi' : position.charAt(0).toUpperCase() + position.slice(1)}`;
       result[positionKey]?.forEach(digit => {
         counts[digit] = (counts[digit] || 0) + 1;
       });
@@ -149,7 +151,7 @@ const runIntersectionAnalysis = (allMethodResults) => {
       if (count >= 2 && count <= 5) {
         if (!positionResults[count]) positionResults[count] = [];
         positionResults[count].push(digit);
-        positionResults[count].sort(); // Sắp xếp cho dễ nhìn
+        positionResults[count].sort();
       }
     }
     analysis[position] = positionResults;
@@ -285,3 +287,4 @@ exports.getPredictionByDate = async (req, res) => { try { const { date } = req.q
 exports.getLatestPredictionDate = async (req, res) => { try { const latestPrediction = await Prediction.findOne().sort({ ngayDuDoan: -1 }).collation({ locale: 'vi', numericOrdering: true }).lean(); if (!latestPrediction) return res.status(404).json({ message: 'Không tìm thấy bản ghi dự đoán nào.' }); res.json({ latestDate: latestPrediction.ngayDuDoan }); } catch (err) { res.status(500).json({ message: 'Lỗi server', error: err.toString() }); } };
 exports.getAllPredictions = async (req, res) => { try { const predictions = await Prediction.find({}).lean(); res.json(predictions); } catch (err) { res.status(500).json({ message: 'Lỗi server', error: err.toString() }); } };
 exports.updatePredictionWeights = (req, res) => res.status(404).json({ message: 'API đã lỗi thời, sử dụng /update-trust-scores' });
+
