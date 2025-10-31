@@ -37,7 +37,9 @@ router.get('/latest-prediction-date', xsController.getLatestPredictionDate);
 
 // Lấy bản ghi dự đoán cho một ngày cụ thể (ví dụ: /api/xs/prediction-by-date?date=30/10/2025)
 router.get('/prediction-by-date', xsController.getPredictionByDate);
+router.get('/predictions', xsController.getAllPredictions);
 
 
 module.exports = router;
+
 
