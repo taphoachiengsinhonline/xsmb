@@ -17,24 +17,19 @@ exports.getAllResults = async (req, res) => {
 
 // --- Cập nhật kết quả mới từ crawl ---
 exports.updateResults = async (req, res) => {
-  console.log('🔹 [Backend] Request POST /api/xs/update');
+  console.log('🔹 [Backend] Request POST /api/xs/update (đọc từ file local trên server)');
   try {
-    const data = await crawlService.extractXsData();
-    let insertedCount = 0;
-    for (const item of data) {
-      const exists = await Result.findOne({ ngay: item.ngay, giai: item.giai });
-      if (!exists) {
-        await Result.create(item);
-        insertedCount++;
-      }
-    }
-    res.json({ message: `Cập nhật xong, thêm ${insertedCount} kết quả mới` });
+    // Gọi hàm mới đã được export
+    const processedCount = await crawlService.updateFromFile(); 
+    
+    console.log(`✅ Xử lý xong, đã thêm mới/cập nhật ${processedCount} bản ghi từ file.`);
+    res.json({ message: `Cập nhật từ file thành công, đã xử lý ${processedCount} kết quả.` });
+    
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: 'Lỗi server khi cập nhật dữ liệu', error: err.toString() });
+    console.error('Lỗi khi cập nhật từ file:', err);
+    res.status(500).json({ message: 'Lỗi server khi cập nhật dữ liệu từ file', error: err.toString() });
   }
 };
-
 
 /*
  * =================================================================
@@ -287,4 +282,5 @@ exports.getLatestPredictionDate = async (req, res) => {
     res.status(500).json({ message: 'Lỗi server', error: err.toString() });
   }
 };
+
 
