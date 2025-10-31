@@ -24,11 +24,22 @@ const ketQuaPhuongPhapSchema = new mongoose.Schema({
 const predictionSchema = new mongoose.Schema({
   ngayDuDoan: { type: String, required: true, unique: true },
 
-  // Object chứa kết quả của TẤT CẢ các phương pháp
-  // Ví dụ: { "PHUONG_PHAP_GOC": { topTram: [...] }, "DEEP_30_DAY": { topTram: [...] } }
-  ketQuaPhanTich: {
+  // --- NÂNG CẤP LỚN ---
+  // 1. Kết quả dự đoán cuối cùng của Siêu Mô Hình
+  topTram: [String],
+  topChuc: [String],
+  topDonVi: [String],
+  
+  // 2. Kết quả chi tiết của từng phương pháp "chuyên gia" để tham khảo
+  ketQuaChiTiet: {
     type: Map,
     of: ketQuaPhuongPhapSchema
+  },
+  
+  // 3. Điểm tin cậy của các phương pháp TẠI THỜI ĐIỂM dự đoán
+  diemTinCay: {
+    type: Map,
+    of: Number
   },
 
   danhDauDaSo: { type: Boolean, default: false },
