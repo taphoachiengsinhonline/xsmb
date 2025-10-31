@@ -1,11 +1,13 @@
-// crawlService.js (Phiên bản kết hợp logic Đọc File và Parse gốc)
-const fs = require('fs'); // Thêm thư viện 'fs' (File System)
+// crawlService.js (Phiên bản chạy trên Railway)
+const fs = require('fs');
 const cheerio = require('cheerio');
 const mongoose = require('mongoose');
 const path = require('path');
 
 // --- CẤU HÌNH ---
-const HTML_FILE_PATH = '../services/kqxs.html';
+// Xây dựng đường dẫn tuyệt đối đến file kqxs.html
+// Giả sử file crawlService.js và kqxs.html đều nằm trong cùng thư mục `services`
+const HTML_FILE_PATH = path.resolve(__dirname, 'kqxs.html');
 
 // --- SCHEMA & MODEL (Đồng bộ hóa với 'Result') ---
 const resultSchema = new mongoose.Schema({
@@ -18,7 +20,6 @@ const resultSchema = new mongoose.Schema({
 }, { versionKey: false });
 
 resultSchema.index({ ngay: 1, giai: 1 }, { unique: true });
-// Sử dụng model 'Result' để đồng bộ với toàn bộ ứng dụng
 const Result = mongoose.models.Result || mongoose.model('Result', resultSchema);
 
 // =================================================================
@@ -37,12 +38,9 @@ function onlyDigits(s) {
 function createPrizeRecord(ngay, prizeCode, index, numberRaw) {
   const number = onlyDigits(numberRaw);
   let giai = prizeCode;
-
-  // Giữ nguyên suffix rules của bạn
-  if (prizeCode === 'G1') { 
-    // Giữ G1
-  } else if (prizeCode === 'ĐB') {
-    // Giữ ĐB
+  
+  if (prizeCode === 'ĐB' || prizeCode === 'G1') {
+    // No suffix
   } else if (prizeCode === 'G2') {
     giai += index === 0 ? 'a' : 'b';
   } else if (['G3','G4','G5','G6','G7'].includes(prizeCode)) {
@@ -101,7 +99,6 @@ function parseDayResults(dayText, ngay) {
   return resultData;
 }
 
-// Hàm gốc của bạn, nhưng được sửa để nhận `allText` làm tham số
 function parseOriginalData(allText) {
   try {
     const dateMatches = [...allText.matchAll(/\d{1,2}[\/-]\d{1,2}[\/-]\d{4}/g)];
@@ -138,7 +135,6 @@ async function extractDataFromFile() {
         $('script, style').remove();
         const rawText = $('body').text();
 
-        // Sử dụng hàm parse gốc của bạn
         const resultData = parseOriginalData(rawText);
         return resultData;
 
@@ -166,6 +162,15 @@ async function saveToDb(data) {
     }
 }
 
+// Hàm này sẽ được gọi từ xsController
+async function updateFromFile() {
+    const data = await extractDataFromFile();
+    if (data.length > 0) {
+        return await saveToDb(data);
+    }
+    return 0;
+}
+
 async function runOnceAndExit() {
   if (!process.env.MONGO_URI) {
     require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
@@ -175,10 +180,7 @@ async function runOnceAndExit() {
   console.log("✅ (Standalone) MongoDB connected.");
   
   try {
-    const data = await extractDataFromFile();
-    if (data.length > 0) {
-        await saveToDb(data);
-    }
+    await updateFromFile();
   } catch (e) {
     console.error("Lỗi trong quá trình chạy chính:", e);
   } finally {
@@ -189,8 +191,7 @@ async function runOnceAndExit() {
 
 // EXPORT các hàm cần thiết
 module.exports = {
-  extractDataFromFile,
-  saveToDb,
+  updateFromFile // Chỉ cần export hàm này
 };
 
 // Logic để chạy file này trực tiếp
