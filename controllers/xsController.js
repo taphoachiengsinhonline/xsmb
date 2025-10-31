@@ -77,7 +77,7 @@ const generateFinalPrediction = (counts) => {
 
 
 
-// ----------------- HÀM HUẤN LUYỆN LỊCH SỬ (VỚI "TRÍ NHỚ" - ĐÃ SỬA) -----------------
+// ----------------- HÀM HUẤN LUYỆN LỊCH SỬ (VỚI "TRÍ NHỚ") -----------------
 exports.trainHistoricalPredictions = async (req, res) => {
   console.log('🔔 [trainHistoricalPredictions] Start (with MEMORY)');
   try {
@@ -90,10 +90,12 @@ exports.trainHistoricalPredictions = async (req, res) => {
     
     let created = 0;
     for (let i = 1; i < days.length; i++) {
-      const prevDay = days[i - 1];
-      const targetDay = days[i];
+      const prevDay = days[i - 1]; // Ngày dùng để phân tích (N-1)
+      const targetDay = days[i];  // Ngày cần dự đoán (N)
 
+      // BƯỚC MỚI: Tải "trí nhớ" từ dự đoán của ngày hôm trước
       const previousPrediction = await Prediction.findOne({ ngayDuDoan: prevDay }).lean();
+
       const prevResults = grouped[prevDay] || [];
       const countTram = {}, countChuc = {}, countDonVi = {};
       const chiTiet = [];
@@ -102,16 +104,18 @@ exports.trainHistoricalPredictions = async (req, res) => {
         const num = String(r.so).padStart(3, '0');
         const [tram, chuc, donvi] = num.split('');
         
+        // TÌM WEIGHT TƯƠNG ỨNG TỪ "TRÍ NHỚ"
         const memoryChiTiet = previousPrediction?.chiTiet?.find(ct => ct.positionInPrize === idx + 1);
-        const weight = memoryChiTiet?.weight || 1;
+        const weight = memoryChiTiet?.weight || 1; // Mặc định là 1 nếu không có "trí nhớ"
 
+        // SỬ DỤNG WEIGHT ĐỂ TÍNH TẦN SUẤT
         countTram[tram] = (countTram[tram] || 0) + weight;
         countChuc[chuc] = (countChuc[chuc] || 0) + weight;
         countDonVi[donvi] = (countDonVi[donvi] || 0) + weight;
         
         const nhomNho = Math.floor(idx / 3) + 1;
         const nhomTo = Math.floor((nhomNho - 1) / 3) + 1;
-        chiTiet.push({ number: num, nhomNho, nhomTo, positionInPrize: idx + 1, tram, chuc, donvi, weight: 1 });
+        chiTiet.push({ number: num, nhomNho, nhomTo, positionInPrize: idx + 1, tram, chuc, donvi, weight: 1 }); // weight khởi tạo luôn là 1
       });
 
       const finalTopTram = generateFinalPrediction(countTram);
@@ -134,7 +138,9 @@ exports.trainHistoricalPredictions = async (req, res) => {
   }
 };
 
-// ----------------- HÀM TẠO DỰ ĐOÁN NGÀY TIẾP THEO (VỚI "TRÍ NHỚ" - ĐÃ SỬA) -----------------
+
+// ----------------- HÀM TẠO DỰ ĐOÁN NGÀY TIẾP THEO (ÁP DỤNG LOGIC MỚI) -----------------
+// ----------------- HÀM TẠO DỰ ĐOÁN NGÀY TIẾP THEO (VỚI "TRÍ NHỚ") -----------------
 exports.trainPredictionForNextDay = async (req, res) => {
     console.log('🔔 [trainPredictionForNextDay] Start (with MEMORY)');
     try {
@@ -144,16 +150,11 @@ exports.trainPredictionForNextDay = async (req, res) => {
             { $limit: 1 }
         ]);
         if (!latestResultArr || latestResultArr.length === 0) return res.status(400).json({ message: 'Không có dữ liệu results.' });
-        
         const latestDay = latestResultArr[0].ngay;
-
-        // >>> ĐOẠN CODE BỊ THIẾU ĐÃ ĐƯỢC THÊM LẠI <<<
-        const parts = latestDay.split('/');
-        const d = new Date(`${parts[2]}-${parts[1]}-${parts[0]}`);
-        d.setDate(d.getDate() + 1);
         const nextDayStr = `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
         
         const previousPrediction = await Prediction.findOne({ ngayDuDoan: latestDay }).lean();
+        
         const prevResults = await Result.find({ ngay: latestDay }).lean();
         if (!prevResults.length) return res.status(400).json({ message: 'Không có dữ liệu ngày trước để dự đoán.' });
 
@@ -163,9 +164,11 @@ exports.trainPredictionForNextDay = async (req, res) => {
             const num = String(r.so).padStart(3, '0');
             const [tram, chuc, donvi] = num.split('');
 
+            // TÌM WEIGHT TƯƠNG ỨNG TỪ "TRÍ NHỚ"
             const memoryChiTiet = previousPrediction?.chiTiet?.find(ct => ct.positionInPrize === idx + 1);
             const weight = memoryChiTiet?.weight || 1;
 
+            // SỬ DỤNG WEIGHT ĐỂ TÍNH TẦN SUẤT
             countTram[tram] = (countTram[tram] || 0) + weight;
             countChuc[chuc] = (countChuc[chuc] || 0) + weight;
             countDonVi[donvi] = (countDonVi[donvi] || 0) + weight;
@@ -284,9 +287,4 @@ exports.getLatestPredictionDate = async (req, res) => {
     res.status(500).json({ message: 'Lỗi server', error: err.toString() });
   }
 };
-
-
-
-
-
 
