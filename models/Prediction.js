@@ -1,7 +1,8 @@
 // file: models/Prediction.js
+
 const mongoose = require('mongoose');
 
-// Schema cho chi tiết của riêng "Phương pháp Gốc" để học hỏi
+// Schema cho chi tiết của riêng "Phương pháp Gốc" để học hỏi weight nội bộ
 const chiTietGocSchema = new mongoose.Schema({
   number: String,
   positionInPrize: Number,
@@ -11,7 +12,7 @@ const chiTietGocSchema = new mongoose.Schema({
   weight: { type: Number, default: 1 }
 }, { _id: false });
 
-// Schema cho kết quả dự đoán của một phương pháp
+// Schema cho kết quả dự đoán của một phương pháp "chuyên gia"
 const ketQuaPhuongPhapSchema = new mongoose.Schema({
   topTram: [String],
   topChuc: [String],
@@ -20,7 +21,7 @@ const ketQuaPhuongPhapSchema = new mongoose.Schema({
   chiTietGoc: [chiTietGocSchema] 
 }, { _id: false });
 
-// Schema chính, mỗi document là một ngày
+// Schema chính, mỗi document là một ngày dự đoán
 const predictionSchema = new mongoose.Schema({
   ngayDuDoan: { type: String, required: true, unique: true },
 
@@ -37,6 +38,7 @@ const predictionSchema = new mongoose.Schema({
   },
   
   // 3. Điểm tin cậy của các phương pháp TẠI THỜI ĐIỂM dự đoán
+  // Đây là điểm số đã được học hỏi từ ngày hôm trước
   diemTinCay: {
     type: Map,
     of: Number
