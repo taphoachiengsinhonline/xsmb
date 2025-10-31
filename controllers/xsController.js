@@ -8,28 +8,32 @@ const { DateTime } = require('luxon');
 /* =================================================================
  * CÁC HẰNG SỐ CẤU HÌNH CHO MÔ HÌNH PHÂN TÍCH SÂU
  * ================================================================= */
-const LOOKBACK_DAYS = 90;
-const TIME_DECAY_FACTOR = 0.99;
+const LOOKBACK_DAYS = 30; // <<<< ĐÃ THAY ĐỔI TỪ 90 XUỐNG 30 THEO YÊU CẦU
+const TIME_DECAY_FACTOR = 0.98; // Có thể tăng nhẹ hệ số để các ngày gần hơn có trọng số cao hơn trong khoảng 30 ngày
 
+// --- Trọng số cho Hệ thống tính điểm ---
 const SCORE_WEIGHTS = {
-  TIME_DECAY_FREQUENCY: 1.5,
-  GAP: 1.0,
-  PATTERN: 2.0,
+  TIME_DECAY_FREQUENCY: 1.5, // Điểm cho tần suất có trọng số thời gian
+  GAP: 1.0,                  // Điểm cho số lâu chưa về (gan)
+  PATTERN: 2.0,              // Điểm "SIÊU BOOST" cho các số về theo mẫu hình lặp lại
 };
 
+
 /* =================================================================
- * PHẦN 1: CÁC HÀM LẤY DỮ LIỆU
+ * PHẦN 1: CÁC HÀM LẤY DỮ LIỆU VÀ CẬP NHẬT CƠ BẢN
  * ================================================================= */
 exports.getAllResults = async (req, res) => {
   try {
     const results = await Result.find().sort({ 'ngay': -1, 'giai': 1 });
     res.json(results);
   } catch (err) {
+    console.error(err);
     res.status(500).json({ message: 'Lỗi server', error: err.toString() });
   }
 };
 
 exports.updateResults = async (req, res) => {
+  console.log('🔹 [Backend] Request POST /api/xs/update');
   try {
     const data = await crawlService.extractXsData();
     let insertedCount = 0;
@@ -42,6 +46,7 @@ exports.updateResults = async (req, res) => {
     }
     res.json({ message: `Cập nhật xong, thêm ${insertedCount} kết quả mới` });
   } catch (err) {
+    console.error(err);
     res.status(500).json({ message: 'Lỗi server khi cập nhật dữ liệu', error: err.toString() });
   }
 };
@@ -54,16 +59,23 @@ exports.getPredictionByDate = async (req, res) => {
     if (!pred) return res.status(404).json({ message: 'Không tìm thấy prediction cho ngày này' });
     return res.json(pred);
   } catch (err) {
+    console.error(err);
     return res.status(500).json({ message: 'Lỗi server', error: err.toString() });
   }
 };
 
 exports.getLatestPredictionDate = async (req, res) => {
   try {
-    const latestPrediction = await Prediction.findOne().sort({ ngayDuDoan: -1 }).collation({ locale: 'vi', numericOrdering: true }).lean();
-    if (!latestPrediction) return res.status(404).json({ message: 'Không tìm thấy bản ghi dự đoán nào.' });
+    const latestPrediction = await Prediction.findOne()
+      .sort({ ngayDuDoan: -1 })
+      .collation({ locale: 'vi', numericOrdering: true })
+      .lean();
+    if (!latestPrediction) {
+      return res.status(404).json({ message: 'Không tìm thấy bản ghi dự đoán nào.' });
+    }
     res.json({ latestDate: latestPrediction.ngayDuDoan });
   } catch (err) {
+    console.error('❌ [Backend] Lỗi trong getLatestPredictionDate:', err);
     res.status(500).json({ message: 'Lỗi server', error: err.toString() });
   }
 };
@@ -73,12 +85,14 @@ exports.getAllPredictions = async (req, res) => {
     const predictions = await Prediction.find({}, 'ngayDuDoan topTram topChuc topDonVi').lean();
     res.json(predictions);
   } catch (err) {
+    console.error('❌ [Backend] Lỗi trong getAllPredictions:', err);
     res.status(500).json({ message: 'Lỗi server', error: err.toString() });
   }
 };
 
+
 /* =================================================================
- * PHẦN 2: LOGIC PHÂN TÍCH SÂU 90 NGÀY
+ * PHẦN 2: LOGIC PHÂN TÍCH SÂU 30 NGÀY
  * ================================================================= */
 
 const analyzeDeepTrends = (endDateIndex, days, groupedResults) => {
@@ -150,7 +164,7 @@ const createAdvancedScoringModel = (trends, prevDayGDB) => {
  * PHẦN 3: CÁC HÀM HUẤN LUYỆN DÙNG MÔ HÌNH MỚI
  * ================================================================= */
 exports.trainHistoricalPredictions = async (req, res) => {
-  console.log('🔔 [trainHistoricalPredictions] Start (with Deep 90-Day Model)');
+  console.log('🔔 [trainHistoricalPredictions] Start (with Deep 30-Day Model)');
   try {
     const results = await Result.find().sort({ 'ngay': 1 }).lean();
     if (results.length < LOOKBACK_DAYS) return res.status(400).json({ message: `Không đủ dữ liệu, cần ít nhất ${LOOKBACK_DAYS} ngày.` });
@@ -176,7 +190,7 @@ exports.trainHistoricalPredictions = async (req, res) => {
           topDonVi: finalPrediction.donvi,
           danhDauDaSo: false,
         },
-        { upsert: true, new: true }
+        { upsert: true, new: true, setDefaultsOnInsert: true }
       );
       created++;
     }
@@ -190,7 +204,7 @@ exports.trainHistoricalPredictions = async (req, res) => {
 };
 
 exports.trainPredictionForNextDay = async (req, res) => {
-    console.log('🔔 [trainPredictionForNextDay] Start (with Deep 90-Day Model)');
+    console.log('🔔 [trainPredictionForNextDay] Start (with Deep 30-Day Model)');
     try {
         const allResults = await Result.find().sort({ 'ngay': 1 }).lean();
         if (allResults.length < LOOKBACK_DAYS) return res.status(400).json({ message: `Không đủ dữ liệu, cần ít nhất ${LOOKBACK_DAYS} ngày.` });
@@ -216,7 +230,7 @@ exports.trainPredictionForNextDay = async (req, res) => {
               topDonVi: finalPrediction.donvi, 
               danhDauDaSo: false,
             },
-            { upsert: true, new: true }
+            { upsert: true, new: true, setDefaultsOnInsert: true }
         );
 
         console.log(`✅ [trainPredictionForNextDay] Đã lưu dự đoán cho ngày ${nextDayStr}`);
