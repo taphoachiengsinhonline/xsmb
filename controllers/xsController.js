@@ -86,6 +86,17 @@ exports.getLatestPredictionDate = async (req, res) => {
   }
 };
 
+exports.getAllPredictions = async (req, res) => {
+  try {
+    // Lấy tất cả các bản ghi dự đoán, chỉ lấy các trường cần thiết để nhẹ hơn
+    const predictions = await Prediction.find({}, 'ngayDuDoan topTram topChuc topDonVi').lean();
+    res.json(predictions);
+  } catch (err) {
+    console.error('❌ [Backend] Lỗi trong getAllPredictions:', err);
+    res.status(500).json({ message: 'Lỗi server', error: err.toString() });
+  }
+};
+
 /*
  * =================================================================
  * CẢI TIẾN #1: HÀM PHÂN TÍCH NÂNG CAO (CHU KỲ & CHẴN/LẺ)
@@ -372,6 +383,7 @@ exports.trainPredictionForNextDay = async (req, res) => {
         return res.status(500).json({ message: 'Lỗi server', error: err.toString() });
     }
 };
+
 
 
 
