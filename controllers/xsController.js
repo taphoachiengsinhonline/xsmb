@@ -24,10 +24,67 @@ const CYCLE_PERIOD_DAYS = 3;    // Chu kỳ ngày để phân tích (3 ngày)
 const CYCLE_BOOST_VALUE = 3;    // Điểm "boost" cho các số từ phân tích chu kỳ
 const CL_HISTORY_DAYS = 60;     // Số ngày lịch sử để phân tích Chẵn/Lẻ
 
-// --- Lấy tất cả kết quả XSMB (Không thay đổi) ---
-exports.getAllResults = async (req, res) => { /* ... giữ nguyên ... */ };
-exports.updateResults = async (req, res) => { /* ... giữ nguyên ... */ };
+// --- Lấy tất cả kết quả XSMB ---
+exports.getAllResults = async (req, res) => {
+  try {
+    const results = await Result.find().sort({ 'ngay': -1, 'giai': 1 });
+    res.json(results);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Lỗi server', error: err.toString() });
+  }
+};
 
+// --- Cập nhật kết quả mới từ crawl ---
+exports.updateResults = async (req, res) => {
+  console.log('🔹 [Backend] Request POST /api/xs/update');
+  try {
+    const data = await crawlService.extractXsData();
+    let insertedCount = 0;
+    for (const item of data) {
+      const exists = await Result.findOne({ ngay: item.ngay, giai: item.giai });
+      if (!exists) {
+        await Result.create(item);
+        insertedCount++;
+      }
+    }
+    res.json({ message: `Cập nhật xong, thêm ${insertedCount} kết quả mới` });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Lỗi server khi cập nhật dữ liệu', error: err.toString() });
+  }
+};
+
+// --- GET Prediction theo ngày ---
+exports.getPredictionByDate = async (req, res) => {
+  try {
+    const { date } = req.query;
+    if (!date) return res.status(400).json({ message: 'Thiếu param date' });
+    const pred = await Prediction.findOne({ ngayDuDoan: date }).lean();
+    if (!pred) return res.status(404).json({ message: 'Không tìm thấy prediction cho ngày này' });
+    return res.json(pred);
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: 'Lỗi server', error: err.toString() });
+  }
+};
+
+// --- LẤY NGÀY DỰ ĐOÁN MỚI NHẤT ---
+exports.getLatestPredictionDate = async (req, res) => {
+  try {
+    const latestPrediction = await Prediction.findOne()
+      .sort({ ngayDuDoan: -1 })
+      .collation({ locale: 'vi', numericOrdering: true })
+      .lean();
+    if (!latestPrediction) {
+      return res.status(404).json({ message: 'Không tìm thấy bản ghi dự đoán nào.' });
+    }
+    res.json({ latestDate: latestPrediction.ngayDuDoan });
+  } catch (err) {
+    console.error('❌ [Backend] Lỗi trong getLatestPredictionDate:', err);
+    res.status(500).json({ message: 'Lỗi server', error: err.toString() });
+  }
+};
 
 /*
  * =================================================================
@@ -315,38 +372,6 @@ exports.trainPredictionForNextDay = async (req, res) => {
         return res.status(500).json({ message: 'Lỗi server', error: err.toString() });
     }
 };
-// ----------------- GET Prediction theo ngày -----------------
-exports.getPredictionByDate = async (req, res) => {
-  try {
-    const { date } = req.query;
-    if (!date) return res.status(400).json({ message: 'Thiếu param date' });
-    const pred = await Prediction.findOne({ ngayDuDoan: date }).lean();
-    if (!pred) return res.status(404).json({ message: 'Không tìm thấy prediction cho ngày này' });
-    return res.json(pred);
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({ message: 'Lỗi server', error: err.toString() });
-  }
-};
 
-// ----------------- LẤY NGÀY DỰ ĐOÁN MỚI NHẤT (VỚI LOG DEBUG) -----------------
-exports.getLatestPredictionDate = async (req, res) => {
-  try {
-    // Sắp xếp theo `ngayDuDoan` giảm dần. Sử dụng collation để sắp xếp chuỗi dd/mm/yyyy đúng.
-    const latestPrediction = await Prediction.findOne()
-      .sort({ ngayDuDoan: -1 })
-      .collation({ locale: 'vi', numericOrdering: true }) // Rất quan trọng để sort chuỗi ngày tháng
-      .lean();
 
-    if (!latestPrediction) {
-      return res.status(404).json({ message: 'Không tìm thấy bản ghi dự đoán nào.' });
-    }
-
-    res.json({ latestDate: latestPrediction.ngayDuDoan });
-
-  } catch (err) {
-    console.error('❌ [Backend] Lỗi trong getLatestPredictionDate:', err);
-    res.status(500).json({ message: 'Lỗi server', error: err.toString() });
-  }
-};
 
