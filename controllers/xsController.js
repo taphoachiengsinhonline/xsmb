@@ -339,3 +339,4 @@ exports.getLatestPredictionDate=async(req,res)=>{try{const latestPrediction=awai
 exports.getAllPredictions=async(req,res)=>{try{const predictions=await Prediction.find({}).lean(); res.json(predictions);}catch(err){res.status(500).json({message:'Lỗi server',error:err.toString()});}};
 exports.updatePredictionWeights=(req,res)=>res.status(404).json({message:'API đã lỗi thời, sử dụng /update-trust-scores'});
 
+
