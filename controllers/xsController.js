@@ -98,56 +98,62 @@ const runMetaLearner = (allMethodResults, trustScores) => {
 
 const getCombinations = (arr, k) => { const result=[]; const combine=(start,combo)=>{if(combo.length===k){result.push([...combo]);return;} for(let i=start;i<arr.length;i++){combo.push(arr[i]);combine(i+1,combo);combo.pop();}}; combine(0,[]); return result; };
 
-// <<< LOGIC MỚI CỦA runGroupExclusionAnalysis >>>
+// <<< LOGIC MỚI, ĐÚNG THEO YÊU CẦU "DẤU VÂN TAY 9-BIT" >>>
 const runGroupExclusionAnalysis = (prevPrediction, prevResult, todayMethods) => {
-    if (!prevPrediction || !prevResult?.so) return { potentialNumbersByViolation: {}, excludedPatternCount: 0 };
+    if (!prevPrediction || !prevResult?.so) return { potentialNumbers: [], excludedPatternCount: 0 };
+    
     const methodGroups = getCombinations(ALL_METHODS, 3);
     const lastGDB = String(prevResult.so).slice(-3);
-    if (lastGDB.length < 3) return { potentialNumbersByViolation: {}, excludedPatternCount: 0 };
+    if (lastGDB.length < 3) return { potentialNumbers: [], excludedPatternCount: 0 };
 
+    // 1. Tạo "dấu vân tay 9-bit" cho từng nhóm của ngày hôm qua
     const lastDayPatterns = new Map();
     methodGroups.forEach((group, index) => {
         const pattern = group.map(methodKey => {
             const p = prevPrediction.ketQuaChiTiet?.[methodKey];
-            if (!p || !p.topTram || !p.topChuc || !p.topDonVi) return 0;
-            return (p.topTram.includes(lastGDB[0]) && p.topChuc.includes(lastGDB[1]) && p.topDonVi.includes(lastGDB[2])) ? 1 : 0;
+            if (!p || !p.topTram || !p.topChuc || !p.topDonVi) return '000'; // Mặc định là trượt hết
+            const tramMatch = p.topTram.includes(lastGDB[0]) ? '1' : '0';
+            const chucMatch = p.topChuc.includes(lastGDB[1]) ? '1' : '0';
+            const donviMatch = p.topDonVi.includes(lastGDB[2]) ? '1' : '0';
+            return `${tramMatch}${chucMatch}${donviMatch}`;
         }).join('');
         lastDayPatterns.set(index, pattern);
     });
     
-    // Tạo một dàn số đầy đủ từ 000 đến 999
-    const fullNumberSet = Array.from({ length: 1000 }, (_, i) => String(i).padStart(3, '0'));
-    const violationCounts = {}; // { '123': 2, '456': 0, ... }
+    // 2. Lặp qua 1000 số để tìm các số "sống sót"
+    let potentialNumbers = [];
+    for (let i = 0; i < 1000; i++) {
+        const num = String(i).padStart(3, '0');
+        let isExcluded = false;
 
-    fullNumberSet.forEach(num => {
-        let violations = 0;
-        methodGroups.forEach((group, index) => {
-            const excludedPattern = lastDayPatterns.get(index);
-            if (excludedPattern === undefined) return;
+        // Kiểm tra với từng nhóm
+        for (let j = 0; j < methodGroups.length; j++) {
+            const group = methodGroups[j];
+            const excludedPattern = lastDayPatterns.get(j);
+            if (excludedPattern === undefined) continue;
+
+            // Tạo "dấu vân tay" của số hiện tại với các phương pháp của ngày hôm nay
             const currentPattern = group.map(methodKey => {
                 const p = todayMethods[methodKey];
-                return (p.topTram.includes(num[0]) && p.topChuc.includes(num[1]) && p.topDonVi.includes(num[2])) ? 1 : 0;
+                const tramMatch = p.topTram.includes(num[0]) ? '1' : '0';
+                const chucMatch = p.topChuc.includes(num[1]) ? '1' : '0';
+                const donviMatch = p.topDonVi.includes(num[2]) ? '1' : '0';
+                return `${tramMatch}${chucMatch}${donviMatch}`;
             }).join('');
-            if (currentPattern === excludedPattern) {
-                violations++;
-            }
-        });
-        violationCounts[num] = violations;
-    });
 
-    // Nhóm các số theo số lần vi phạm
-    const potentialNumbersByViolation = {};
-    for (const num in violationCounts) {
-        const violations = violationCounts[num];
-        if (violations <= 1) { // Chỉ lấy những số vi phạm 0 hoặc 1 lần
-            if (!potentialNumbersByViolation[violations]) {
-                potentialNumbersByViolation[violations] = [];
+            // Nếu trùng với mẫu hình bị loại trừ -> số này bị loại
+            if (currentPattern === excludedPattern) {
+                isExcluded = true;
+                break; // Thoát khỏi vòng lặp các nhóm, xét số tiếp theo
             }
-            potentialNumbersByViolation[violations].push(num);
+        }
+
+        if (!isExcluded) {
+            potentialNumbers.push(num);
         }
     }
-    
-    return { potentialNumbersByViolation, excludedPatternCount: methodGroups.length };
+
+    return { potentialNumbers: potentialNumbers.sort(), excludedPatternCount: methodGroups.length };
 };
 
 
@@ -159,15 +165,16 @@ exports.trainHistoricalPredictions = async (req, res) => {
     console.log('🔔 [trainHistoricalPredictions] Start (Full Suite)');
     try {
         const results = await Result.find().sort({ 'ngay': 1 }).lean(); if (results.length < 1) return res.status(400).json({ message: `Không có dữ liệu.` });
-        const grouped = {}; results.forEach(r => { grouped[r.ngay] = grouped[r.ngay] || []; grouped[r.ngay].push(r); });
-        const days = Object.keys(grouped).sort((a,b)=>a.localeCompare(b,'vi',{numeric:true}));
+        const grouped = {}; results.forEach(r => { grouped[r.ngay] = grouped[r.ngay] || []; grouped[r.ngay].push(r); }); const days = Object.keys(grouped).sort((a,b)=>a.localeCompare(b,'vi',{numeric:true}));
         let created = 0;
         for (let i = 1; i < days.length; i++) {
             const prevDayStr = days[i-1]; const targetDayStr = days[i];
             const prevPrediction = await Prediction.findOne({ ngayDuDoan: prevDayStr }).lean();
             const trustScores = prevPrediction?.diemTinCay || {};
             ALL_METHODS.forEach(m => { if (trustScores[m] === undefined) trustScores[m] = INITIAL_TRUST_SCORE; });
-            const prevDayResults = grouped[prevDayStr] || []; const prevDayGDB = prevDayResults.find(r => r.giai === 'ĐB');
+
+            const prevDayResults = grouped[prevDayStr] || [];
+            const prevDayGDB = prevDayResults.find(r => r.giai === 'ĐB');
             
             const allMethodResults = {
                 [METHOD_GOC]: runMethodGoc(prevDayResults),
