@@ -163,7 +163,7 @@ const runMetaLearner=(a,t)=>{const f={tram:{},chuc:{},donvi:{}};for(const m in a
 const getCombinations=(a,k)=>{const r=[];const c=(s,o)=>{if(o.length===k){r.push([...o]);return;}for(let i=s;i<a.length;i++){o.push(a[i]);c(i+1,o);o.pop();}};c(0,[]);return r;};
 const runGroupExclusionAnalysis = (prevPrediction, prevResult, todayMethods) => {
     if (!prevPrediction || !prevResult?.so) return { potentialNumbers: [], excludedPatternCount: 0 };
-    
+
     const methodGroups = getCombinations(ALL_METHODS, 3);
     const lastGDB = String(prevResult.so).slice(-3);
     if (lastGDB.length < 3) return { potentialNumbers: [], excludedPatternCount: 0 };
@@ -173,57 +173,50 @@ const runGroupExclusionAnalysis = (prevPrediction, prevResult, todayMethods) => 
         const pattern = group.flatMap(methodKey => {
             const p = prevPrediction.ketQuaChiTiet?.[methodKey];
             if (!p || !p.topTram || !p.topChuc || !p.topDonVi) return [0, 0, 0];
-            const tramMatch = p.topTram.includes(lastGDB[0]) ? 1 : 0;
-            const chucMatch = p.topChuc.includes(lastGDB[1]) ? 1 : 0;
-            const donviMatch = p.topDonVi.includes(lastGDB[2]) ? 1 : 0;
-            return [tramMatch, chucMatch, donviMatch];
+            return [ p.topTram.includes(lastGDB[0])?1:0, p.topChuc.includes(lastGDB[1])?1:0, p.topDonVi.includes(lastGDB[2])?1:0 ];
         });
-        lastDayPatterns.set(index, pattern); // Lưu dưới dạng mảng [1,0,0,0,0,0,1,1,0]
+        lastDayPatterns.set(index, pattern);
     });
     
     let potentialNumbers = [];
-    const SIMILARITY_THRESHOLD = 7; // Ngưỡng loại bỏ: trùng từ 7/9 đặc điểm trở lên
-
     for (let i = 0; i < 1000; i++) {
         const num = String(i).padStart(3, '0');
         let isExcluded = false;
 
+        // Bộ lọc 1: Loại trừ theo Nhóm
         for (let j = 0; j < methodGroups.length; j++) {
             const group = methodGroups[j];
-            const excludedPattern = lastDayPatterns.get(j); // Mảng 9-bit của ngày hôm qua
+            const excludedPattern = lastDayPatterns.get(j);
             if (excludedPattern === undefined) continue;
-
             const currentPattern = group.flatMap(methodKey => {
                 const p = todayMethods[methodKey];
-                const tramMatch = p.topTram.includes(num[0]) ? 1 : 0;
-                const chucMatch = p.topChuc.includes(num[1]) ? 1 : 0;
-                const donviMatch = p.topDonVi.includes(num[2]) ? 1 : 0;
-                return [tramMatch, chucMatch, donviMatch];
+                if (!p || !p.topTram) return [0, 0, 0];
+                return [ p.topTram.includes(num[0])?1:0, p.topChuc.includes(num[1])?1:0, p.topDonVi.includes(num[2])?1:0 ];
             });
-
-            // Tính độ tương đồng
             let similarity = 0;
-            for (let k = 0; k < 9; k++) {
-                if (currentPattern[k] === excludedPattern[k]) {
-                    similarity++;
-                }
+            for (let k = 0; k < 9; k++) { if (currentPattern[k] === excludedPattern[k]) similarity++; }
+            if (similarity >= 7) { isExcluded = true; break; }
+        }
+        if (isExcluded) continue; // Nếu đã bị loại, xét số tiếp theo
+
+        // Bộ lọc 2: Loại trừ theo "Đồng thuận tuyệt đối"
+        let winCount = 0;
+        for (const methodKey of ALL_METHODS) {
+            const p = todayMethods[methodKey];
+            if (p?.topTram?.includes(num[0]) && p?.topChuc?.includes(num[1]) && p?.topDonVi?.includes(num[2])) {
+                winCount++;
             }
-            
-            // Nếu độ tương đồng cao -> loại bỏ
-            if (similarity >= SIMILARITY_THRESHOLD) {
-                isExcluded = true;
-                break;
-            }
+        }
+        if (winCount === ALL_METHODS.length || winCount === 0) {
+            isExcluded = true;
         }
 
         if (!isExcluded) {
             potentialNumbers.push(num);
         }
     }
-
     return { potentialNumbers: potentialNumbers.sort(), excludedPatternCount: methodGroups.length };
 };
-
 /* =================================================================
  * PHẦN 3: CÁC HÀM ĐIỀU PHỐI, HUẤN LUYỆN VÀ HỌC HỎI
  * ================================================================= */
@@ -307,4 +300,5 @@ exports.getPredictionByDate=async(req,res)=>{try{const{date}=req.query; if(!date
 exports.getLatestPredictionDate=async(req,res)=>{try{const latestPrediction=await Prediction.findOne().sort({ngayDuDoan:-1}).collation({locale:'vi',numericOrdering:true}).lean(); if(!latestPrediction)return res.status(404).json({message:'Không tìm thấy bản ghi dự đoán nào.'}); res.json({latestDate:latestPrediction.ngayDuDoan});}catch(err){res.status(500).json({message:'Lỗi server',error:err.toString()});}};
 exports.getAllPredictions=async(req,res)=>{try{const predictions=await Prediction.find({}).lean(); res.json(predictions);}catch(err){res.status(500).json({message:'Lỗi server',error:err.toString()});}};
 exports.updatePredictionWeights=(req,res)=>res.status(404).json({message:'API đã lỗi thời, sử dụng /update-trust-scores'});
+
 
