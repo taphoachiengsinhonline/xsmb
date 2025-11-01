@@ -18,9 +18,16 @@ class ImprovedLSTMService {
     // THAY THẾ TOÀN BỘ HÀM prepareEnhancedInput CŨ
     // =================================================================
     prepareEnhancedInput(currentDayResults, previousDaysResults = [], dateStr = null) {
-        // SỬA: Sử dụng featureService thay vì tự tính toán
-        return this.featureService.extractAllFeatures(currentDayResults, previousDaysResults, dateStr);
+    const features = this.featureService.extractAllFeatures(currentDayResults, previousDaysResults, dateStr);
+    
+    // VALIDATE FEATURE VECTOR
+    if (!this.featureService.validateFeatureVector(features)) {
+        console.warn('⚠️ Feature vector validation failed, using zeros as fallback');
+        return Array(this.featureService.getFeatureVectorSize()).fill(0);
     }
+    
+    return features;
+}
 
     // =================================================================
     // XÓA CÁC HÀM CŨ ĐI - CHÚNG TA DÙNG FEATURE SERVICE RỒI
