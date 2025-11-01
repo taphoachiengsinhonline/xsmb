@@ -65,39 +65,22 @@ const decodeOutput = (output) => {
     }
     return prediction;
 };
-
-const runNNHistoricalTraining = async () => {
-    console.log('🔔 [NN Service] Starting Historical Training...');
-    const nn = await getNN();
-    const results = await Result.find().sort({ 'ngay': 1 }).lean();
-    if (results.length < 2) throw new Error("Không đủ dữ liệu lịch sử để huấn luyện.");
-
-    const grouped = {};
-    results.forEach(r => {
-        if (!grouped[r.ngay]) grouped[r.ngay] = [];
-        grouped[r.ngay].push(r);
-    });
-    const days = Object.keys(grouped).sort((a, b) => a.localeCompare(b, 'vi', { numeric: true }));
-
-    let trainedCount = 0;
-    for (let i = 1; i < days.length; i++) {
-        const yesterdayDate = days[i - 1];
-        const todayDate = days[i];
-        
-        const inputArray = prepareInput(grouped[yesterdayDate] || []);
-        const targetGDB_Object = (grouped[todayDate] || []).find(r => r.giai === 'ĐB');
-
-        if (targetGDB_Object?.so && String(targetGDB_Object.so).length >= 5) {
-            const targetGDB_String = String(targetGDB_Object.so).padStart(5, '0');
-            const targetArray = prepareTarget(targetGDB_String);
-            nn.train(inputArray, targetArray);
-            trainedCount++;
-        }
-    }
-    await saveNN(nn);
-    return { message: `AI đã học xong từ lịch sử. Đã xử lý ${trainedCount} cặp dữ liệu.` };
+const dateKey=(s)=>{if(!s||typeof s!=='string')return '';const p=s.split('/');return p.length!==3?s:`${p[2]}-${p[1].padStart(2,'0')}-${p[0].padStart(2,'0')}`;};
+const runNNNextDayPrediction=async()=>{
+    console.log('🔔 [NN Service] Generating next day prediction...');
+    const nn=await getNN();
+    const results=await Result.find().lean();
+    if(results.length<1)throw new Error("Không có dữ liệu để dự đoán.");
+    const grouped={};results.forEach(r=>{if(!grouped[r.ngay])grouped[r.ngay]=[];grouped[r.ngay].push(r);});
+    const days=Object.keys(grouped).sort((a,b)=>dateKey(a).localeCompare(dateKey(b)));
+    const latestDay=days[days.length-1];
+    const inputArray=prepareInput(grouped[latestDay]||[]);
+    const output=nn.predict(inputArray);
+    const prediction=decodeOutput(output);
+    const nextDayStr=DateTime.fromFormat(latestDay,'dd/MM/yyyy').plus({days:1}).toFormat('dd/MM/yyyy');
+    await NNPrediction.findOneAndUpdate({ngayDuDoan:nextDayStr},{ngayDuDoan:nextDayStr,...prediction,danhDauDaSo:false},{upsert:true,new:true});
+    return{message:`AI đã tạo dự đoán cho ngày ${nextDayStr}.`,ngayDuDoan:nextDayStr};
 };
-
 // <<< HÀM ĐÃ ĐƯỢC SỬA LẠI HOÀN TOÀN >>>
 const runNNNextDayPrediction = async () => {
     console.log('🔔 [NN Service] Generating next day prediction...');
