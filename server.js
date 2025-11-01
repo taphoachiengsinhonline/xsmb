@@ -2,7 +2,7 @@ const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors'); // Thêm dòng này
 const xsRoutes = require('./routes/xsRoutes');
-
+const nnRoutes = require('./routes/nnRoutes');
 const app = express();
 
 app.use(cors()); // Thêm dòng này
@@ -18,3 +18,4 @@ mongoose.connect(process.env.MONGO_URI)
   
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+
