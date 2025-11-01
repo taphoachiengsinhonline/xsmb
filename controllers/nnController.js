@@ -30,3 +30,12 @@ exports.learn = async (req, res) => {
         res.status(500).json({ message: err.message || 'Lỗi server' });
     }
 };
+exports.getAllPredictions = async (req, res) => {
+    try {
+        const predictions = await NNPrediction.find().sort({ 'ngayDuDoan': -1 }).lean();
+        res.json(predictions);
+    } catch (err) {
+        console.error('Error in nn getAllPredictions controller:', err);
+        res.status(500).json({ message: 'Lỗi server' });
+    }
+};
