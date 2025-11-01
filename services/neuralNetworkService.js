@@ -5,8 +5,82 @@ const NNPrediction = require('../models/NNPrediction');
 const NNState = require('../models/NNState');
 const { DateTime } = require('luxon');
 
+// Lớp Neural Network, không thay đổi
 class NeuralNetwork {
-    constructor(i,h,o){this.inputNodes=i;this.hiddenNodes=h;this.outputNodes=o;this.weights_ih=this.createMatrix(h,i);this.weights_ho=this.createMatrix(o,h);this.bias_h=this.createMatrix(h,1);this.bias_o=this.createMatrix(o,1);this.randomize();this.learningRate=0.1;}createMatrix(r,c){return Array(r).fill(0).map(()=>Array(c).fill(0));}randomize(){this.weights_ih=this.weights_ih.map(r=>r.map(()=>Math.random()*2-1));this.weights_ho=this.weights_ho.map(r=>r.map(()=>Math.random()*2-1));this.bias_h=this.bias_h.map(r=>r.map(()=>Math.random()*2-1));this.bias_o=this.bias_o.map(r=>r.map(()=>Math.random()*2-1));}sigmoid(x){return 1/(1+Math.exp(-x));}dsigmoid(y){return y*(1-y);}static fromJson(d){const n=new NeuralNetwork(d.inputNodes,d.hiddenNodes,d.outputNodes);if(d.weights_ih)n.weights_ih=d.weights_ih;if(d.weights_ho)n.weights_ho=d.weights_ho;if(d.bias_h)n.bias_h=d.bias_h;if(d.bias_o)n.bias_o=d.bias_o;if(d.learningRate)n.learningRate=d.learningRate;return n;}predict(a){const i=this.arrayToMatrix(a);const h=this.multiply(this.weights_ih,i);h.forEach((r,i)=>r.forEach((_,j)=>h[i][j]+=this.bias_h[i][j]));h.forEach((r,i)=>r.forEach((v,j)=>h[i][j]=this.sigmoid(v)));const o=this.multiply(this.weights_ho,h);o.forEach((r,i)=>r.forEach((_,j)=>o[i][j]+=this.bias_o[i][j]));o.forEach((r,i)=>r.forEach((v,j)=>o[i][j]=this.sigmoid(v)));return this.matrixToArray(o);}train(a,t){const i=this.arrayToMatrix(a);const h=this.multiply(this.weights_ih,i);h.forEach((r,i)=>r.forEach((_,j)=>h[i][j]+=this.bias_h[i][j]));h.forEach((r,i)=>r.forEach((v,j)=>h[i][j]=this.sigmoid(v)));const s=this.multiply(this.weights_ho,h);s.forEach((r,i)=>r.forEach((_,j)=>s[i][j]+=this.bias_o[i][j]));s.forEach((r,i)=>r.forEach((v,j)=>s[i][j]=this.sigmoid(v)));const e=this.arrayToMatrix(t);const o=this.subtract(e,s);const g=s.map(r=>r.slice());g.forEach((r,i)=>r.forEach((v,j)=>g[i][j]=this.dsigmoid(v)));g.forEach((r,i)=>r.forEach((v,j)=>g[i][j]*=o[i][j]));g.forEach(r=>r.forEach((v,i)=>r[i]*=this.learningRate));const n=this.transpose(h);const d=this.multiply(g,n);this.weights_ho.forEach((r,i)=>r.forEach((_,j)=>this.weights_ho[i][j]+=d[i][j]));this.bias_o.forEach((r,i)=>r.forEach((_,j)=>this.bias_o[i][j]+=g[i][j]));const w=this.transpose(this.weights_ho);const _=this.multiply(w,o);const c=h.map(r=>r.slice());c.forEach((r,i)=>r.forEach((v,j)=>c[i][j]=this.dsigmoid(v)));c.forEach((r,i)=>r.forEach((v,j)=>c[i][j]*=_[i][j]));c.forEach(r=>r.forEach((v,i)=>r[i]*=this.learningRate));const p=this.transpose(i);const m=this.multiply(c,p);this.weights_ih.forEach((r,i)=>r.forEach((_,j)=>this.weights_ih[i][j]+=m[i][j]));this.bias_h.forEach((r,i)=>r.forEach((_,j)=>this.bias_h[i][j]+=c[i][j]));}arrayToMatrix(a){return a.map(e=>[e]);}matrixToArray(m){return m.flat();}transpose(m){return m[0].map((_,c)=>m.map(r=>r[c]));}multiply(a,b){return a.map((r,i)=>b[0].map((_,j)=>r.reduce((s,e,k)=>s+(e*b[k][j]),0)));}subtract(a,b){return a.map((r,i)=>r.map((v,j)=>v-b[i][j]));}}
+    constructor(inputNodes, hiddenNodes, outputNodes) {
+        this.inputNodes = inputNodes;
+        this.hiddenNodes = hiddenNodes;
+        this.outputNodes = outputNodes;
+        this.weights_ih = this.createMatrix(this.hiddenNodes, this.inputNodes);
+        this.weights_ho = this.createMatrix(this.outputNodes, this.hiddenNodes);
+        this.bias_h = this.createMatrix(this.hiddenNodes, 1);
+        this.bias_o = this.createMatrix(this.outputNodes, 1);
+        this.randomize();
+        this.learningRate = 0.1;
+    }
+    createMatrix(rows, cols) { return Array(rows).fill(0).map(() => Array(cols).fill(0)); }
+    randomize() {
+        this.weights_ih = this.weights_ih.map(row => row.map(() => Math.random() * 2 - 1));
+        this.weights_ho = this.weights_ho.map(row => row.map(() => Math.random() * 2 - 1));
+        this.bias_h = this.bias_h.map(row => row.map(() => Math.random() * 2 - 1));
+        this.bias_o = this.bias_o.map(row => row.map(() => Math.random() * 2 - 1));
+    }
+    sigmoid(x) { return 1 / (1 + Math.exp(-x)); }
+    dsigmoid(y) { return y * (1 - y); }
+    static fromJson(data) {
+        const nn = new NeuralNetwork(data.inputNodes, data.hiddenNodes, data.outputNodes);
+        if (data.weights_ih) nn.weights_ih = data.weights_ih;
+        if (data.weights_ho) nn.weights_ho = data.weights_ho;
+        if (data.bias_h) nn.bias_h = data.bias_h;
+        if (data.bias_o) nn.bias_o = data.bias_o;
+        if (data.learningRate) nn.learningRate = data.learningRate;
+        return nn;
+    }
+    predict(inputArray) {
+        const inputs = this.arrayToMatrix(inputArray);
+        const hidden = this.multiply(this.weights_ih, inputs);
+        hidden.forEach((row, i) => row.forEach((_, j) => hidden[i][j] += this.bias_h[i][j]));
+        hidden.forEach((row, i) => row.forEach((val, j) => hidden[i][j] = this.sigmoid(val)));
+        const output = this.multiply(this.weights_ho, hidden);
+        output.forEach((row, i) => row.forEach((_, j) => output[i][j] += this.bias_o[i][j]));
+        output.forEach((row, i) => row.forEach((val, j) => output[i][j] = this.sigmoid(val)));
+        return this.matrixToArray(output);
+    }
+    train(inputArray, targetArray) {
+        const inputs = this.arrayToMatrix(inputArray);
+        const hidden = this.multiply(this.weights_ih, inputs);
+        hidden.forEach((r, i) => r.forEach((_, j) => hidden[i][j] += this.bias_h[i][j]));
+        hidden.forEach((r, i) => r.forEach((v, j) => hidden[i][j] = this.sigmoid(v)));
+        const outputs = this.multiply(this.weights_ho, hidden);
+        outputs.forEach((r, i) => r.forEach((_, j) => outputs[i][j] += this.bias_o[i][j]));
+        outputs.forEach((r, i) => r.forEach((v, j) => outputs[i][j] = this.sigmoid(v)));
+        const targets = this.arrayToMatrix(targetArray);
+        const output_errors = this.subtract(targets, outputs);
+        const gradients = outputs.map(r => r.slice());
+        gradients.forEach((r, i) => r.forEach((v, j) => g[i][j] = this.dsigmoid(v)));
+        gradients.forEach((r, i) => r.forEach((v, j) => g[i][j] *= output_errors[i][j]));
+        gradients.forEach(r => r.forEach((v, i) => r[i] *= this.learningRate));
+        const hidden_T = this.transpose(hidden);
+        const weight_ho_deltas = this.multiply(gradients, hidden_T);
+        this.weights_ho.forEach((r, i) => r.forEach((_, j) => this.weights_ho[i][j] += weight_ho_deltas[i][j]));
+        this.bias_o.forEach((r, i) => r.forEach((_, j) => this.bias_o[i][j] += gradients[i][j]));
+        const who_t = this.transpose(this.weights_ho);
+        const hidden_errors = this.multiply(who_t, output_errors);
+        const hidden_gradient = hidden.map(r => r.slice());
+        hidden_gradient.forEach((r, i) => r.forEach((v, j) => hidden_gradient[i][j] = this.dsigmoid(v)));
+        hidden_gradient.forEach((r, i) => r.forEach((v, j) => hidden_gradient[i][j] *= hidden_errors[i][j]));
+        hidden_gradient.forEach(r => r.forEach((v, i) => r[i] *= this.learningRate));
+        const inputs_T = this.transpose(inputs);
+        const weight_ih_deltas = this.multiply(hidden_gradient, inputs_T);
+        this.weights_ih.forEach((r, i) => r.forEach((_, j) => this.weights_ih[i][j] += weight_ih_deltas[i][j]));
+        this.bias_h.forEach((r, i) => r.forEach((_, j) => this.bias_h[i][j] += hidden_gradient[i][j]));
+    }
+    arrayToMatrix(a) { return a.map(e => [e]); }
+    matrixToArray(m) { return m.flat(); }
+    transpose(m) { return m[0].map((_, c) => m.map(r => r[c])); }
+    multiply(a, b) { return a.map((r, i) => b[0].map((_, j) => r.reduce((s, e, k) => s + (e * b[k][j]), 0))); }
+    subtract(a, b) { return a.map((r, i) => r.map((v, j) => v - b[i][j])); }
+}
 
 const NN_MODEL_NAME = 'GDB_5_POS_PREDICTOR';
 const INPUT_NODES = 135;
@@ -14,6 +88,8 @@ const HIDDEN_NODES = 64;
 const OUTPUT_NODES = 50;
 
 const PRIZE_ORDER = ['ĐB','G1','G2a','G2b','G3a','G3b','G3c','G3d','G3e','G3f','G4a','G4b','G4c','G4d','G5a','G5b','G5c','G5d','G5e','G5f','G6a','G6b','G6c','G7a','G7b','G7c','G7d'];
+
+const dateKey = (s) => { if (!s || typeof s !== 'string') return ''; const parts = s.split('/'); return parts.length !== 3 ? s : `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`; };
 
 const prepareInput = (resultsForDay) => {
     const input = [];
@@ -48,7 +124,7 @@ const saveNN = async (nn) => {
     await NNState.findOneAndUpdate(
         { modelName: NN_MODEL_NAME },
         { state: JSON.parse(JSON.stringify(nn)) },
-        { upsert: true, new: true }
+        { upsert: true }
     );
 };
 
@@ -65,21 +141,62 @@ const decodeOutput = (output) => {
     }
     return prediction;
 };
-const dateKey=(s)=>{if(!s||typeof s!=='string')return '';const p=s.split('/');return p.length!==3?s:`${p[2]}-${p[1].padStart(2,'0')}-${p[0].padStart(2,'0')}`;};
-const runNNNextDayPrediction=async()=>{
+
+const runNNHistoricalTraining = async () => {
+    console.log('🔔 [NN Service] Starting Historical Training...');
+    const nn = await getNN();
+    const results = await Result.find().sort({ 'ngay': 1 }).lean();
+    if (results.length < 2) throw new Error("Không đủ dữ liệu lịch sử để huấn luyện.");
+
+    const grouped = {};
+    results.forEach(r => {
+        if (!grouped[r.ngay]) grouped[r.ngay] = [];
+        grouped[r.ngay].push(r);
+    });
+    const days = Object.keys(grouped).sort((a, b) => dateKey(a).localeCompare(dateKey(b)));
+
+    let trainedCount = 0;
+    for (let i = 1; i < days.length; i++) {
+        const yesterdayDate = days[i - 1];
+        const todayDate = days[i];
+        
+        const inputArray = prepareInput(grouped[yesterdayDate] || []);
+        const targetGDB_Object = (grouped[todayDate] || []).find(r => r.giai === 'ĐB');
+
+        if (targetGDB_Object?.so && String(targetGDB_Object.so).length >= 5) {
+            const targetGDB_String = String(targetGDB_Object.so).padStart(5, '0');
+            const targetArray = prepareTarget(targetGDB_String);
+            nn.train(inputArray, targetArray);
+            trainedCount++;
+        }
+    }
+    await saveNN(nn);
+    return { message: `AI đã học xong từ lịch sử. Đã xử lý ${trainedCount} cặp dữ liệu.` };
+};
+
+const runNNNextDayPrediction = async () => {
     console.log('🔔 [NN Service] Generating next day prediction...');
-    const nn=await getNN();
-    const results=await Result.find().lean();
-    if(results.length<1)throw new Error("Không có dữ liệu để dự đoán.");
-    const grouped={};results.forEach(r=>{if(!grouped[r.ngay])grouped[r.ngay]=[];grouped[r.ngay].push(r);});
-    const days=Object.keys(grouped).sort((a,b)=>dateKey(a).localeCompare(dateKey(b)));
-    const latestDay=days[days.length-1];
-    const inputArray=prepareInput(grouped[latestDay]||[]);
-    const output=nn.predict(inputArray);
-    const prediction=decodeOutput(output);
-    const nextDayStr=DateTime.fromFormat(latestDay,'dd/MM/yyyy').plus({days:1}).toFormat('dd/MM/yyyy');
-    await NNPrediction.findOneAndUpdate({ngayDuDoan:nextDayStr},{ngayDuDoan:nextDayStr,...prediction,danhDauDaSo:false},{upsert:true,new:true});
-    return{message:`AI đã tạo dự đoán cho ngày ${nextDayStr}.`,ngayDuDoan:nextDayStr};
+    const nn = await getNN();
+    const results = await Result.find().lean();
+    if (results.length < 1) throw new Error("Không có dữ liệu để dự đoán.");
+    
+    const grouped = {};
+    results.forEach(r => { if (!grouped[r.ngay]) grouped[r.ngay] = []; grouped[r.ngay].push(r); });
+    const days = Object.keys(grouped).sort((a, b) => dateKey(a).localeCompare(dateKey(b)));
+    const latestDay = days[days.length - 1];
+    
+    const inputArray = prepareInput(grouped[latestDay] || []);
+    const output = nn.predict(inputArray);
+    const prediction = decodeOutput(output);
+    
+    const nextDayStr = DateTime.fromFormat(latestDay, 'dd/MM/yyyy').plus({ days: 1 }).toFormat('dd/MM/yyyy');
+    
+    await NNPrediction.findOneAndUpdate(
+        { ngayDuDoan: nextDayStr },
+        { ngayDuDoan: nextDayStr, ...prediction, danhDauDaSo: false },
+        { upsert: true, new: true }
+    );
+    return { message: `AI đã tạo dự đoán cho ngày ${nextDayStr}.`, ngayDuDoan: nextDayStr };
 };
 
 const runNNLearning = async () => {
