@@ -184,7 +184,7 @@ const runGroupExclusionAnalysis = (prevPrediction, prevResult, todayMethods) => 
     
     let potentialNumbers = [];
     // <<< THAY ĐỔI DUY NHẤT Ở ĐÂY >>>
-    const SIMILARITY_THRESHOLD = 8; // Giảm ngưỡng từ 7 xuống 6
+    const SIMILARITY_THRESHOLD = 9; // Giảm ngưỡng từ 7 xuống 6
 
     for (let i = 0; i < 1000; i++) {
         const num = String(i).padStart(3, '0');
@@ -304,6 +304,7 @@ exports.getPredictionByDate=async(req,res)=>{try{const{date}=req.query; if(!date
 exports.getLatestPredictionDate=async(req,res)=>{try{const latestPrediction=await Prediction.findOne().sort({ngayDuDoan:-1}).collation({locale:'vi',numericOrdering:true}).lean(); if(!latestPrediction)return res.status(404).json({message:'Không tìm thấy bản ghi dự đoán nào.'}); res.json({latestDate:latestPrediction.ngayDuDoan});}catch(err){res.status(500).json({message:'Lỗi server',error:err.toString()});}};
 exports.getAllPredictions=async(req,res)=>{try{const predictions=await Prediction.find({}).lean(); res.json(predictions);}catch(err){res.status(500).json({message:'Lỗi server',error:err.toString()});}};
 exports.updatePredictionWeights=(req,res)=>res.status(404).json({message:'API đã lỗi thời, sử dụng /update-trust-scores'});
+
 
 
 
