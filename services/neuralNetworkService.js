@@ -3,6 +3,7 @@
 const Result = require('../models/Result');
 const NNPrediction = require('../models/NNPrediction');
 const NNState = require('../models/NNState');
+const FeatureEngineeringService = require('./featureEngineeringService');
 const { DateTime } = require('luxon');
 
 // =================================================================
@@ -38,6 +39,7 @@ class LSTMNetwork {
         this.bias_output = this.createMatrix(this.outputNodes, 1);
 
         this.learningRate = 0.05; // Giảm learning rate cho ổn định hơn
+        this.featureService = new FeatureEngineeringService();
         this.randomize();
     }
 
@@ -183,14 +185,8 @@ const BATCH_SIZE = 16; // Mỗi lần học sẽ xử lý 16 chuỗi dữ liệu
 const PRIZE_ORDER = ['ĐB','G1','G2a','G2b','G3a','G3b','G3c','G3d','G3e','G3f','G4a','G4b','G4c','G4d','G5a','G5b','G5c','G5d','G5e','G5f','G6a','G6b','G6c','G7a','G7b','G7c','G7d'];
 const dateKey = (s) => { if (!s || typeof s !== 'string') return ''; const parts = s.split('/'); return parts.length !== 3 ? s : `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`; };
 
-const prepareInput = (resultsForDay) => {
-    const input = [];
-    PRIZE_ORDER.forEach(prize => {
-        const result = resultsForDay.find(r => r.giai === prize);
-        const numStr = String(result?.so || '0').padStart(5, '0');
-        numStr.split('').forEach(digit => input.push(parseInt(digit) / 9.0));
-    });
-    return input;
+const prepareInput = (resultsForDay, previousDaysResults = [], dateStr = null) => {
+    return featureService.extractAllFeatures(resultsForDay, previousDaysResults, dateStr);
 };
 
 const prepareTarget = (gdbString) => {
