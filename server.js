@@ -10,6 +10,7 @@ app.use(express.json());
 
 // Mount route
 app.use('/api/xs', xsRoutes);
+app.use('/api/nn', nnRoutes);
 
 // BỎ TÙY CHỌN CŨ KHI KẾT NỐI
 mongoose.connect(process.env.MONGO_URI)
@@ -18,4 +19,5 @@ mongoose.connect(process.env.MONGO_URI)
   
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+
 
