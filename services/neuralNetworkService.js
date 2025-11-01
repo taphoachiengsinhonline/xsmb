@@ -81,40 +81,6 @@ const runNNNextDayPrediction=async()=>{
     await NNPrediction.findOneAndUpdate({ngayDuDoan:nextDayStr},{ngayDuDoan:nextDayStr,...prediction,danhDauDaSo:false},{upsert:true,new:true});
     return{message:`AI đã tạo dự đoán cho ngày ${nextDayStr}.`,ngayDuDoan:nextDayStr};
 };
-// <<< HÀM ĐÃ ĐƯỢC SỬA LẠI HOÀN TOÀN >>>
-const runNNNextDayPrediction = async () => {
-    console.log('🔔 [NN Service] Generating next day prediction...');
-    const nn = await getNN();
-
-    // 1. Tìm ngày có KẾT QUẢ mới nhất trong DB
-    const latestResult = await Result.findOne().sort({ 'ngay': -1 }).lean();
-    if (!latestResult) {
-        throw new Error("Không có dữ liệu kết quả để làm mồi dự đoán.");
-    }
-    const latestDayWithResult = latestResult.ngay;
-
-    // 2. Tính toán ngày cần dự đoán (ngày tiếp theo của ngày có kết quả mới nhất)
-    const nextDayToPredictStr = DateTime.fromFormat(latestDayWithResult, 'dd/MM/yyyy').plus({ days: 1 }).toFormat('dd/MM/yyyy');
-
-    // 3. Lấy toàn bộ 27 giải của ngày có kết quả mới nhất để làm input
-    const latestDayResults = await Result.find({ ngay: latestDayWithResult }).lean();
-    if (latestDayResults.length === 0) {
-        throw new Error(`Không tìm thấy dữ liệu chi tiết cho ngày ${latestDayWithResult}.`);
-    }
-
-    // 4. Chạy dự đoán
-    const inputArray = prepareInput(latestDayResults);
-    const output = nn.predict(inputArray);
-    const prediction = decodeOutput(output);
-    
-    // 5. Lưu kết quả
-    await NNPrediction.findOneAndUpdate(
-        { ngayDuDoan: nextDayToPredictStr },
-        { ngayDuDoan: nextDayToPredictStr, ...prediction, danhDauDaSo: false },
-        { upsert: true, new: true }
-    );
-    return { message: `AI đã tạo dự đoán cho ngày ${nextDayToPredictStr}.`, ngayDuDoan: nextDayToPredictStr };
-};
 
 const runNNLearning = async () => {
     console.log('🔔 [NN Service] Learning from new results...');
