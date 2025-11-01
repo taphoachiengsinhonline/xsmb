@@ -110,8 +110,9 @@ const runMetaLearner = (allMethodResults, trustScores) => {
 
 const getCombinations = (arr, k) => { const result=[]; const combine=(start,combo)=>{if(combo.length===k){result.push([...combo]);return;} for(let i=start;i<arr.length;i++){combo.push(arr[i]);combine(i+1,combo);combo.pop();}}; combine(0,[]); return result; };
 
-const runGroupExclusionAnalysis = (prevPrediction, prevResult, todayMethods, exclusionConfidence) => {
+const runGroupExclusionAnalysis = (prevPrediction, prevResult, todayMethods, exclusionConfidence, trustScores) => {
     if (!prevPrediction || !prevResult?.so) return { potentialNumbers: [], excludedPatternCount: 0, appliedThreshold: 9 };
+    
     const methodGroups = getCombinations(ALL_METHODS, 3);
     const lastGDB = String(prevResult.so).slice(-3);
     if (lastGDB.length < 3) return { potentialNumbers: [], excludedPatternCount: 0, appliedThreshold: 9 };
@@ -130,7 +131,8 @@ const runGroupExclusionAnalysis = (prevPrediction, prevResult, todayMethods, exc
     if (exclusionConfidence > 1.5) similarityThreshold = 7;
     else if (exclusionConfidence > 0.8) similarityThreshold = 8;
     
-    let potentialNumbers = [];
+    // Bước 1: Lọc sơ bộ để có "dàn an toàn"
+    let safeNumbers = [];
     for (let i = 0; i < 1000; i++) {
         const num = String(i).padStart(3, '0');
         let isExcluded = false;
@@ -146,9 +148,29 @@ const runGroupExclusionAnalysis = (prevPrediction, prevResult, todayMethods, exc
             for (let k = 0; k < 9; k++) { if (currentPattern[k] === excludedPattern[k]) similarity++; }
             if (similarity >= similarityThreshold) { isExcluded = true; break; }
         }
-        if (!isExcluded) { potentialNumbers.push(num); }
+        if (!isExcluded) { safeNumbers.push(num); }
     }
-    return { potentialNumbers: potentialNumbers.sort(), excludedPatternCount: methodGroups.length, appliedThreshold: similarityThreshold };
+
+    // Bước 2: Chấm điểm các số trong "dàn an toàn"
+    const scoredNumbers = safeNumbers.map(num => {
+        let totalScore = 0;
+        for(const methodKey of ALL_METHODS) {
+            const p = todayMethods[methodKey];
+            const score = trustScores[methodKey] || INITIAL_TRUST_SCORE;
+            if (p.topTram.includes(num[0]) && p.topChuc.includes(num[1]) && p.topDonVi.includes(num[2])) {
+                totalScore += score;
+            }
+        }
+        return { num, totalScore };
+    });
+
+    // Bước 3: Sắp xếp và chọn ra "Dàn Tinh nhuệ"
+    const eliteNumbers = scoredNumbers
+        .sort((a, b) => b.totalScore - a.totalScore)
+        .slice(0, ELITE_SET_SIZE)
+        .map(item => item.num);
+
+    return { potentialNumbers: eliteNumbers.sort(), excludedPatternCount: methodGroups.length, appliedThreshold: similarityThreshold };
 };
 
 /* =================================================================
@@ -295,3 +317,4 @@ exports.getPredictionByDate=async(req,res)=>{try{const{date}=req.query; if(!date
 exports.getLatestPredictionDate=async(req,res)=>{try{const latestPrediction=await Prediction.findOne().sort({ngayDuDoan:-1}).collation({locale:'vi',numericOrdering:true}).lean(); if(!latestPrediction)return res.status(404).json({message:'Không tìm thấy bản ghi dự đoán nào.'}); res.json({latestDate:latestPrediction.ngayDuDoan});}catch(err){res.status(500).json({message:'Lỗi server',error:err.toString()});}};
 exports.getAllPredictions=async(req,res)=>{try{const predictions=await Prediction.find({}).lean(); res.json(predictions);}catch(err){res.status(500).json({message:'Lỗi server',error:err.toString()});}};
 exports.updatePredictionWeights=(req,res)=>res.status(404).json({message:'API đã lỗi thời, sử dụng /update-trust-scores'});
+
