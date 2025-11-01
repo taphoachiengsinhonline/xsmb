@@ -25,7 +25,7 @@ const GE_CONFIDENCE_INCREMENT = 0.3;
 const GE_CONFIDENCE_DECREMENT = 0.5;
 const GE_MIN_CONFIDENCE = 0.1;
 const GE_MAX_CONFIDENCE = 3.0;
-
+const ELITE_SET_SIZE = 150;
 /* =================================================================
  * PHẦN 1: CÁC MODULE PHÂN TÍCH RIÊNG LẺ (CÁC "CHUYÊN GIA")
  * ================================================================= */
