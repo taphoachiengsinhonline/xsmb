@@ -4,11 +4,12 @@ const mongoose = require('mongoose');
 
 const chiTietGocSchema = new mongoose.Schema({ number: String, positionInPrize: Number, tram: String, chuc: String, donvi: String, weight: { type: Number, default: 1 } }, { _id: false });
 const ketQuaPhuongPhapSchema = new mongoose.Schema({ topTram: [String], topChuc: [String], topDonVi: [String], chiTietGoc: [chiTietGocSchema] }, { _id: false });
+const consensusAnalysisSchema = new mongoose.Schema({ predictedWinCount: Number, potentialNumbers: [String] }, { _id: false });
 
+// --- Schema MỚI cho phương pháp Loại trừ Nhóm ---
 const groupExclusionAnalysisSchema = new mongoose.Schema({
-  potentialNumbers: [String],
-  excludedPatternCount: Number,
-  appliedThreshold: Number, // << THÊM MỚI: Ngưỡng loại trừ đã được áp dụng
+  potentialNumbers: [String], // Các bộ số sống sót sau khi lọc
+  excludedPatternCount: Number, // Đã loại bỏ bao nhiêu mẫu hình
 }, { _id: false });
 
 const predictionSchema = new mongoose.Schema({
@@ -19,22 +20,13 @@ const predictionSchema = new mongoose.Schema({
   ketQuaChiTiet: { type: Map, of: ketQuaPhuongPhapSchema },
   diemTinCay: { type: Map, of: Number },
   intersectionAnalysis: { tram: mongoose.Schema.Types.Mixed, chuc: mongoose.Schema.Types.Mixed, donvi: mongoose.Schema.Types.Mixed },
+  consensusAnalysis: consensusAnalysisSchema,
+
+  // --- TRƯỜNG MỚI ---
   groupExclusionAnalysis: groupExclusionAnalysisSchema,
+
   danhDauDaSo: { type: Boolean, default: false },
   createdAt: { type: Date, default: Date.now }
 }, { versionKey: false });
 
-// --- SCHEMA MỚI: DÙNG ĐỂ LƯU TRỮ TRẠNG THÁI HỌC HỎI CỦA CÁC MÔ HÌNH ---
-const modelStateSchema = new mongoose.Schema({
-    modelName: { type: String, required: true, unique: true }, // Tên của mô hình, vd: "GROUP_EXCLUSION"
-    confidenceScore: { type: Number, default: 1.0 }, // Điểm tin cậy hiện tại
-    history: [{ // Lịch sử hiệu quả
-        date: String,
-        isCorrect: Boolean
-    }]
-}, { timestamps: true });
-
-const PredictionModel = mongoose.model('Prediction', predictionSchema);
-const ModelStateModel = mongoose.model('ModelState', modelStateSchema);
-
-module.exports = { Prediction: PredictionModel, ModelState: ModelStateModel };
+module.exports = mongoose.model('Prediction', predictionSchema);
