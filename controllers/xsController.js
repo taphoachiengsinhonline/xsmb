@@ -102,6 +102,7 @@ const getCombinations = (arr, k) => { const result=[]; const combine=(start,comb
 const runGroupExclusionAnalysis = (prevPrediction, prevResult, todayMethods) => {
     if (!prevPrediction || !prevResult?.so) return { potentialNumbers: [], excludedPatternCount: 0 };
     
+    // C(6,3) = 20 nhóm
     const methodGroups = getCombinations(ALL_METHODS, 3);
     const lastGDB = String(prevResult.so).slice(-3);
     if (lastGDB.length < 3) return { potentialNumbers: [], excludedPatternCount: 0 };
@@ -111,49 +112,53 @@ const runGroupExclusionAnalysis = (prevPrediction, prevResult, todayMethods) => 
         const pattern = group.flatMap(methodKey => {
             const p = prevPrediction.ketQuaChiTiet?.[methodKey];
             if (!p || !p.topTram || !p.topChuc || !p.topDonVi) return [0, 0, 0];
-            const tramMatch = p.topTram.includes(lastGDB[0]) ? 1 : 0;
-            const chucMatch = p.topChuc.includes(lastGDB[1]) ? 1 : 0;
-            const donviMatch = p.topDonVi.includes(lastGDB[2]) ? 1 : 0;
-            return [tramMatch, chucMatch, donviMatch];
+            return [ p.topTram.includes(lastGDB[0])?1:0, p.topChuc.includes(lastGDB[1])?1:0, p.topDonVi.includes(lastGDB[2])?1:0 ];
         });
-        lastDayPatterns.set(index, pattern); // Lưu dưới dạng mảng [1,0,0,0,0,0,1,1,0]
+        lastDayPatterns.set(index, pattern);
     });
     
     let potentialNumbers = [];
-    const SIMILARITY_THRESHOLD = 7; // Ngưỡng loại bỏ: trùng từ 7/9 đặc điểm trở lên
+    const SIMILARITY_THRESHOLD = 7;
 
     for (let i = 0; i < 1000; i++) {
         const num = String(i).padStart(3, '0');
         let isExcluded = false;
 
+        // BỘ LỌC 1: Loại trừ theo Nhóm (logic gốc của bạn)
         for (let j = 0; j < methodGroups.length; j++) {
             const group = methodGroups[j];
-            const excludedPattern = lastDayPatterns.get(j); // Mảng 9-bit của ngày hôm qua
+            const excludedPattern = lastDayPatterns.get(j);
             if (excludedPattern === undefined) continue;
-
             const currentPattern = group.flatMap(methodKey => {
                 const p = todayMethods[methodKey];
-                const tramMatch = p.topTram.includes(num[0]) ? 1 : 0;
-                const chucMatch = p.topChuc.includes(num[1]) ? 1 : 0;
-                const donviMatch = p.topDonVi.includes(num[2]) ? 1 : 0;
-                return [tramMatch, chucMatch, donviMatch];
+                if (!p || !p.topTram) return [0, 0, 0];
+                return [ p.topTram.includes(num[0])?1:0, p.topChuc.includes(num[1])?1:0, p.topDonVi.includes(num[2])?1:0 ];
             });
-
-            // Tính độ tương đồng
             let similarity = 0;
-            for (let k = 0; k < 9; k++) {
-                if (currentPattern[k] === excludedPattern[k]) {
-                    similarity++;
-                }
-            }
-            
-            // Nếu độ tương đồng cao -> loại bỏ
-            if (similarity >= SIMILARITY_THRESHOLD) {
-                isExcluded = true;
-                break;
-            }
+            for (let k = 0; k < 9; k++) { if (currentPattern[k] === excludedPattern[k]) similarity++; }
+            if (similarity >= SIMILARITY_THRESHOLD) { isExcluded = true; break; }
         }
+        if (isExcluded) continue;
 
+        // BỘ LỌC 2: Loại trừ theo Giao điểm Tối thiểu/Tối đa
+        let tramCount = 0;
+        let chucCount = 0;
+        let donviCount = 0;
+        for (const methodKey of ALL_METHODS) {
+            const p = todayMethods[methodKey];
+            if (p.topTram?.includes(num[0])) tramCount++;
+            if (p.topChuc?.includes(num[1])) chucCount++;
+            if (p.topDonVi?.includes(num[2])) donviCount++;
+        }
+        // Điều kiện 1: Bất kỳ vị trí nào trùng cả 6 PP -> Loại
+        if (tramCount === 6 || chucCount === 6 || donviCount === 6) {
+            isExcluded = true;
+        }
+        // Điều kiện 2: Bất kỳ vị trí nào trùng ít hơn 2 PP -> Loại
+        if (tramCount < 2 || chucCount < 2 || donviCount < 2) {
+            isExcluded = true;
+        }
+        
         if (!isExcluded) {
             potentialNumbers.push(num);
         }
@@ -161,6 +166,7 @@ const runGroupExclusionAnalysis = (prevPrediction, prevResult, todayMethods) => 
 
     return { potentialNumbers: potentialNumbers.sort(), excludedPatternCount: methodGroups.length };
 };
+
 
 
 /* =================================================================
@@ -217,3 +223,4 @@ exports.getPredictionByDate=async(req,res)=>{try{const{date}=req.query; if(!date
 exports.getLatestPredictionDate=async(req,res)=>{try{const latestPrediction=await Prediction.findOne().sort({ngayDuDoan:-1}).collation({locale:'vi',numericOrdering:true}).lean(); if(!latestPrediction)return res.status(404).json({message:'Không tìm thấy bản ghi dự đoán nào.'}); res.json({latestDate:latestPrediction.ngayDuDoan});}catch(err){res.status(500).json({message:'Lỗi server',error:err.toString()});}};
 exports.getAllPredictions=async(req,res)=>{try{const predictions=await Prediction.find({}).lean(); res.json(predictions);}catch(err){res.status(500).json({message:'Lỗi server',error:err.toString()});}};
 exports.updatePredictionWeights=(req,res)=>res.status(404).json({message:'API đã lỗi thời, sử dụng /update-trust-scores'});
+
