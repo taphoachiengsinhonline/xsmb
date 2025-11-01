@@ -57,8 +57,8 @@ class NeuralNetwork {
         const targets = this.arrayToMatrix(targetArray);
         const output_errors = this.subtract(targets, outputs);
         const gradients = outputs.map(r => r.slice());
-        gradients.forEach((r, i) => r.forEach((v, j) => g[i][j] = this.dsigmoid(v)));
-        gradients.forEach((r, i) => r.forEach((v, j) => g[i][j] *= output_errors[i][j]));
+        gradients.forEach((r, i) => r.forEach((v, j) => gradients[i][j] = this.dsigmoid(v)));
+        gradients.forEach((r, i) => r.forEach((v, j) => gradients[i][j] *= output_errors[i][j]));
         gradients.forEach(r => r.forEach((v, i) => r[i] *= this.learningRate));
         const hidden_T = this.transpose(hidden);
         const weight_ho_deltas = this.multiply(gradients, hidden_T);
