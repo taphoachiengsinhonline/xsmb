@@ -172,7 +172,11 @@ const runGroupExclusionAnalysis = (prevPrediction, prevResult, todayMethods) => 
 exports.trainHistoricalPredictions = async (req, res) => {
     console.log('🔔 [trainHistoricalPredictions] Start (Full Suite)');
     try {
-        const results = await Result.find().sort({ 'ngay': 1 }).lean(); if (results.length < 1) return res.status(400).json({ message: `Không có dữ liệu.` });
+        // THÊM: Kiểm tra dữ liệu
+        const results = await Result.find().sort({ 'ngay': 1 }).lean(); 
+        if (results.length < 2) {
+            return res.status(400).json({ message: `Cần ít nhất 2 ngày dữ liệu để huấn luyện. Hiện có: ${results.length}` });
+        }
         const grouped = {}; results.forEach(r => { grouped[r.ngay] = grouped[r.ngay] || []; grouped[r.ngay].push(r); }); 
         const days = Object.keys(grouped).sort((a, b) => dateKey(a).localeCompare(dateKey(b)));
         
@@ -222,5 +226,6 @@ exports.getPredictionByDate=async(req,res)=>{try{const{date}=req.query; if(!date
 exports.getLatestPredictionDate=async(req,res)=>{try{const latestPrediction=await Prediction.findOne().sort({ngayDuDoan:-1}).collation({locale:'vi',numericOrdering:true}).lean(); if(!latestPrediction)return res.status(404).json({message:'Không tìm thấy bản ghi dự đoán nào.'}); res.json({latestDate:latestPrediction.ngayDuDoan});}catch(err){res.status(500).json({message:'Lỗi server',error:err.toString()});}};
 exports.getAllPredictions=async(req,res)=>{try{const predictions=await Prediction.find({}).lean(); res.json(predictions);}catch(err){res.status(500).json({message:'Lỗi server',error:err.toString()});}};
 exports.updatePredictionWeights=(req,res)=>res.status(404).json({message:'API đã lỗi thời, sử dụng /update-trust-scores'});
+
 
 
