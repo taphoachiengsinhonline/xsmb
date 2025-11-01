@@ -1,7 +1,7 @@
 // file: controllers/xsController.js
 
+const { Prediction, ModelState } = require('../models/Prediction');
 const Result = require('../models/Result');
-const Prediction = require('../models/Prediction');
 const { DateTime } = require('luxon');
 const crawlService = require('../services/crawlService');
 
@@ -19,8 +19,15 @@ const TRUST_SCORE_DECREMENT = 0.1;
 const MIN_TRUST_SCORE = 0.1;
 const MAX_TRUST_SCORE = 5.0;
 
+const GE_MODEL_NAME = 'GROUP_EXCLUSION';
+const GE_INITIAL_CONFIDENCE = 1.0;
+const GE_CONFIDENCE_INCREMENT = 0.3;
+const GE_CONFIDENCE_DECREMENT = 0.5;
+const GE_MIN_CONFIDENCE = 0.1;
+const GE_MAX_CONFIDENCE = 3.0;
+
 /* =================================================================
- * PHẦN 1: CÁC MODULE PHÂN TÍCH RIÊNG LẺ
+ * PHẦN 1: CÁC MODULE PHÂN TÍCH RIÊNG LẺ (CÁC "CHUYÊN GIA")
  * ================================================================= */
 
 const runMethodGoc = (prevDayResults) => {
@@ -29,6 +36,7 @@ const runMethodGoc = (prevDayResults) => {
   const generatePrediction = (initialCounts) => { const allDigits=['0','1','2','3','4','5','6','7','8','9']; const allCounts=allDigits.map(d=>({k:d,v:initialCounts[d]||0})); const top5Hot=[...allCounts].sort((a,b)=>b.v-a.v).slice(0,5).map(o=>o.k); const top5Cold=[...allCounts].sort((a,b)=>a.v-b.v).slice(0,5).map(o=>o.k); const keeperSet=allDigits.filter(d=>!top5Cold.includes(d)); const intersection=top5Hot.filter(d=>keeperSet.includes(d)); const remainingKeepers=keeperSet.filter(d=>!intersection.includes(d)); return [...intersection,...remainingKeepers].slice(0,5); };
   return { topTram: generatePrediction(counts.tram), topChuc: generatePrediction(counts.chuc), topDonVi: generatePrediction(counts.donvi), chiTietGoc };
 };
+
 const runMethodDeep30Day = (endDateIndex, days, groupedResults, prevDayGDB) => {
     const LOOKBACK_DAYS = 30; const TIME_DECAY_FACTOR = 0.98; const SCORE_WEIGHTS = { TIME_DECAY_FREQUENCY: 1.5, GAP: 1.0, PATTERN: 2.0 }; const allDigits=['0','1','2','3','4','5','6','7','8','9'];
     const weightedFrequencies = { tram: {}, chuc: {}, donvi: {} }; const lastSeenDay = { tram: {}, chuc: {}, donvi: {} }; const transitionCounts = { tram: {}, chuc: {}, donvi: {} };
@@ -49,12 +57,14 @@ const runMethodDeep30Day = (endDateIndex, days, groupedResults, prevDayGDB) => {
     ['tram','chuc','donvi'].forEach(pos => { const scores = allDigits.map(digit => { let score=0; score+=(weightedFrequencies[pos][digit]||0)*SCORE_WEIGHTS.TIME_DECAY_FREQUENCY; score+=(lastSeenDay[pos][digit]||0)*SCORE_WEIGHTS.GAP; if(prevDonvi && transitionCounts[pos][prevDonvi]?.[digit]){score+=transitionCounts[pos][prevDonvi][digit]*SCORE_WEIGHTS.PATTERN;} return {digit,score}; }); finalScores[pos] = scores.sort((a,b)=>b.score-a.score).slice(0,5).map(s=>s.digit); });
     return { topTram: finalScores.tram, topChuc: finalScores.chuc, topDonVi: finalScores.donvi };
 };
+
 const runMethodGDB14Day = (endDateIndex, days, groupedResults) => {
     const LOOKBACK_DAYS=14; const frequencies={tram:{},chuc:{},donvi:{}}; const startIndex=Math.max(0,endDateIndex-LOOKBACK_DAYS); const analysisDays=days.slice(startIndex,endDateIndex);
     analysisDays.forEach(day => { const dbResult = (groupedResults[day]||[]).find(r=>r.giai==='ĐB'); if(dbResult?.so){ const numStr=String(dbResult.so).slice(-3); if(numStr.length===3){const [tram,chuc,donvi]=numStr.split(''); if(tram)frequencies.tram[tram]=(frequencies.tram[tram]||0)+1; if(chuc)frequencies.chuc[chuc]=(frequencies.chuc[chuc]||0)+1; if(donvi)frequencies.donvi[donvi]=(frequencies.donvi[donvi]||0)+1;}} });
     const getTop5=(freqs)=>Object.entries(freqs).sort((a,b)=>b[1]-a[1]).slice(0,5).map(e=>e[0]);
     return {topTram:getTop5(frequencies.tram),topChuc:getTop5(frequencies.chuc),topDonVi:getTop5(frequencies.donvi)};
 };
+
 const runMethodTongCham = (endDateIndex, days, groupedResults) => {
     const LOOKBACK_DAYS=90; const allDigits=['0','1','2','3','4','5','6','7','8','9']; const sumFrequencies={}; const touchGaps={}; allDigits.forEach(d=>touchGaps[d]=LOOKBACK_DAYS);
     const startIndex=Math.max(0,endDateIndex-LOOKBACK_DAYS); const analysisDays=days.slice(startIndex,endDateIndex);
@@ -65,6 +75,7 @@ const runMethodTongCham = (endDateIndex, days, groupedResults) => {
     const getTop5=(counts)=>Object.entries(counts).sort((a,b)=>b[1]-a[1]).slice(0,5).map(e=>e[0]);
     return {topTram:getTop5(finalCounts.tram),topChuc:getTop5(finalCounts.chuc),topDonVi:getTop5(finalCounts.donvi)};
 };
+
 const runMethodBacNho = (endDateIndex, days, groupedResults, prevDayResults) => {
     const LOOKBACK_DAYS=90; const PRIZE_POSITIONS_TO_WATCH=['G1','G2a','G3a','G7a']; const correlations={};
     const startIndex=Math.max(0,endDateIndex-1-LOOKBACK_DAYS); const analysisDays=days.slice(startIndex,endDateIndex-1);
@@ -73,6 +84,7 @@ const runMethodBacNho = (endDateIndex, days, groupedResults, prevDayResults) => 
     const getTop5=(counts)=>Object.entries(counts).sort((a,b)=>b[1]-a[1]).slice(0,5).map(e=>e[0]);
     return {topTram:getTop5(finalCounts.tram),topChuc:getTop5(finalCounts.chuc),topDonVi:getTop5(finalCounts.donvi)};
 };
+
 const runMethodChanLe = (endDateIndex, days, groupedResults, prevDayGDB) => {
     const LOOKBACK_DAYS=90; if(!prevDayGDB?.chanle)return {topTram:[],topChuc:[],topDonVi:[]}; const prevDayPattern=prevDayGDB.chanle; const nextDayPatternFrequencies={};
     const startIndex=Math.max(0,endDateIndex-1-LOOKBACK_DAYS); const analysisDays=days.slice(startIndex,endDateIndex-1);
@@ -98,92 +110,88 @@ const runMetaLearner = (allMethodResults, trustScores) => {
 
 const getCombinations = (arr, k) => { const result=[]; const combine=(start,combo)=>{if(combo.length===k){result.push([...combo]);return;} for(let i=start;i<arr.length;i++){combo.push(arr[i]);combine(i+1,combo);combo.pop();}}; combine(0,[]); return result; };
 
-// <<< LOGIC MỚI, ĐÚNG THEO YÊU CẦU "TRÙNG 7 ĐẶC ĐIỂM" >>>
-const runGroupExclusionAnalysis = (prevPrediction, prevResult, todayMethods) => {
-    if (!prevPrediction || !prevResult?.so) return { potentialNumbers: [], excludedPatternCount: 0 };
-    
+const runGroupExclusionAnalysis = (prevPrediction, prevResult, todayMethods, exclusionConfidence) => {
+    if (!prevPrediction || !prevResult?.so) return { potentialNumbers: [], excludedPatternCount: 0, appliedThreshold: 9 };
     const methodGroups = getCombinations(ALL_METHODS, 3);
     const lastGDB = String(prevResult.so).slice(-3);
-    if (lastGDB.length < 3) return { potentialNumbers: [], excludedPatternCount: 0 };
+    if (lastGDB.length < 3) return { potentialNumbers: [], excludedPatternCount: 0, appliedThreshold: 9 };
 
     const lastDayPatterns = new Map();
     methodGroups.forEach((group, index) => {
         const pattern = group.flatMap(methodKey => {
             const p = prevPrediction.ketQuaChiTiet?.[methodKey];
             if (!p || !p.topTram || !p.topChuc || !p.topDonVi) return [0, 0, 0];
-            const tramMatch = p.topTram.includes(lastGDB[0]) ? 1 : 0;
-            const chucMatch = p.topChuc.includes(lastGDB[1]) ? 1 : 0;
-            const donviMatch = p.topDonVi.includes(lastGDB[2]) ? 1 : 0;
-            return [tramMatch, chucMatch, donviMatch];
+            return [ p.topTram.includes(lastGDB[0])?1:0, p.topChuc.includes(lastGDB[1])?1:0, p.topDonVi.includes(lastGDB[2])?1:0 ];
         });
-        lastDayPatterns.set(index, pattern); // Lưu dưới dạng mảng [1,0,0,0,0,0,1,1,0]
+        lastDayPatterns.set(index, pattern);
     });
     
+    let similarityThreshold = 9;
+    if (exclusionConfidence > 1.5) similarityThreshold = 7;
+    else if (exclusionConfidence > 0.8) similarityThreshold = 8;
+    
     let potentialNumbers = [];
-    const SIMILARITY_THRESHOLD = 7; // Ngưỡng loại bỏ: trùng từ 7/9 đặc điểm trở lên
-
     for (let i = 0; i < 1000; i++) {
         const num = String(i).padStart(3, '0');
         let isExcluded = false;
-
         for (let j = 0; j < methodGroups.length; j++) {
             const group = methodGroups[j];
-            const excludedPattern = lastDayPatterns.get(j); // Mảng 9-bit của ngày hôm qua
+            const excludedPattern = lastDayPatterns.get(j);
             if (excludedPattern === undefined) continue;
-
             const currentPattern = group.flatMap(methodKey => {
                 const p = todayMethods[methodKey];
-                const tramMatch = p.topTram.includes(num[0]) ? 1 : 0;
-                const chucMatch = p.topChuc.includes(num[1]) ? 1 : 0;
-                const donviMatch = p.topDonVi.includes(num[2]) ? 1 : 0;
-                return [tramMatch, chucMatch, donviMatch];
+                return [ p.topTram.includes(num[0])?1:0, p.topChuc.includes(num[1])?1:0, p.topDonVi.includes(num[2])?1:0 ];
             });
-
-            // Tính độ tương đồng
             let similarity = 0;
-            for (let k = 0; k < 9; k++) {
-                if (currentPattern[k] === excludedPattern[k]) {
-                    similarity++;
-                }
-            }
-            
-            // Nếu độ tương đồng cao -> loại bỏ
-            if (similarity >= SIMILARITY_THRESHOLD) {
-                isExcluded = true;
-                break;
-            }
+            for (let k = 0; k < 9; k++) { if (currentPattern[k] === excludedPattern[k]) similarity++; }
+            if (similarity >= similarityThreshold) { isExcluded = true; break; }
         }
-
-        if (!isExcluded) {
-            potentialNumbers.push(num);
-        }
+        if (!isExcluded) { potentialNumbers.push(num); }
     }
-
-    return { potentialNumbers: potentialNumbers.sort(), excludedPatternCount: methodGroups.length };
+    return { potentialNumbers: potentialNumbers.sort(), excludedPatternCount: methodGroups.length, appliedThreshold: similarityThreshold };
 };
-
 
 /* =================================================================
  * PHẦN 3: CÁC HÀM ĐIỀU PHỐI, HUẤN LUYỆN VÀ HỌC HỎI
  * ================================================================= */
 
 exports.trainHistoricalPredictions = async (req, res) => {
-    console.log('🔔 [trainHistoricalPredictions] Start (Full Suite)');
+    console.log('🔔 [trainHistoricalPredictions] Start (Full Suite w/ Learning)');
     try {
-        const results = await Result.find().sort({ 'ngay': 1 }).lean(); if (results.length < 1) return res.status(400).json({ message: `Không có dữ liệu.` });
-        const grouped = {}; results.forEach(r => { grouped[r.ngay] = grouped[r.ngay] || []; grouped[r.ngay].push(r); }); const days = Object.keys(grouped).sort((a,b)=>a.localeCompare(b,'vi',{numeric:true}));
+        const results = await Result.find().sort({ 'ngay': 1 }).lean();
+        if (results.length < 1) return res.status(400).json({ message: `Không có dữ liệu.` });
+        const grouped = {}; results.forEach(r => { grouped[r.ngay] = grouped[r.ngay] || []; grouped[r.ngay].push(r); });
+        const days = Object.keys(grouped).sort((a,b)=>a.localeCompare(b,'vi',{numeric:true}));
+        
+        let geModelState = await ModelState.findOne({ modelName: GE_MODEL_NAME });
+        if (!geModelState) geModelState = new ModelState({ modelName: GE_MODEL_NAME, confidenceScore: GE_INITIAL_CONFIDENCE });
+
         let created = 0;
         for (let i = 1; i < days.length; i++) {
             const prevDayStr = days[i-1]; const targetDayStr = days[i];
             const prevPrediction = await Prediction.findOne({ ngayDuDoan: prevDayStr }).lean();
             const trustScores = prevPrediction?.diemTinCay || {};
             ALL_METHODS.forEach(m => { if (trustScores[m] === undefined) trustScores[m] = INITIAL_TRUST_SCORE; });
-            const prevDayResults = grouped[prevDayStr] || []; const prevDayGDB = prevDayResults.find(r => r.giai === 'ĐB');
-            const allMethodResults = { [METHOD_GOC]: runMethodGoc(prevDayResults), [METHOD_DEEP_30_DAY]: runMethodDeep30Day(i, days, grouped, prevDayGDB), [METHOD_GDB_14_DAY]: runMethodGDB14Day(i, days, grouped), [METHOD_TONG_CHAM]: runMethodTongCham(i, days, grouped), [METHOD_BAC_NHO]: runMethodBacNho(i, days, grouped, prevDayResults), [METHOD_CHAN_LE]: runMethodChanLe(i, days, grouped, prevDayGDB), };
+            const prevDayResults = grouped[prevDayStr] || [];
+            const prevDayGDB = prevDayResults.find(r => r.giai === 'ĐB');
+            
+            const allMethodResults = {
+                [METHOD_GOC]: runMethodGoc(prevDayResults),
+                [METHOD_DEEP_30_DAY]: runMethodDeep30Day(i, days, grouped, prevDayGDB),
+                [METHOD_GDB_14_DAY]: runMethodGDB14Day(i, days, grouped),
+                [METHOD_TONG_CHAM]: runMethodTongCham(i, days, grouped),
+                [METHOD_BAC_NHO]: runMethodBacNho(i, days, grouped, prevDayResults),
+                [METHOD_CHAN_LE]: runMethodChanLe(i, days, grouped, prevDayGDB),
+            };
+
             const finalPrediction = runMetaLearner(allMethodResults, trustScores);
             const intersectionAnalysis = runIntersectionAnalysis(allMethodResults);
-            const groupExclusionAnalysis = runGroupExclusionAnalysis(prevPrediction, prevDayGDB, allMethodResults);
-            await Prediction.findOneAndUpdate({ ngayDuDoan: targetDayStr }, { ngayDuDoan: targetDayStr, ...finalPrediction, ketQuaChiTiet: allMethodResults, diemTinCay: trustScores, intersectionAnalysis, groupExclusionAnalysis, danhDauDaSo: false }, { upsert: true, new: true, setDefaultsOnInsert: true });
+            const groupExclusionAnalysis = runGroupExclusionAnalysis(prevPrediction, prevDayGDB, allMethodResults, geModelState.confidenceScore);
+
+            await Prediction.findOneAndUpdate({ ngayDuDoan: targetDayStr }, {
+                ngayDuDoan: targetDayStr, ...finalPrediction, ketQuaChiTiet: allMethodResults, diemTinCay: trustScores,
+                intersectionAnalysis, groupExclusionAnalysis, danhDauDaSo: false
+            }, { upsert: true, new: true, setDefaultsOnInsert: true });
             created++;
         }
         return res.json({ message: `Huấn luyện lịch sử hoàn tất, đã tạo/cập nhật ${created} bản ghi.`, created });
@@ -191,26 +199,96 @@ exports.trainHistoricalPredictions = async (req, res) => {
 };
 
 exports.trainPredictionForNextDay = async (req, res) => {
-    console.log('🔔 [trainPredictionForNextDay] Start (Full Suite)');
+    console.log('🔔 [trainPredictionForNextDay] Start (Full Suite w/ Learning)');
     try {
-        const allResults = await Result.find().sort({ 'ngay': 1 }).lean(); if (allResults.length < 1) return res.status(400).json({ message: `Không có dữ liệu.` });
+        const allResults = await Result.find().sort({ 'ngay': 1 }).lean();
+        if (allResults.length < 1) return res.status(400).json({ message: `Không có dữ liệu.` });
         const grouped = {}; allResults.forEach(r => { grouped[r.ngay] = grouped[r.ngay] || []; grouped[r.ngay].push(r); });
         const days = Object.keys(grouped).sort((a,b)=>a.localeCompare(b,'vi',{numeric:true}));
-        const latestDayStr = days[days.length - 1]; const latestDate = DateTime.fromFormat(latestDayStr, 'dd/MM/yyyy'); const nextDayStr = latestDate.plus({ days: 1 }).toFormat('dd/MM/yyyy');
+        const latestDayStr = days[days.length - 1]; const nextDayStr = DateTime.fromFormat(latestDayStr, 'dd/MM/yyyy').plus({ days: 1 }).toFormat('dd/MM/yyyy');
+        
         const prevPrediction = await Prediction.findOne({ ngayDuDoan: latestDayStr }).lean();
         const trustScores = prevPrediction?.diemTinCay || {};
         ALL_METHODS.forEach(m => { if (trustScores[m] === undefined) trustScores[m] = INITIAL_TRUST_SCORE; });
-        const prevDayResults = grouped[latestDayStr] || []; const prevDayGDB = prevDayResults.find(r => r.giai === 'ĐB');
-        const allMethodResults = { [METHOD_GOC]: runMethodGoc(prevDayResults), [METHOD_DEEP_30_DAY]: runMethodDeep30Day(days.length, days, grouped, prevDayGDB), [METHOD_GDB_14_DAY]: runMethodGDB14Day(days.length, days, grouped), [METHOD_TONG_CHAM]: runMethodTongCham(days.length, days, grouped), [METHOD_BAC_NHO]: runMethodBacNho(days.length, days, grouped, prevDayResults), [METHOD_CHAN_LE]: runMethodChanLe(days.length, days, grouped, prevDayGDB), };
+        let geModelState = await ModelState.findOne({ modelName: GE_MODEL_NAME });
+        if (!geModelState) geModelState = { confidenceScore: GE_INITIAL_CONFIDENCE };
+        
+        const prevDayResults = grouped[latestDayStr] || [];
+        const prevDayGDB = prevDayResults.find(r => r.giai === 'ĐB');
+        
+        const allMethodResults = {
+            [METHOD_GOC]: runMethodGoc(prevDayResults),
+            [METHOD_DEEP_30_DAY]: runMethodDeep30Day(days.length, days, grouped, prevDayGDB),
+            [METHOD_GDB_14_DAY]: runMethodGDB14Day(days.length, days, grouped),
+            [METHOD_TONG_CHAM]: runMethodTongCham(days.length, days, grouped),
+            [METHOD_BAC_NHO]: runMethodBacNho(days.length, days, grouped, prevDayResults),
+            [METHOD_CHAN_LE]: runMethodChanLe(days.length, days, grouped, prevDayGDB),
+        };
+
         const finalPrediction = runMetaLearner(allMethodResults, trustScores);
         const intersectionAnalysis = runIntersectionAnalysis(allMethodResults);
-        const groupExclusionAnalysis = runGroupExclusionAnalysis(prevPrediction, prevDayGDB, allMethodResults);
-        await Prediction.findOneAndUpdate({ ngayDuDoan: nextDayStr }, { ngayDuDoan: nextDayStr, ...finalPrediction, ketQuaChiTiet: allMethodResults, diemTinCay: trustScores, intersectionAnalysis, groupExclusionAnalysis, danhDauDaSo: false }, { upsert: true, new: true, setDefaultsOnInsert: true });
+        const groupExclusionAnalysis = runGroupExclusionAnalysis(prevPrediction, prevDayGDB, allMethodResults, geModelState.confidenceScore);
+
+        await Prediction.findOneAndUpdate({ ngayDuDoan: nextDayStr }, {
+            ngayDuDoan: nextDayStr, ...finalPrediction, ketQuaChiTiet: allMethodResults, diemTinCay: trustScores,
+            intersectionAnalysis, groupExclusionAnalysis, danhDauDaSo: false
+        }, { upsert: true, new: true, setDefaultsOnInsert: true });
+        
         return res.json({ message: 'Tạo dự đoán cho ngày tiếp theo thành công!', ngayDuDoan: nextDayStr });
     } catch (err) { console.error('Error in trainNextDay:', err); return res.status(500).json({ message: 'Lỗi server', error: err.toString() }); }
 };
 
-exports.updateTrustScores=async(req,res)=>{ console.log('🔔 [updateTrustScores] Meta-Learner is learning...'); try{const predsToCompare=await Prediction.find({danhDauDaSo:false}).lean(); if(!predsToCompare.length)return res.json({message:'Không có dự đoán nào cần cập nhật.'}); let updatedCount=0; for(const pred of predsToCompare){const actualResults=await Result.find({ngay:pred.ngayDuDoan}).lean(); const dbRec=actualResults.find(r=>r.giai==='ĐB'); if(!dbRec?.so)continue; const dbStr=String(dbRec.so).slice(-3); if(dbStr.length<3)continue; const actual={tram:dbStr[0],chuc:dbStr[1],donVi:dbStr[2]}; const prevDate=DateTime.fromFormat(pred.ngayDuDoan,'dd/MM/yyyy').minus({days:1}).toFormat('dd/MM/yyyy'); const prevPredDoc=await Prediction.findOne({ngayDuDoan:prevDate}); if(!prevPredDoc){await Prediction.updateOne({_id:pred._id},{danhDauDaSo:true}); continue;} for(const methodKey of ALL_METHODS){const methodResult=pred.ketQuaChiTiet?.[methodKey]; let currentScore=prevPredDoc.diemTinCay?.get(methodKey)||INITIAL_TRUST_SCORE; if(methodResult){let correctCount=0; if(methodResult.topTram?.includes(actual.tram))correctCount++; if(methodResult.topChuc?.includes(actual.chuc))correctCount++; if(methodResult.topDonVi?.includes(actual.donVi))correctCount++; if(correctCount>0){currentScore+=correctCount*TRUST_SCORE_INCREMENT;}else{currentScore-=TRUST_SCORE_DECREMENT;} currentScore=Math.max(MIN_TRUST_SCORE,Math.min(MAX_TRUST_SCORE,currentScore)); if(!prevPredDoc.diemTinCay)prevPredDoc.diemTinCay=new Map(); prevPredDoc.diemTinCay.set(methodKey,currentScore);}} await prevPredDoc.save(); await Prediction.updateOne({_id:pred._id},{danhDauDaSo:true}); updatedCount++;} return res.json({message:`Siêu Mô Hình đã học hỏi xong. Đã cập nhật ${updatedCount} bản ghi.`,updatedCount});}catch(err){console.error('Error in updateTrustScores:',err);return res.status(500).json({message:'Lỗi server',error:err.toString()});}};
+exports.updateTrustScores = async (req, res) => {
+    console.log('🔔 [updateTrustScores] Meta-Learner is learning...');
+    try {
+        const predsToCompare = await Prediction.find({ danhDauDaSo: false }).lean();
+        if (!predsToCompare.length) return res.json({ message: 'Không có dự đoán nào cần cập nhật.' });
+        
+        let geModelState = await ModelState.findOne({ modelName: GE_MODEL_NAME });
+        if (!geModelState) geModelState = new ModelState({ modelName: GE_MODEL_NAME });
+        
+        let updatedCount = 0;
+        for (const pred of predsToCompare) {
+            const actualResults = await Result.find({ ngay: pred.ngayDuDoan }).lean(); const dbRec = actualResults.find(r => r.giai === 'ĐB');
+            if (!dbRec?.so) continue;
+            const actualGDB = String(dbRec.so).slice(-3); if (actualGDB.length < 3) continue; const actual = { tram: actualGDB[0], chuc: actualGDB[1], donVi: actualGDB[2] };
+            
+            const prevDate = DateTime.fromFormat(pred.ngayDuDoan, 'dd/MM/yyyy').minus({ days: 1 }).toFormat('dd/MM/yyyy');
+            const prevPredDoc = await Prediction.findOne({ ngayDuDoan: prevDate });
+
+            if (prevPredDoc) {
+                for (const methodKey of ALL_METHODS) {
+                    const methodResult = pred.ketQuaChiTiet?.[methodKey]; let currentScore = prevPredDoc.diemTinCay?.get(methodKey) || INITIAL_TRUST_SCORE;
+                    if (methodResult) {
+                        let correctCount = 0;
+                        if (methodResult.topTram?.includes(actual.tram)) correctCount++; if (methodResult.topChuc?.includes(actual.chuc)) correctCount++; if (methodResult.topDonVi?.includes(actual.donVi)) correctCount++;
+                        if (correctCount > 0) { currentScore += correctCount * TRUST_SCORE_INCREMENT; } else { currentScore -= TRUST_SCORE_DECREMENT; }
+                        currentScore = Math.max(MIN_TRUST_SCORE, Math.min(MAX_TRUST_SCORE, currentScore));
+                        if(!prevPredDoc.diemTinCay) prevPredDoc.diemTinCay = new Map();
+                        prevPredDoc.diemTinCay.set(methodKey, currentScore);
+                    }
+                }
+                await prevPredDoc.save();
+            }
+            
+            const geAnalysis = pred.groupExclusionAnalysis;
+            if (geAnalysis?.potentialNumbers) {
+                const isCorrect = geAnalysis.potentialNumbers.includes(actualGDB);
+                if (isCorrect) { geModelState.confidenceScore += GE_CONFIDENCE_INCREMENT; } else { geModelState.confidenceScore -= GE_CONFIDENCE_DECREMENT; }
+                geModelState.confidenceScore = Math.max(GE_MIN_CONFIDENCE, Math.min(GE_MAX_CONFIDENCE, geModelState.confidenceScore));
+            }
+            
+            await Prediction.updateOne({ _id: pred._id }, { danhDauDaSo: true });
+            updatedCount++;
+        }
+        await geModelState.save();
+        return res.json({ message: `Siêu Mô Hình đã học hỏi xong. Đã cập nhật ${updatedCount} bản ghi.`, updatedCount });
+    } catch (err) { console.error('Error in updateTrustScores:', err); return res.status(500).json({ message: 'Lỗi server', error: err.toString() }); }
+};
+
+/* =================================================================
+ * PHẦN 5: CÁC HÀM TIỆN ÍCH CÒN LẠI
+ * ================================================================= */
 exports.getAllResults=async(req,res)=>{try{const results=await Result.find().sort({'ngay':-1,'giai':1}); res.json(results);}catch(err){res.status(500).json({message:'Lỗi server',error:err.toString()});}};
 exports.updateResults=async(req,res)=>{console.log('🔹 [Backend] Request POST /api/xs/update'); try{const data=await crawlService.extractXsData(); let insertedCount=0; for(const item of data){const exists=await Result.findOne({ngay:item.ngay,giai:item.giai}); if(!exists){await Result.create(item); insertedCount++;}} res.json({message:`Cập nhật xong, thêm ${insertedCount} kết quả mới`});}catch(err){console.error(err);res.status(500).json({message:'Lỗi server khi cập nhật dữ liệu',error:err.toString()});}};
 exports.getPredictionByDate=async(req,res)=>{try{const{date}=req.query; if(!date)return res.status(400).json({message:'Thiếu param date'}); const pred=await Prediction.findOne({ngayDuDoan:date}).lean(); if(!pred)return res.status(404).json({message:'Không tìm thấy prediction cho ngày này'}); return res.json(pred);}catch(err){return res.status(500).json({message:'Lỗi server',error:err.toString()});}};
