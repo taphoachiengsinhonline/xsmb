@@ -82,6 +82,8 @@ const runMethodChanLe = (endDateIndex, days, groupedResults, prevDayGDB) => {
     return {topTram:getDigits(p1),topChuc:getDigits(p2),topDonVi:getDigits(p3)};
 };
 
+const dateKey = (s) => { if (!s || typeof s !== 'string') return ''; const parts = s.split('/'); return parts.length !== 3 ? s : `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`; };
+
 /* =================================================================
  * PHẦN 2: CÁC MODULE PHÂN TÍCH TỔNG HỢP
  * ================================================================= */
@@ -172,6 +174,8 @@ exports.trainHistoricalPredictions = async (req, res) => {
     try {
         const results = await Result.find().sort({ 'ngay': 1 }).lean(); if (results.length < 1) return res.status(400).json({ message: `Không có dữ liệu.` });
         const grouped = {}; results.forEach(r => { grouped[r.ngay] = grouped[r.ngay] || []; grouped[r.ngay].push(r); }); const days = Object.keys(grouped).sort((a,b)=>a.localeCompare(b,'vi',{numeric:true}));
+        const days = Object.keys(grouped).sort((a, b) => dateKey(a).localeCompare(dateKey(b)));
+        
         let created = 0;
         for (let i = 1; i < days.length; i++) {
             const prevDayStr = days[i-1]; const targetDayStr = days[i];
@@ -195,8 +199,9 @@ exports.trainPredictionForNextDay = async (req, res) => {
     try {
         const allResults = await Result.find().sort({ 'ngay': 1 }).lean(); if (allResults.length < 1) return res.status(400).json({ message: `Không có dữ liệu.` });
         const grouped = {}; allResults.forEach(r => { grouped[r.ngay] = grouped[r.ngay] || []; grouped[r.ngay].push(r); });
-        const days = Object.keys(grouped).sort((a,b)=>a.localeCompare(b,'vi',{numeric:true}));
-        const latestDayStr = days[days.length - 1]; const latestDate = DateTime.fromFormat(latestDayStr, 'dd/MM/yyyy'); const nextDayStr = latestDate.plus({ days: 1 }).toFormat('dd/MM/yyyy');
+        const days = Object.keys(grouped).sort((a, b) => dateKey(a).localeCompare(dateKey(b)));
+        const latestDayStr = days[days.length - 1]; 
+        const nextDayStr = DateTime.fromFormat(latestDayStr, 'dd/MM/yyyy').plus({ days: 1 }).toFormat('dd/MM/yyyy');
         const prevPrediction = await Prediction.findOne({ ngayDuDoan: latestDayStr }).lean();
         const trustScores = prevPrediction?.diemTinCay || {};
         ALL_METHODS.forEach(m => { if (trustScores[m] === undefined) trustScores[m] = INITIAL_TRUST_SCORE; });
@@ -217,3 +222,4 @@ exports.getPredictionByDate=async(req,res)=>{try{const{date}=req.query; if(!date
 exports.getLatestPredictionDate=async(req,res)=>{try{const latestPrediction=await Prediction.findOne().sort({ngayDuDoan:-1}).collation({locale:'vi',numericOrdering:true}).lean(); if(!latestPrediction)return res.status(404).json({message:'Không tìm thấy bản ghi dự đoán nào.'}); res.json({latestDate:latestPrediction.ngayDuDoan});}catch(err){res.status(500).json({message:'Lỗi server',error:err.toString()});}};
 exports.getAllPredictions=async(req,res)=>{try{const predictions=await Prediction.find({}).lean(); res.json(predictions);}catch(err){res.status(500).json({message:'Lỗi server',error:err.toString()});}};
 exports.updatePredictionWeights=(req,res)=>res.status(404).json({message:'API đã lỗi thời, sử dụng /update-trust-scores'});
+
