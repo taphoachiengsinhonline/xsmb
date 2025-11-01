@@ -1,6 +1,6 @@
 // file: controllers/nnController.js
 const nnService = require('../services/neuralNetworkService');
-
+const NNPrediction = require('../models/NNPrediction');
 exports.trainHistorical = async (req, res) => {
     try {
         const result = await nnService.runNNHistoricalTraining();
