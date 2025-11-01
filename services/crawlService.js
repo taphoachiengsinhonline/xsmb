@@ -26,9 +26,7 @@ const prizeSchema = new mongoose.Schema({
   chanle: String,
 }, { versionKey: false });
 
-prizeSchema.index({ ngay: 1, giai: 1 }, { unique: true });
-const Prize = mongoose.model('Prize', prizeSchema);
-
+const Result = require('../models/Result');
 // ---------- Helper: tính C/L từ 3 số ----------
 function getChanLe(numberStr) {
   // numberStr expected exactly 3 digits
@@ -160,12 +158,8 @@ async function saveToDb(data) {
   let inserted = 0;
   for (const item of data) {
     try {
-      // đảm bảo item.chanle luôn có giá trị (tính lại để an toàn)
-      if (item.basocuoi && item.basocuoi.length === 3 && !String(item.chanle).trim()) {
-        item.chanle = getChanLe(item.basocuoi);
-      }
-
-      await Prize.updateOne(
+      // SỬA: Prize thành Result
+      await Result.updateOne(
         { ngay: item.ngay, giai: item.giai },
         { $setOnInsert: item },
         { upsert: true }
@@ -223,3 +217,4 @@ module.exports = {
 if (require.main === module) {
   runOnceAndExit();
 }
+
