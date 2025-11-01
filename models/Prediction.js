@@ -2,52 +2,28 @@
 
 const mongoose = require('mongoose');
 
-// Schema cho chi tiết của riêng "Phương pháp Gốc" để học hỏi weight nội bộ
-const chiTietGocSchema = new mongoose.Schema({
-  number: String,
-  positionInPrize: Number,
-  tram: String,
-  chuc: String,
-  donvi: String,
-  weight: { type: Number, default: 1 }
+const chiTietGocSchema = new mongoose.Schema({ number: String, positionInPrize: Number, tram: String, chuc: String, donvi: String, weight: { type: Number, default: 1 } }, { _id: false });
+const ketQuaPhuongPhapSchema = new mongoose.Schema({ topTram: [String], topChuc: [String], topDonVi: [String], chiTietGoc: [chiTietGocSchema] }, { _id: false });
+const consensusAnalysisSchema = new mongoose.Schema({ predictedWinCount: Number, potentialNumbers: [String] }, { _id: false });
+
+// --- Schema MỚI cho phương pháp Loại trừ Nhóm ---
+const groupExclusionAnalysisSchema = new mongoose.Schema({
+  potentialNumbers: [String], // Các bộ số sống sót sau khi lọc
+  excludedPatternCount: Number, // Đã loại bỏ bao nhiêu mẫu hình
 }, { _id: false });
 
-// Schema cho kết quả dự đoán của một phương pháp "chuyên gia"
-const ketQuaPhuongPhapSchema = new mongoose.Schema({
-  topTram: [String],
-  topChuc: [String],
-  topDonVi: [String],
-  chiTietGoc: [chiTietGocSchema] 
-}, { _id: false });
-
-// Schema chính, mỗi document là một ngày dự đoán
 const predictionSchema = new mongoose.Schema({
   ngayDuDoan: { type: String, required: true, unique: true },
-
-  // --- NÂNG CẤP LỚN ---
-  // 1. Kết quả dự đoán cuối cùng của Siêu Mô Hình
   topTram: [String],
   topChuc: [String],
   topDonVi: [String],
-  
-  // 2. Kết quả chi tiết của từng phương pháp "chuyên gia" để tham khảo
-  ketQuaChiTiet: {
-    type: Map,
-    of: ketQuaPhuongPhapSchema
-  },
-  
-  // 3. Điểm tin cậy của các phương pháp TẠI THỜI ĐIỂM dự đoán
-  diemTinCay: {
-    type: Map,
-    of: Number
-  },
+  ketQuaChiTiet: { type: Map, of: ketQuaPhuongPhapSchema },
+  diemTinCay: { type: Map, of: Number },
+  intersectionAnalysis: { tram: mongoose.Schema.Types.Mixed, chuc: mongoose.Schema.Types.Mixed, donvi: mongoose.Schema.Types.Mixed },
+  consensusAnalysis: consensusAnalysisSchema,
 
-  // 4. (MỚI) Kết quả phân tích các số trùng nhau
-  intersectionAnalysis: {
-    tram: mongoose.Schema.Types.Mixed,
-    chuc: mongoose.Schema.Types.Mixed,
-    donvi: mongoose.Schema.Types.Mixed,
-  },
+  // --- TRƯỜNG MỚI ---
+  groupExclusionAnalysis: groupExclusionAnalysisSchema,
 
   danhDauDaSo: { type: Boolean, default: false },
   createdAt: { type: Date, default: Date.now }
