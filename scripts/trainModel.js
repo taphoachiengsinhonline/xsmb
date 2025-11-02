@@ -1,6 +1,6 @@
 // scripts/trainModel.js
 const mongoose = require('mongoose');
-const Prize = require('../models/Result'); // giả sử file prize.js là schema
+const Result = require('../models/Result'); // giả sử file prize.js là schema
 const { DateTime } = require('luxon');
 
 const CL_PATTERNS = ['CCC','CCL','CLC','CLL','LLC','LLL','LCC','LCL'];
