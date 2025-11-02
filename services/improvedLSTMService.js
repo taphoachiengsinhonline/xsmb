@@ -17,36 +17,46 @@ class ImprovedLSTMService {
     this.model = null;
   }
 
-  async buildModel() {
-    const model = tf.sequential({
-      layers: [
-        tf.layers.lstm({
-          units: 128,
-          returnSequences: true,
-          inputShape: [SEQUENCE_LENGTH, INPUT_NODES]
-        }),
-        tf.layers.dropout({ rate: 0.2 }),
-        tf.layers.lstm({
-          units: 64,
-          returnSequences: false
-        }),
-        tf.layers.dropout({ rate: 0.2 }),
-        tf.layers.dense({
-          units: OUTPUT_NODES,
-          activation: 'sigmoid'
-        })
-      ]
-    });
+  async buildModel(trainingData) {
+    if (!trainingData || trainingData.length === 0) {
+        throw new Error('Không có dữ liệu training để xác định kích thước model');
+    }
 
-    model.compile({
-      optimizer: 'adam',
-      loss: 'binaryCrossentropy',
-      metrics: ['accuracy']
-    });
+    // TÍNH KÍCH THƯỚC FEATURE VECTOR TỪ DỮ LIỆU THỰC TẾ
+    const sampleInput = trainingData[0].inputSequence[0];
+    if (!sampleInput || sampleInput.length === 0) {
+        throw new Error('Invalid sample input'); // Thêm check để tránh crash nếu sampleInput rỗng
+    }
+    this.inputNodes = sampleInput.length;
+    const outputNodes = trainingData[0].targetArray.length;
 
-    this.model = model;
-    return model;
-  }
+    console.log(`🏗️ Building LSTM model với ${this.inputNodes} input nodes, ${outputNodes} output nodes`);
+    
+    this.model = tf.sequential({
+        layers: [
+            tf.layers.lstm({
+                units: 128,
+                returnSequences: true,
+                inputShape: [SEQUENCE_LENGTH, this.inputNodes], // DÙNG this.inputNodes ĐỘNG
+                dropout: 0.2,
+                recurrentDropout: 0.2
+            }),
+            tf.layers.lstm({
+                units: 64,
+                dropout: 0.2,
+                recurrentDropout: 0.2
+            }),
+            tf.layers.dense({
+                units: 32,
+                activation: 'relu'
+            }),
+            tf.layers.dropout({ rate: 0.3 }),
+            tf.layers.dense({
+                units: outputNodes, // DÙNG outputNodes ĐỘNG
+                activation: 'sigmoid'
+            })
+        ]
+    });
 
   async trainModel(trainingData) {
     const { inputs, targets } = trainingData;
