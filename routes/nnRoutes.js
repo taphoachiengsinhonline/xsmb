@@ -2,15 +2,18 @@
 const express = require('express');
 const router = express.Router();
 const nnController = require('../controllers/nnController');
+const quantumController = require('../controllers/quantumController'); // THÊM
 
-// Huấn luyện AI Tự học với toàn bộ lịch sử
+// Routes cho Neural Network cũ (giữ nguyên)
 router.post('/train-historical', nnController.trainHistorical);
-
-// Dạy cho AI Tự học từ kết quả mới nhất
 router.post('/learn', nnController.learn);
-
-// Tạo dự đoán cho ngày tiếp theo bằng AI Tự học
 router.post('/predict-next-day', nnController.predictNextDay);
 router.get('/predictions', nnController.getAllPredictions);
+
+// Routes MỚI cho Quantum-LSTM
+router.post('/quantum/train-historical', quantumController.trainHistorical);
+router.post('/quantum/learn', quantumController.learn);
+router.post('/quantum/predict-next-day', quantumController.predictNextDay);
+router.get('/quantum/predictions', quantumController.getQuantumPredictions);
 
 module.exports = router;
