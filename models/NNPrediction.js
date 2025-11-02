@@ -11,4 +11,4 @@ const nnPredictionSchema = new mongoose.Schema({
   danhDauDaSo: { type: Boolean, default: false },
 }, { versionKey: false, timestamps: true });
 
-module.exports = mongoose.model('NNPrediction', nnPredictionSchema);
+module.exports = mongoose.model('NNPrediction', nnPredictionSchema);"
