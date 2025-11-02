@@ -18,48 +18,7 @@ class TensorFlowService {
     this.featureService = new FeatureEngineeringService();
     this.inputNodes = 0;
   }
-precisionAt5(yTrue, yPred) {
-    const trueLabels = tf.argMax(yTrue, -1).dataSync();
-    const predTop5 = tf.topk(yPred, 5).indices.dataSync();
-    
-    let correct = 0;
-    for (let i = 0; i < trueLabels.length; i++) {
-      if (predTop5.slice(i * 5, (i + 1) * 5).includes(trueLabels[i])) {
-        correct++;
-      }
-    }
-    
-    return correct / trueLabels.length;
-  }
 
-    async computeConfusionMatrix(testData, model) {
-    const predictions = [];
-    const truths = [];
-
-    for (const data of testData) {
-      const inputTensor = tf.tensor3d([data.inputSequence], [1, SEQUENCE_LENGTH, this.inputNodes]);
-      const pred = model.predict(inputTensor);
-      const predData = await pred.data();
-      predictions.push(predData);
-      truths.push(data.targetArray);
-      inputTensor.dispose();
-      pred.dispose();
-    }
-
-    // Confusion matrix cho 50 classes (10 digits x 5 positions)
-    const cm = Array(OUTPUT_NODES).fill(null).map(() => Array(OUTPUT_NODES).fill(0));
-    
-    for (let i = 0; i < truths.length; i++) {
-      const truth = truths[i];
-      const pred = predictions[i];
-      const trueClass = tf.argMax(tf.tensor(truth)).dataSync()[0];
-      const predClass = tf.argMax(tf.tensor(pred)).dataSync()[0];
-      cm[trueClass][predClass]++;
-    }
-
-    console.log('Confusion Matrix (simplified log):', cm.slice(0, 10)); // Log top 10 để tránh spam
-    return cm;
-  }
   async buildModel(inputNodes) {
     this.inputNodes = inputNodes;
     this.model = tf.sequential({
@@ -158,66 +117,45 @@ precisionAt5(yTrue, yPred) {
   }
 
   async trainModel(trainingSplit, params = { lr: 0.001, units: 128, dropout: 0.2 }) {
-  const { trainData, valData, testData } = trainingSplit; // Sử dụng testData cho eval
+    const { trainData, valData } = trainingSplit;
 
-  const classWeights = this.calculateClassWeights(trainData.map(d => d.targetArray));
+    const classWeights = this.calculateClassWeights(trainData.map(d => d.targetArray));
 
-  await this.buildModelWithParams(this.inputNodes, params.units, params.dropout);
+    await this.buildModelWithParams(this.inputNodes, params.units, params.dropout);
 
-  const trainInputs = trainData.map(d => d.inputSequence);
-  const trainTargets = trainData.map(d => d.targetArray);
-  const valInputs = valData.map(d => d.inputSequence);
-  const valTargets = valData.map(d => d.targetArray);
+    const trainInputs = trainData.map(d => d.inputSequence);
+    const trainTargets = trainData.map(d => d.targetArray);
+    const valInputs = valData.map(d => d.inputSequence);
+    const valTargets = valData.map(d => d.targetArray);
 
-  const trainInputTensor = tf.tensor3d(trainInputs);
-  const trainTargetTensor = tf.tensor2d(trainTargets);
-  const valInputTensor = tf.tensor3d(valInputs);
-  const valTargetTensor = tf.tensor2d(valTargets);
+    const trainInputTensor = tf.tensor3d(trainInputs);
+    const trainTargetTensor = tf.tensor2d(trainTargets);
+    const valInputTensor = tf.tensor3d(valInputs);
+    const valTargetTensor = tf.tensor2d(valTargets);
 
-  // TensorBoard callback (chỉ Node.js, log vào folder ./logs)
-  const tensorBoard = tf.node.tensorBoard('./logs');
-
-  const history = await this.model.fit(trainInputTensor, trainTargetTensor, {
-    epochs: EPOCHS,
-    batchSize: BATCH_SIZE,
-    validationData: [valInputTensor, valTargetTensor],
-    classWeight: classWeights,
-    callbacks: [
-      tensorBoard,
-      {
+    const history = await this.model.fit(trainInputTensor, trainTargetTensor, {
+      epochs: EPOCHS,
+      batchSize: BATCH_SIZE,
+      validationData: [valInputTensor, valTargetTensor],
+      classWeight: classWeights,
+      callbacks: {
         onEpochEnd: (epoch, logs) => {
           console.log(`Epoch ${epoch + 1}: Loss = ${logs.loss?.toFixed(4)}, Val Loss = ${logs.val_loss?.toFixed(4)}`);
+        },
+        onTrainEnd: () => {
+          console.log('Training ended with early stopping if applicable');
         }
-      }
-    ],
-    optimizer: tf.train.adam(params.lr)
-  });
+      },
+      optimizer: tf.train.adam(params.lr)
+    });
 
-  // Post-training eval: Precision@5 và confusion matrix trên test set
-  if (testData.length > 0) {
-    const testInputs = testData.map(d => d.inputSequence);
-    const testInputTensor = tf.tensor3d(testInputs);
-    const testPreds = this.model.predict(testInputTensor);
-    const testPredData = await testPreds.data();
+    trainInputTensor.dispose();
+    trainTargetTensor.dispose();
+    valInputTensor.dispose();
+    valTargetTensor.dispose();
 
-    const testTrue = tf.tensor2d(testData.map(d => d.targetArray));
-    const p5 = this.precisionAt5(testTrue, tf.tensor2d(testPredData));
-    console.log(`Precision@5 on test set: ${p5.toFixed(4)}`);
-
-    await this.computeConfusionMatrix(testData, this.model);
-
-    testInputTensor.dispose();
-    testPreds.dispose();
-    testTrue.dispose();
+    return history;
   }
-
-  trainInputTensor.dispose();
-  trainTargetTensor.dispose();
-  valInputTensor.dispose();
-  valTargetTensor.dispose();
-
-  return history;
-}
 
   buildModelWithParams(inputNodes, units, dropout) {
     this.inputNodes = inputNodes;
