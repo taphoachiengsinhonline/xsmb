@@ -1,14 +1,5 @@
-// file: controllers/nnController.js (updated getAllPredictions)
-
 const TensorFlowService = require('../services/tensorflowService');
 const NNPrediction = require('../models/NNPrediction');
-
-// Helper function to sort dates correctly (copied from xsController for consistency)
-function dateKey(s) { 
-  if (!s || typeof s !== 'string') return ''; 
-  const parts = s.split('/'); 
-  return parts.length !== 3 ? s : `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`; 
-}
 
 const tfService = new TensorFlowService();
 
@@ -44,12 +35,7 @@ exports.learn = async (req, res) => {
 
 exports.getAllPredictions = async (req, res) => {
     try {
-        // Fetch all predictions without DB sort (to avoid string sort issues)
-        const predictions = await NNPrediction.find().lean();
-        
-        // Custom sort in JS: descending by dateKey (newest first)
-        predictions.sort((a, b) => dateKey(b.ngayDuDoan).localeCompare(dateKey(a.ngayDuDoan)));
-        
+        const predictions = await NNPrediction.find().sort({ 'ngayDuDoan': -1 }).lean();
         res.json(predictions);
     } catch (err) {
         console.error('Error in nn getAllPredictions controller:', err);
