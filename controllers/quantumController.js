@@ -4,13 +4,26 @@ const quantumService = new QuantumLSTMService();
 
 exports.trainHistorical = async (req, res) => {
     try {
+        console.log('🔔 [Quantum-LSTM] Starting Training (Simple Mode)...');
+        
+        const quantumService = new QuantumLSTMService();
+        
+        // DÙNG MODEL ĐƠN GIẢN để test trước
         const result = await quantumService.runHistoricalTraining();
-        res.json(result);
+        
+        res.json({
+            ...result,
+            note: "Đang chạy phiên bản đơn giản hóa để test"
+        });
+        
     } catch (err) {
         console.error('Error in Quantum-LSTM trainHistorical:', err);
+        
+        // HIỂN THỊ LỖI CHI TIẾT HƠN
         res.status(500).json({ 
-            message: err.message || 'Lỗi server trong Quantum-LSTM',
-            error: err.toString()
+            message: 'Lỗi Quantum-LSTM training',
+            error: err.message,
+            stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
         });
     }
 };
