@@ -1,3 +1,5 @@
+// file: services/tensorflowService.js
+
 const tf = require('@tensorflow/tfjs-node');
 const Result = require('../models/Result');
 const NNPrediction = require('../models/NNPrediction');
@@ -20,114 +22,90 @@ class TensorFlowService {
   }
 
   async buildModel(inputNodes) {
-  this.inputNodes = inputNodes;
-  this.model = tf.sequential({
-    layers: [
-      // Thêm Bidirectional LSTM cho layer đầu tiên
-      tf.layers.bidirectional({
-        layer: tf.layers.lstm({
-          units: 128,
-          returnSequences: true,
-          inputShape: [SEQUENCE_LENGTH, inputNodes]
+    this.inputNodes = inputNodes;
+    this.model = tf.sequential({
+      layers: [
+        // Thêm Bidirectional LSTM cho layer đầu tiên
+        tf.layers.bidirectional({
+          inputShape: [SEQUENCE_LENGTH, inputNodes],  // Explicit inputShape here
+          layer: tf.layers.lstm({
+            units: 128,
+            returnSequences: true
+          }),
+          mergeMode: 'concat' // Kết hợp output từ forward và backward
         }),
-        mergeMode: 'concat' // Kết hợp output từ forward và backward
-      }),
-      tf.layers.dropout({ rate: 0.2 }),
-      
-      // Thêm Multi-Head Attention để focus vào các phần quan trọng của sequence
-      tf.layers.multiHeadAttention({
-        numHeads: 4,       // Số heads
-        headSize: 32,      // Kích thước mỗi head
-        outputSize: 128,   // Output size
-        useBias: true
-      }),
-      
-      tf.layers.lstm({
-        units: 64,
-        returnSequences: false
-      }),
-      tf.layers.dropout({ rate: 0.2 }),
-      tf.layers.dense({
-        units: 32,
-        activation: 'relu'
-      }),
-      tf.layers.dense({
-        units: OUTPUT_NODES,
-        activation: 'sigmoid'
-      })
-    ]
-  });
+        tf.layers.dropout({ rate: 0.2 }),
+        
+        // Thêm Multi-Head Attention để focus vào các phần quan trọng của sequence
+        tf.layers.multiHeadAttention({
+          numHeads: 4,       // Số heads
+          keyDim: 32,        // Kích thước key (thay headSize bằng keyDim cho tfjs)
+          outputShape: 128,  // Output shape
+          useBias: true
+        }),
+        
+        tf.layers.lstm({
+          units: 64,
+          returnSequences: false
+        }),
+        tf.layers.dropout({ rate: 0.2 }),
+        tf.layers.dense({
+          units: 32,
+          activation: 'relu'
+        }),
+        tf.layers.dense({
+          units: OUTPUT_NODES,
+          activation: 'sigmoid'
+        })
+      ]
+    });
 
-  this.model.compile({
-    optimizer: tf.train.adam(0.001),
-    loss: 'binaryCrossentropy',
-    metrics: ['accuracy']
-  });
+    this.model.compile({
+      optimizer: tf.train.adam(0.001),
+      loss: 'binaryCrossentropy',
+      metrics: ['accuracy']
+    });
 
-  console.log('✅ TensorFlow LSTM model built with Bidirectional and Attention mechanisms');
-  return this.model;
-}
+    console.log('✅ TensorFlow LSTM model built with Bidirectional and Attention mechanisms');
+    return this.model;
+  }
 
   async trainModel(trainingSplit) {
-  const { trainData, valData } = trainingSplit;
+    const { trainData, valData } = trainingSplit;
 
-  const classWeights = this.calculateClassWeights(trainData.map(d => d.targetArray));
+    const classWeights = this.calculateClassWeights(trainData.map(d => d.targetArray));
 
-  const trainInputs = trainData.map(d => d.inputSequence);
-  const trainTargets = trainData.map(d => d.targetArray);
-  const valInputs = valData.map(d => d.inputSequence);
-  const valTargets = valData.map(d => d.targetArray);
+    const trainInputs = trainData.map(d => d.inputSequence);
+    const trainTargets = trainData.map(d => d.targetArray);
+    const valInputs = valData.map(d => d.inputSequence);
+    const valTargets = valData.map(d => d.targetArray);
 
-  const trainInputTensor = tf.tensor3d(trainInputs);
-  const trainTargetTensor = tf.tensor2d(trainTargets);
-  const valInputTensor = tf.tensor3d(valInputs);
-  const valTargetTensor = tf.tensor2d(valTargets);
+    const trainInputTensor = tf.tensor3d(trainInputs);
+    const trainTargetTensor = tf.tensor2d(trainTargets);
+    const valInputTensor = tf.tensor3d(valInputs);
+    const valTargetTensor = tf.tensor2d(valTargets);
 
-  const k = 5;
-  const foldSize = Math.floor(trainInputs.length / k);
-  let histories = [];
-
-  for (let fold = 0; fold < k; fold++) {
-    const foldStart = fold * foldSize;
-    const foldEnd = (fold + 1) * foldSize;
-
-    const foldValInputs = trainInputs.slice(foldStart, foldEnd);
-    const foldValTargets = trainTargets.slice(foldStart, foldEnd);
-    const foldTrainInputs = trainInputs.slice(0, foldStart).concat(trainInputs.slice(foldEnd));
-    const foldTrainTargets = trainTargets.slice(0, foldStart).concat(trainTargets.slice(foldEnd));
-
-    const foldTrainTensorX = tf.tensor3d(foldTrainInputs);
-    const foldTrainTensorY = tf.tensor2d(foldTrainTargets);
-    const foldValTensorX = tf.tensor3d(foldValInputs);
-    const foldValTensorY = tf.tensor2d(foldValTargets);
-
-    const history = await this.model.fit(foldTrainTensorX, foldTrainTensorY, {
+    // Standard training without broken CV loop
+    const history = await this.model.fit(trainInputTensor, trainTargetTensor, {
       epochs: EPOCHS,
       batchSize: BATCH_SIZE,
-      validationData: [foldValTensorX, foldValTensorY],
+      validationData: [valInputTensor, valTargetTensor],
       classWeight: classWeights,
       callbacks: {
         onEpochEnd: (epoch, logs) => {
-          console.log(`Fold ${fold + 1} - Epoch ${epoch + 1}: Loss = ${logs.loss.toFixed(4)}`);
+          console.log(`Epoch ${epoch + 1}: Loss = ${logs.loss?.toFixed(4)}, Val Loss = ${logs.val_loss?.toFixed(4)}`);
         }
       }
     });
 
-    histories.push(history);
+    // Dispose tensors after training
+    trainInputTensor.dispose();
+    trainTargetTensor.dispose();
+    valInputTensor.dispose();
+    valTargetTensor.dispose();
 
-    foldTrainTensorX.dispose();
-    foldTrainTensorY.dispose();
-    foldValTensorX.dispose();
-    foldValTensorY.dispose();
+    return history;
   }
-
-  trainInputTensor.dispose();
-  trainTargetTensor.dispose();
-  valInputTensor.dispose();
-  valTargetTensor.dispose();
-
-  return histories;
-}
 
   async predict(inputSequence) {
     const inputTensor = tf.tensor3d([inputSequence], [1, SEQUENCE_LENGTH, this.inputNodes]);
@@ -150,57 +128,57 @@ class TensorFlowService {
   }
 
   async prepareTrainingData() {
-  const results = await Result.find().sort({ 'ngay': 1 }).lean();
-  if (results.length < SEQUENCE_LENGTH + 1) {
-    throw new Error(`Không đủ dữ liệu. Cần ít nhất ${SEQUENCE_LENGTH + 1} ngày.`);
-  }
+    const results = await Result.find().sort({ 'ngay': 1 }).lean();
+    if (results.length < SEQUENCE_LENGTH + 1) {
+      throw new Error(`Không đủ dữ liệu. Cần ít nhất ${SEQUENCE_LENGTH + 1} ngày.`);
+    }
 
-  const grouped = {};
-  results.forEach(r => {
-    if (!grouped[r.ngay]) grouped[r.ngay] = [];
-    grouped[r.ngay].push(r);
-  });
-
-  const days = Object.keys(grouped).sort((a, b) => this.dateKey(a).localeCompare(this.dateKey(b)));
-  const trainingData = [];
-
-  for (let i = 0; i < days.length - SEQUENCE_LENGTH; i++) {
-    const sequenceDays = days.slice(i, i + SEQUENCE_LENGTH);
-    const targetDay = days[i + SEQUENCE_LENGTH];
-
-    const previousDays = [];
-    const inputSequence = sequenceDays.map(day => {
-      const dayResults = grouped[day] || [];
-      const prevDays = previousDays.slice();
-      previousDays.push(dayResults);
-      return this.featureService.extractAllFeatures(dayResults, prevDays, day);
+    const grouped = {};
+    results.forEach(r => {
+      if (!grouped[r.ngay]) grouped[r.ngay] = [];
+      grouped[r.ngay].push(r);
     });
 
-    const targetGDB = (grouped[targetDay] || []).find(r => r.giai === 'ĐB');
-    if (targetGDB?.so && String(targetGDB.so).length >= 5) {
-      const targetGDBString = String(targetGDB.so).padStart(5, '0');
-      const targetArray = this.prepareTarget(targetGDBString);
-      trainingData.push({ inputSequence, targetArray });
+    const days = Object.keys(grouped).sort((a, b) => this.dateKey(a).localeCompare(this.dateKey(b)));
+    const trainingData = [];
+
+    for (let i = 0; i < days.length - SEQUENCE_LENGTH; i++) {
+      const sequenceDays = days.slice(i, i + SEQUENCE_LENGTH);
+      const targetDay = days[i + SEQUENCE_LENGTH];
+
+      const previousDays = [];
+      const inputSequence = sequenceDays.map(day => {
+        const dayResults = grouped[day] || [];
+        const prevDays = previousDays.slice();
+        previousDays.push(dayResults);
+        return this.featureService.extractAllFeatures(dayResults, prevDays, day);
+      });
+
+      const targetGDB = (grouped[targetDay] || []).find(r => r.giai === 'ĐB');
+      if (targetGDB?.so && String(targetGDB.so).length >= 5) {
+        const targetGDBString = String(targetGDB.so).padStart(5, '0');
+        const targetArray = this.prepareTarget(targetGDBString);
+        trainingData.push({ inputSequence, targetArray });
+      }
     }
+
+    if (trainingData.length > 0) {
+      this.inputNodes = trainingData[0].inputSequence[0].length;
+    }
+
+    console.log(`📊 Prepared ${trainingData.length} training sequences với feature size: ${this.inputNodes}`);
+
+    const total = trainingData.length;
+    const trainEnd = Math.floor(total * 0.8);
+    const valEnd = Math.floor(total * 0.9);
+
+    const trainData = trainingData.slice(0, trainEnd);
+    const valData = trainingData.slice(trainEnd, valEnd);
+    const testData = trainingData.slice(valEnd);
+
+    console.log(`📊 Split data: Train ${trainData.length}, Val ${valData.length}, Test ${testData.length}`);
+    return { trainData, valData, testData };
   }
-
-  if (trainingData.length > 0) {
-    this.inputNodes = trainingData[0].inputSequence[0].length;
-  }
-
-  console.log(`📊 Prepared ${trainingData.length} training sequences với feature size: ${this.inputNodes}`);
-
-  const total = trainingData.length;
-  const trainEnd = Math.floor(total * 0.8);
-  const valEnd = Math.floor(total * 0.9);
-
-  const trainData = trainingData.slice(0, trainEnd);
-  const valData = trainingData.slice(trainEnd, valEnd);
-  const testData = trainingData.slice(valEnd);
-
-  console.log(`📊 Split data: Train ${trainData.length}, Val ${valData.length}, Test ${testData.length}`);
-  return { trainData, valData, testData };
-}
 
   dateKey(s) {
     if (!s || typeof s !== 'string') return '';
@@ -208,78 +186,81 @@ class TensorFlowService {
     return parts.length !== 3 ? s : `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
   }
 
+  calculateClassWeights(targets) {
+    const freq = Array(OUTPUT_NODES).fill(0);
+    targets.forEach(t => t.forEach((val, idx) => { if (val > 0.5) freq[idx]++; }));
+    return freq.map(f => f > 0 ? (targets.length / (OUTPUT_NODES * f)) : 1);
+  }
+
   async saveModel() {
-  if (!this.model) {
-    throw new Error('No model to save');
-  }
-
-  // Extract model topology (config) và weights
-  const modelTopology = this.model.toJSON(); // Trả về object config của model
-  const weightSpecs = this.model.weights.map(w => w.read().dataSync()); // Extract weights as arrays
-
-  // Convert weights thành dạng lưu được (JSON stringifiable)
-  const weightData = weightSpecs.map(ws => Array.from(ws)); // Chuyển DataSync() thành array
-
-  const modelInfo = {
-    modelName: NN_MODEL_NAME,
-    inputNodes: this.inputNodes,
-    topology: modelTopology, // Lưu config
-    weights: weightData,     // Lưu weights arrays
-    version: MODEL_VERSION,  // Thêm version để check khi load
-    savedAt: new Date().toISOString()
-  };
-
-  // Lưu vào DB (NNState)
-  await NNState.findOneAndUpdate(
-    { modelName: NN_MODEL_NAME },
-    { state: modelInfo }, // Lưu toàn bộ info vào state
-    { upsert: true }
-  );
-
-  console.log(`💾 TensorFlow model saved to DB với ${this.inputNodes} input nodes`);
-}
-
-async loadModel() {
-    const modelState = await NNState.findOne({ modelName: NN_MODEL_NAME });
-    if (modelState && modelState.state && modelState.state.topology && modelState.state.weights) {
-      // Check version để tránh load model cũ với features mới
-      if (modelState.state.version !== MODEL_VERSION) {
-        console.warn(`❌ Model version mismatch: expected ${MODEL_VERSION}, got ${modelState.state.version}. Will rebuild.`);
-        return false;
-      }
-
-      // Rebuild model từ topology
-      this.model = tf.models.modelFromJSON(modelState.state.topology);
-
-      // Set weights
-      const weightTensors = modelState.state.weights.map(w => tf.tensor(w));
-      this.model.setWeights(weightTensors);
-
-      this.inputNodes = modelState.state.inputNodes;
-      console.log(`✅ TensorFlow model loaded từ DB với ${this.inputNodes} input nodes`);
-      return true;
+    if (!this.model) {
+      throw new Error('No model to save');
     }
-    return false;
+
+    // Extract model topology (config) và weights
+    const modelTopology = this.model.toJSON(); // Trả về object config của model
+    const weightSpecs = this.model.weights.map(w => w.read().dataSync()); // Extract weights as arrays
+
+    // Convert weights thành dạng lưu được (JSON stringifiable)
+    const weightData = weightSpecs.map(ws => Array.from(ws)); // Chuyển DataSync() thành array
+
+    const modelInfo = {
+      modelName: NN_MODEL_NAME,
+      inputNodes: this.inputNodes,
+      topology: modelTopology, // Lưu config
+      weights: weightData,     // Lưu weights arrays
+      version: MODEL_VERSION,  // Thêm version để check khi load
+      savedAt: new Date().toISOString()
+    };
+
+    // Lưu vào DB (NNState)
+    await NNState.findOneAndUpdate(
+      { modelName: NN_MODEL_NAME },
+      { state: modelInfo }, // Lưu toàn bộ info vào state
+      { upsert: true }
+    );
+
+    console.log(`💾 TensorFlow model saved to DB với ${this.inputNodes} input nodes`);
   }
+
+  async loadModel() {
+      const modelState = await NNState.findOne({ modelName: NN_MODEL_NAME });
+      if (modelState && modelState.state && modelState.state.topology && modelState.state.weights) {
+        // Check version để tránh load model cũ với features mới
+        if (modelState.state.version !== MODEL_VERSION) {
+          console.warn(`❌ Model version mismatch: expected ${MODEL_VERSION}, got ${modelState.state.version}. Will rebuild.`);
+          return false;
+        }
+
+        // Rebuild model từ topology
+        this.model = tf.models.modelFromJSON(modelState.state.topology);
+
+        // Set weights
+        const weightTensors = modelState.state.weights.map(w => tf.tensor(w));
+        this.model.setWeights(weightTensors);
+
+        this.inputNodes = modelState.state.inputNodes;
+        console.log(`✅ TensorFlow model loaded từ DB với ${this.inputNodes} input nodes`);
+        return true;
+      }
+      return false;
+    }
 
   async runHistoricalTraining() {
     console.log('🔔 [TensorFlow Service] Starting Historical Training...');
     
-    const trainingData = await this.prepareTrainingData();
-    if (trainingData.length === 0) {
+    const trainingSplit = await this.prepareTrainingData();  // Renamed to trainingSplit (object)
+    if (trainingSplit.trainData.length === 0) {  // Check trainData.length
       throw new Error('Không có dữ liệu training');
     }
 
-    const inputs = trainingData.map(d => d.inputSequence);
-    const targets = trainingData.map(d => d.targetArray);
-
     await this.buildModel(this.inputNodes);
-    await this.trainModel({ inputs, targets });
+    await this.trainModel(trainingSplit);  // Pass the split object
     await this.saveModel();
 
     return {
-      message: `TensorFlow LSTM training completed. ${trainingData.length} sequences, ${EPOCHS} epochs.`,
-      sequences: trainingData.length,
+      message: `TensorFlow LSTM training completed. ${trainingSplit.trainData.length} sequences, ${EPOCHS} epochs.`,
+      sequences: trainingSplit.trainData.length,
       epochs: EPOCHS,
       featureSize: this.inputNodes
     };
