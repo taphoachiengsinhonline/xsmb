@@ -14,6 +14,7 @@ class QuantumLSTMService {
         this.inputNodes = 0;
         this.SEQUENCE_LENGTH = 7;
         this.OUTPUT_NODES = 50;
+        this.MODEL_NAME = 'QUANTUM_LSTM_V2';
     }
 
     async buildQuantumEnhancedModel(inputNodes) {
