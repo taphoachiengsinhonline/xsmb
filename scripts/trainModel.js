@@ -1,19 +1,33 @@
 // scripts/trainModel.js
 const mongoose = require('mongoose');
-const Result = require('../models/Result'); // giả sử file prize.js là schema
+const Result = require('../models/Result'); // Sửa từ Prize thành Result (nếu cần, dựa trên models)
 const { DateTime } = require('luxon');
 
 const CL_PATTERNS = ['CCC','CCL','CLC','CLL','LLC','LLL','LCC','LCL'];
 
+// Hàm dateKey để sort ngày chuẩn
+function dateKey(s) {
+  if (!s) return '';
+  const p = s.split('/');
+  if (p.length !== 3) return s;
+  const [d, m, y] = p;
+  return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+}
+
 // Tính thống kê CL giải đặc biệt so với các giải khác
 async function getCLAnalysis(date = null) {
-  await mongoose.connect(process.env.MONGO_URI);
+  await mongoose.connect(process.env.MONGO_URI, { 
+    useNewUrlParser: true, 
+    useUnifiedTopology: true 
+  }); // Thêm options để tương thích code cũ
 
   // Lấy danh sách ngày có kết quả
   let match = {};
   if (date) match.ngay = date;
   
-  const allResults = await Result.find(match).sort({ ngay: 1 }).lean();
+  const allResults = await Result.find(match)
+    .sort({ ngay: 1 }) // Sort cơ bản theo string
+    .lean();
 
   // Group theo ngày
   const grouped = {};
@@ -22,14 +36,18 @@ async function getCLAnalysis(date = null) {
     grouped[r.ngay].push(r);
   });
 
+  // Sắp xếp keys theo dateKey để tránh lỗi sort string
+  const sortedDays = Object.keys(grouped).sort((a, b) => dateKey(a).localeCompare(dateKey(b)));
   const analysis = [];
 
-  for (let [ngay, records] of Object.entries(grouped)) {
+  for (let ngay of sortedDays) { // Duyệt theo sortedDays thay vì Object.entries
+    const records = grouped[ngay];
     const todayDB = records.find(r => r.giai === 'ĐB');
     if (!todayDB) continue;
 
     // Tạo thống kê CL ngày hôm trước
-    const prevDay = Object.keys(grouped).filter(d => d < ngay).pop();
+    const prevIndex = sortedDays.indexOf(ngay) - 1;
+    const prevDay = prevIndex >= 0 ? sortedDays[prevIndex] : null;
     const prevRecords = prevDay ? grouped[prevDay] : [];
     const clCount = {};
 
