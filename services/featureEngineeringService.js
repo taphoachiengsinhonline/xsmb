@@ -1,4 +1,4 @@
-javascript// file: services/featureEngineeringService.js
+// file: services/featureEngineeringService.js
 
 const { DateTime } = require('luxon');
 const PRIZE_ORDER = ['ĐB','G1','G2a','G2b','G3a','G3b','G3c','G3d','G3e','G3f','G4a','G4b','G4c','G4d','G5a','G5b','G5c','G5d','G5e','G5f','G6a','G6b','G6c','G7a','G7b','G7c','G7d'];
