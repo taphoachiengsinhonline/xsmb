@@ -20,40 +20,53 @@ class TensorFlowService {
   }
 
   async buildModel(inputNodes) {
-    this.inputNodes = inputNodes;
-    this.model = tf.sequential({
-      layers: [
-        tf.layers.lstm({
+  this.inputNodes = inputNodes;
+  this.model = tf.sequential({
+    layers: [
+      // Thêm Bidirectional LSTM cho layer đầu tiên
+      tf.layers.bidirectional({
+        layer: tf.layers.lstm({
           units: 128,
           returnSequences: true,
           inputShape: [SEQUENCE_LENGTH, inputNodes]
         }),
-        tf.layers.dropout({ rate: 0.2 }),
-        tf.layers.lstm({
-          units: 64,
-          returnSequences: false
-        }),
-        tf.layers.dropout({ rate: 0.2 }),
-        tf.layers.dense({
-          units: 32,
-          activation: 'relu'
-        }),
-        tf.layers.dense({
-          units: OUTPUT_NODES,
-          activation: 'sigmoid'
-        })
-      ]
-    });
+        mergeMode: 'concat' // Kết hợp output từ forward và backward
+      }),
+      tf.layers.dropout({ rate: 0.2 }),
+      
+      // Thêm Multi-Head Attention để focus vào các phần quan trọng của sequence
+      tf.layers.multiHeadAttention({
+        numHeads: 4,       // Số heads
+        headSize: 32,      // Kích thước mỗi head
+        outputSize: 128,   // Output size
+        useBias: true
+      }),
+      
+      tf.layers.lstm({
+        units: 64,
+        returnSequences: false
+      }),
+      tf.layers.dropout({ rate: 0.2 }),
+      tf.layers.dense({
+        units: 32,
+        activation: 'relu'
+      }),
+      tf.layers.dense({
+        units: OUTPUT_NODES,
+        activation: 'sigmoid'
+      })
+    ]
+  });
 
-    this.model.compile({
-      optimizer: tf.train.adam(0.001),
-      loss: 'binaryCrossentropy',
-      metrics: ['accuracy']
-    });
+  this.model.compile({
+    optimizer: tf.train.adam(0.001),
+    loss: 'binaryCrossentropy',
+    metrics: ['accuracy']
+  });
 
-    console.log('✅ TensorFlow LSTM model built successfully');
-    return this.model;
-  }
+  console.log('✅ TensorFlow LSTM model built with Bidirectional and Attention mechanisms');
+  return this.model;
+}
 
   async trainModel(trainingData) {
     const { inputs, targets } = trainingData;
