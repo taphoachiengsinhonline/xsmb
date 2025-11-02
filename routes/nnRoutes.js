@@ -2,7 +2,6 @@
 const express = require('express');
 const router = express.Router();
 const nnController = require('../controllers/nnController');
-const quantumController = require('../controllers/quantumController'); // THÊM
 
 // Routes cho Neural Network cũ (giữ nguyên)
 router.post('/train-historical', nnController.trainHistorical);
