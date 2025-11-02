@@ -75,10 +75,10 @@ class TensorFlowService {
     this.model = tf.sequential({
       layers: [
         tf.layers.bidirectional({
+          inputShape: [SEQUENCE_LENGTH, this.inputNodes],  // Move inputShape to Bidirectional layer
           layer: tf.layers.lstm({
             units: 128,
-            returnSequences: true,
-            inputShape: [SEQUENCE_LENGTH, this.inputNodes]  // Explicit here
+            returnSequences: true
           }),
           mergeMode: 'concat'
         }),
@@ -159,7 +159,11 @@ class TensorFlowService {
   buildTempModel(inputNodes, units, dropout) {
     return tf.sequential({
       layers: [
-        tf.layers.lstm({ units, returnSequences: true, inputShape: [SEQUENCE_LENGTH, inputNodes] }),
+        tf.layers.lstm({ 
+          units, 
+          returnSequences: true, 
+          inputShape: [SEQUENCE_LENGTH, inputNodes]  // Ensure inputShape here for temp model
+        }),
         tf.layers.dropout({ rate: dropout }),
         tf.layers.lstm({ units: units / 2 }),
         tf.layers.dense({ units: OUTPUT_NODES, activation: 'sigmoid' })
