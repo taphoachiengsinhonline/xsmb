@@ -184,8 +184,8 @@ exports.trainHistoricalPredictions = async (req, res) => {
         for (let i = 1; i < days.length; i++) {
             const prevDayStr = days[i-1]; const targetDayStr = days[i];
             const prevPrediction = await Prediction.findOne({ ngayDuDoan: prevDayStr }).lean();
-            const trustScores = new Map(Object.entries(prevPrediction?.diemTinCay || {})); // Sửa: Chuyển object sang Map
-            ALL_METHODS.forEach(m => { if (!trustScores.has(m)) trustScores.set(m, INITIAL_TRUST_SCORE); });
+            const trustScores = prevPrediction?.diemTinCay || {};
+            ALL_METHODS.forEach(m => { if (trustScores[m] === undefined) trustScores[m] = INITIAL_TRUST_SCORE; });
             const prevDayResults = grouped[prevDayStr] || []; const prevDayGDB = prevDayResults.find(r => r.giai === 'ĐB');
             const allMethodResults = { [METHOD_GOC]: runMethodGoc(prevDayResults), [METHOD_DEEP_30_DAY]: runMethodDeep30Day(i, days, grouped, prevDayGDB), [METHOD_GDB_14_DAY]: runMethodGDB14Day(i, days, grouped), [METHOD_TONG_CHAM]: runMethodTongCham(i, days, grouped), [METHOD_BAC_NHO]: runMethodBacNho(i, days, grouped, prevDayResults), [METHOD_CHAN_LE]: runMethodChanLe(i, days, grouped, prevDayGDB), };
             const finalPrediction = runMetaLearner(allMethodResults, trustScores);
@@ -207,8 +207,8 @@ exports.trainPredictionForNextDay = async (req, res) => {
         const latestDayStr = days[days.length - 1]; 
         const nextDayStr = DateTime.fromFormat(latestDayStr, 'dd/MM/yyyy').plus({ days: 1 }).toFormat('dd/MM/yyyy');
         const prevPrediction = await Prediction.findOne({ ngayDuDoan: latestDayStr }).lean();
-        const trustScores = new Map(Object.entries(prevPrediction?.diemTinCay || {})); // Sửa: Chuyển object sang Map
-        ALL_METHODS.forEach(m => { if (!trustScores.has(m)) trustScores.set(m, INITIAL_TRUST_SCORE); });
+        const trustScores = prevPrediction?.diemTinCay || {};
+        ALL_METHODS.forEach(m => { if (trustScores[m] === undefined) trustScores[m] = INITIAL_TRUST_SCORE; });
         const prevDayResults = grouped[latestDayStr] || []; const prevDayGDB = prevDayResults.find(r => r.giai === 'ĐB');
         const allMethodResults = { [METHOD_GOC]: runMethodGoc(prevDayResults), [METHOD_DEEP_30_DAY]: runMethodDeep30Day(days.length, days, grouped, prevDayGDB), [METHOD_GDB_14_DAY]: runMethodGDB14Day(days.length, days, grouped), [METHOD_TONG_CHAM]: runMethodTongCham(days.length, days, grouped), [METHOD_BAC_NHO]: runMethodBacNho(days.length, days, grouped, prevDayResults), [METHOD_CHAN_LE]: runMethodChanLe(days.length, days, grouped, prevDayGDB), };
         const finalPrediction = runMetaLearner(allMethodResults, trustScores);
