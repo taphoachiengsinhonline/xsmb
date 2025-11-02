@@ -18,57 +18,93 @@ class QuantumLSTMService {
     }
 
     async buildQuantumEnhancedModel(inputNodes) {
-        console.log('🔮 Building Quantum-Inspired LSTM Model...');
-        
-        const model = tf.sequential({
-            layers: [
-                // Lớp 1: Bidirectional LSTM với quantum-inspired initialization
-                tf.layers.bidirectional({
-                    layer: tf.layers.lstm({
-                        units: 256,
-                        returnSequences: true,
-                        inputShape: [this.SEQUENCE_LENGTH, inputNodes],
-                        kernelInitializer: 'varianceScaling',
-                        recurrentInitializer: 'orthogonal'
-                    })
-                }),
-                
-                // Lớp 2: Attention Mechanism
-                // Lưu ý: TensorFlow.js không có layer Attention sẵn, nên chúng ta sẽ bỏ qua hoặc tự implement
-                // Tạm thời thay bằng LSTM thông thường
-                tf.layers.lstm({
-                    units: 128,
-                    returnSequences: false,
-                    dropout: 0.3,
-                    recurrentDropout: 0.2
-                }),
-                
-                // Lớp 3: Quantum-inspired dense layer
-                tf.layers.dense({
-                    units: 64,
-                    activation: 'swish', // Activation function mới hơn ReLU
-                    kernelInitializer: 'varianceScaling'
-                }),
-                
-                tf.layers.dropout({ rate: 0.4 }),
-                
-                // Lớp 5: Multi-head output (dự đoán cho từng vị trí độc lập)
-                tf.layers.dense({
-                    units: this.OUTPUT_NODES,
-                    activation: 'sigmoid'
-                })
-            ]
-        });
-
-        model.compile({
-            optimizer: tf.train.adam(0.0005),
-            loss: 'binaryCrossentropy',
-            metrics: ['accuracy', this.precisionAt5, this.f1Score]
-        });
-
-        this.model = model;
-        return model;
+    console.log('🔮 Building Quantum-Inspired LSTM Model...');
+    
+    if (!inputNodes || inputNodes <= 0) {
+        throw new Error(`Invalid inputNodes: ${inputNodes}. Model cannot be built.`);
     }
+
+    // SỬA LỖI INPUT SHAPE - phải định nghĩa rõ ràng
+    const model = tf.sequential({
+        layers: [
+            // Lớp 1: Bidirectional LSTM với input shape rõ ràng
+            tf.layers.bidirectional({
+                layer: tf.layers.lstm({
+                    units: 128, // GIẢM units để tránh memory issues
+                    returnSequences: true,
+                    inputShape: [this.SEQUENCE_LENGTH, inputNodes] // ← SỬA Ở ĐÂY
+                }),
+                mergeMode: 'concat'
+            }),
+            
+            tf.layers.dropout({ rate: 0.3 }),
+            
+            // Lớp 2: Second LSTM
+            tf.layers.lstm({
+                units: 64,
+                returnSequences: false,
+                dropout: 0.2,
+                recurrentDropout: 0.2
+            }),
+            
+            tf.layers.dropout({ rate: 0.3 }),
+            
+            // Lớp 3: Dense layers
+            tf.layers.dense({
+                units: 32,
+                activation: 'relu' // ← DÙNG RELU THAY VÌ SWISH cho ổn định
+            }),
+            
+            // Lớp 4: Output
+            tf.layers.dense({
+                units: this.OUTPUT_NODES,
+                activation: 'sigmoid'
+            })
+        ]
+    });
+
+    // SỬA LỖI COMPILE - dùng metrics đơn giản hơn
+    model.compile({
+        optimizer: tf.train.adam(0.001),
+        loss: 'binaryCrossentropy',
+        metrics: ['accuracy'] // ← BỎ precisionAt5 và f1Score tạm thời
+    });
+
+    this.model = model;
+    console.log(`✅ Quantum-LSTM model built with inputShape: [${this.SEQUENCE_LENGTH}, ${inputNodes}]`);
+    return model;
+}
+
+// THÊM HÀM ĐƠN GIẢN HÓA để test
+async buildSimpleModel(inputNodes) {
+    console.log('🔮 Building SIMPLE Quantum-LSTM Model for testing...');
+    
+    const model = tf.sequential({
+        layers: [
+            tf.layers.lstm({
+                units: 64,
+                inputShape: [this.SEQUENCE_LENGTH, inputNodes]
+            }),
+            tf.layers.dense({
+                units: 32,
+                activation: 'relu'
+            }),
+            tf.layers.dense({
+                units: this.OUTPUT_NODES,
+                activation: 'sigmoid'
+            })
+        ]
+    });
+
+    model.compile({
+        optimizer: 'adam',
+        loss: 'binaryCrossentropy',
+        metrics: ['accuracy']
+    });
+
+    this.model = model;
+    return model;
+}
 
     // Custom metric: Precision@5
     precisionAt5(yTrue, yPred) {
