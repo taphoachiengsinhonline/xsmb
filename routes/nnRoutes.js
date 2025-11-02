@@ -10,10 +10,4 @@ router.post('/learn', nnController.learn);
 router.post('/predict-next-day', nnController.predictNextDay);
 router.get('/predictions', nnController.getAllPredictions);
 
-// Routes MỚI cho Quantum-LSTM
-router.post('/quantum/train-historical', quantumController.trainHistorical);
-router.post('/quantum/learn', quantumController.learn);
-router.post('/quantum/predict-next-day', quantumController.predictNextDay);
-router.get('/quantum/predictions', quantumController.getQuantumPredictions);
-
 module.exports = router;
