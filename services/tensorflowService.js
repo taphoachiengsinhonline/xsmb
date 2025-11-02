@@ -1,5 +1,3 @@
-// file: services/tensorflowService.js
-
 const tf = require('@tensorflow/tfjs-node');
 const Result = require('../models/Result');
 const NNPrediction = require('../models/NNPrediction');
@@ -12,7 +10,6 @@ const SEQUENCE_LENGTH = 7;
 const OUTPUT_NODES = 50;
 const EPOCHS = 50;
 const BATCH_SIZE = 32;
-const MODEL_VERSION = 'v1.0'; // Thêm version control cho model state (tăng khi thay đổi features hoặc architecture)
 
 class TensorFlowService {
   constructor() {
@@ -25,25 +22,12 @@ class TensorFlowService {
     this.inputNodes = inputNodes;
     this.model = tf.sequential({
       layers: [
-        // Thêm Bidirectional LSTM cho layer đầu tiên
-        tf.layers.bidirectional({
-          inputShape: [SEQUENCE_LENGTH, inputNodes],  // Explicit inputShape here
-          layer: tf.layers.lstm({
-            units: 128,
-            returnSequences: true
-          }),
-          mergeMode: 'concat' // Kết hợp output từ forward và backward
+        tf.layers.lstm({
+          units: 128,
+          returnSequences: true,
+          inputShape: [SEQUENCE_LENGTH, inputNodes]
         }),
         tf.layers.dropout({ rate: 0.2 }),
-        
-        // Thêm Multi-Head Attention để focus vào các phần quan trọng của sequence
-        tf.layers.multiHeadAttention({
-          numHeads: 4,       // Số heads
-          keyDim: 32,        // Kích thước key (thay headSize bằng keyDim cho tfjs)
-          outputShape: 128,  // Output shape
-          useBias: true
-        }),
-        
         tf.layers.lstm({
           units: 64,
           returnSequences: false
@@ -66,43 +50,29 @@ class TensorFlowService {
       metrics: ['accuracy']
     });
 
-    console.log('✅ TensorFlow LSTM model built with Bidirectional and Attention mechanisms');
+    console.log('✅ TensorFlow LSTM model built successfully');
     return this.model;
   }
 
-  async trainModel(trainingSplit) {
-    const { trainData, valData } = trainingSplit;
+  async trainModel(trainingData) {
+    const { inputs, targets } = trainingData;
 
-    const classWeights = this.calculateClassWeights(trainData.map(d => d.targetArray));
+    const inputTensor = tf.tensor3d(inputs, [inputs.length, SEQUENCE_LENGTH, this.inputNodes]);
+    const targetTensor = tf.tensor2d(targets, [targets.length, OUTPUT_NODES]);
 
-    const trainInputs = trainData.map(d => d.inputSequence);
-    const trainTargets = trainData.map(d => d.targetArray);
-    const valInputs = valData.map(d => d.inputSequence);
-    const valTargets = valData.map(d => d.targetArray);
-
-    const trainInputTensor = tf.tensor3d(trainInputs);
-    const trainTargetTensor = tf.tensor2d(trainTargets);
-    const valInputTensor = tf.tensor3d(valInputs);
-    const valTargetTensor = tf.tensor2d(valTargets);
-
-    // Standard training without broken CV loop
-    const history = await this.model.fit(trainInputTensor, trainTargetTensor, {
+    const history = await this.model.fit(inputTensor, targetTensor, {
       epochs: EPOCHS,
       batchSize: BATCH_SIZE,
-      validationData: [valInputTensor, valTargetTensor],
-      classWeight: classWeights,
+      validationSplit: 0.1,
       callbacks: {
         onEpochEnd: (epoch, logs) => {
-          console.log(`Epoch ${epoch + 1}: Loss = ${logs.loss?.toFixed(4)}, Val Loss = ${logs.val_loss?.toFixed(4)}`);
+          console.log(`Epoch ${epoch + 1}: Loss = ${logs.loss.toFixed(4)}, Accuracy = ${logs.acc.toFixed(4)}`);
         }
       }
     });
 
-    // Dispose tensors after training
-    trainInputTensor.dispose();
-    trainTargetTensor.dispose();
-    valInputTensor.dispose();
-    valTargetTensor.dispose();
+    inputTensor.dispose();
+    targetTensor.dispose();
 
     return history;
   }
@@ -167,17 +137,7 @@ class TensorFlowService {
     }
 
     console.log(`📊 Prepared ${trainingData.length} training sequences với feature size: ${this.inputNodes}`);
-
-    const total = trainingData.length;
-    const trainEnd = Math.floor(total * 0.8);
-    const valEnd = Math.floor(total * 0.9);
-
-    const trainData = trainingData.slice(0, trainEnd);
-    const valData = trainingData.slice(trainEnd, valEnd);
-    const testData = trainingData.slice(valEnd);
-
-    console.log(`📊 Split data: Train ${trainData.length}, Val ${valData.length}, Test ${testData.length}`);
-    return { trainData, valData, testData };
+    return trainingData;
   }
 
   dateKey(s) {
@@ -186,81 +146,60 @@ class TensorFlowService {
     return parts.length !== 3 ? s : `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
   }
 
-  calculateClassWeights(targets) {
-    const freq = Array(OUTPUT_NODES).fill(0);
-    targets.forEach(t => t.forEach((val, idx) => { if (val > 0.5) freq[idx]++; }));
-    return freq.map(f => f > 0 ? (targets.length / (OUTPUT_NODES * f)) : 1);
-  }
-
   async saveModel() {
     if (!this.model) {
       throw new Error('No model to save');
     }
 
-    // Extract model topology (config) và weights
-    const modelTopology = this.model.toJSON(); // Trả về object config của model
-    const weightSpecs = this.model.weights.map(w => w.read().dataSync()); // Extract weights as arrays
-
-    // Convert weights thành dạng lưu được (JSON stringifiable)
-    const weightData = weightSpecs.map(ws => Array.from(ws)); // Chuyển DataSync() thành array
-
     const modelInfo = {
       modelName: NN_MODEL_NAME,
       inputNodes: this.inputNodes,
-      topology: modelTopology, // Lưu config
-      weights: weightData,     // Lưu weights arrays
-      version: MODEL_VERSION,  // Thêm version để check khi load
       savedAt: new Date().toISOString()
     };
 
-    // Lưu vào DB (NNState)
+    const saveResult = await this.model.save('file://./models/tfjs_model');
+    
     await NNState.findOneAndUpdate(
       { modelName: NN_MODEL_NAME },
-      { state: modelInfo }, // Lưu toàn bộ info vào state
+      { 
+        state: modelInfo,
+        modelArtifacts: saveResult 
+      },
       { upsert: true }
     );
 
-    console.log(`💾 TensorFlow model saved to DB với ${this.inputNodes} input nodes`);
+    console.log(`💾 TensorFlow model saved với ${this.inputNodes} input nodes`);
   }
 
   async loadModel() {
-      const modelState = await NNState.findOne({ modelName: NN_MODEL_NAME });
-      if (modelState && modelState.state && modelState.state.topology && modelState.state.weights) {
-        // Check version để tránh load model cũ với features mới
-        if (modelState.state.version !== MODEL_VERSION) {
-          console.warn(`❌ Model version mismatch: expected ${MODEL_VERSION}, got ${modelState.state.version}. Will rebuild.`);
-          return false;
-        }
-
-        // Rebuild model từ topology
-        this.model = tf.models.modelFromJSON(modelState.state.topology);
-
-        // Set weights
-        const weightTensors = modelState.state.weights.map(w => tf.tensor(w));
-        this.model.setWeights(weightTensors);
-
-        this.inputNodes = modelState.state.inputNodes;
-        console.log(`✅ TensorFlow model loaded từ DB với ${this.inputNodes} input nodes`);
-        return true;
-      }
-      return false;
+    const modelState = await NNState.findOne({ modelName: NN_MODEL_NAME });
+    if (modelState && modelState.modelArtifacts) {
+      this.model = await tf.loadLayersModel('file://./models/tfjs_model/model.json');
+      this.inputNodes = modelState.state.inputNodes;
+      console.log(`✅ TensorFlow model loaded với ${this.inputNodes} input nodes`);
+      return true;
     }
+    return false;
+  }
 
   async runHistoricalTraining() {
     console.log('🔔 [TensorFlow Service] Starting Historical Training...');
     
-    const trainingSplit = await this.prepareTrainingData();  // Renamed to trainingSplit (object)
-    if (trainingSplit.trainData.length === 0) {  // Check trainData.length
+    const trainingData = await this.prepareTrainingData();
+    if (trainingData.length === 0) {
       throw new Error('Không có dữ liệu training');
     }
 
+    const inputs = trainingData.map(d => d.inputSequence);
+    const targets = trainingData.map(d => d.targetArray);
+
     await this.buildModel(this.inputNodes);
-    await this.trainModel(trainingSplit);  // Pass the split object
+    await this.trainModel({ inputs, targets });
     await this.saveModel();
 
     return {
-      message: `TensorFlow LSTM training completed. ${trainingSplit.trainData.length} sequences, ${EPOCHS} epochs.`,
-      sequences: trainingSplit.trainData.length,
+      message: `TensorFlow LSTM training completed. ${trainingData.length} sequences, ${EPOCHS} epochs.`,
+      sequences: trainingData.length,
       epochs: EPOCHS,
       featureSize: this.inputNodes
     };
@@ -277,8 +216,8 @@ class TensorFlowService {
     }
 
     const results = await Result.find().lean();
-    if (results.length < 1) { // Không yêu cầu đủ SEQUENCE_LENGTH nữa, vì sẽ pad
-      throw new Error('Không có dữ liệu.');
+    if (results.length < SEQUENCE_LENGTH) {
+      throw new Error(`Không đủ dữ liệu. Cần ít nhất ${SEQUENCE_LENGTH} ngày.`);
     }
 
     const grouped = {};
@@ -288,19 +227,10 @@ class TensorFlowService {
     });
 
     const days = Object.keys(grouped).sort((a, b) => this.dateKey(a).localeCompare(this.dateKey(b)));
-    let latestSequenceDays = days.slice(-SEQUENCE_LENGTH);
-
-    // Nếu không đủ sequence, pad với ngày giả (features zeros)
-    const paddingDay = Array(this.inputNodes).fill(0); // Pad với zeros
-    while (latestSequenceDays.length < SEQUENCE_LENGTH) {
-      latestSequenceDays.unshift('padding'); // Thêm padding ở đầu
-    }
+    const latestSequenceDays = days.slice(-SEQUENCE_LENGTH);
 
     const previousDays = [];
-    const inputSequence = latestSequenceDays.map((day, index) => {
-      if (day === 'padding') {
-        return paddingDay; // Sử dụng padding zeros cho ngày giả
-      }
+    const inputSequence = latestSequenceDays.map(day => {
       const dayResults = grouped[day] || [];
       const prevDays = previousDays.slice();
       previousDays.push(dayResults);
@@ -310,7 +240,7 @@ class TensorFlowService {
     const output = await this.predict(inputSequence);
     const prediction = this.decodeOutput(output);
 
-    const latestDay = days[days.length - 1]; // Lấy ngày thật cuối cùng
+    const latestDay = latestSequenceDays[latestSequenceDays.length - 1];
     const nextDayStr = DateTime.fromFormat(latestDay, 'dd/MM/yyyy').plus({ days: 1 }).toFormat('dd/MM/yyyy');
 
     await NNPrediction.findOneAndUpdate(
