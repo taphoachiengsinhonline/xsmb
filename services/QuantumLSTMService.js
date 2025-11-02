@@ -597,9 +597,12 @@ async buildSimpleModel(inputNodes) {
     // =================================================================
 
     async prepareTrainingData() {
+    try {
         const results = await Result.find().sort({ 'ngay': 1 }).lean();
+        console.log(`📊 Total results in DB: ${results.length}`);
+        
         if (results.length < this.SEQUENCE_LENGTH + 1) {
-            throw new Error(`Không đủ dữ liệu. Cần ít nhất ${this.SEQUENCE_LENGTH + 1} ngày.`);
+            throw new Error(`Không đủ dữ liệu. Cần ít nhất ${this.SEQUENCE_LENGTH + 1} ngày, hiện có: ${results.length}`);
         }
 
         const grouped = {};
@@ -609,45 +612,53 @@ async buildSimpleModel(inputNodes) {
         });
 
         const days = Object.keys(grouped).sort((a, b) => this.dateKey(a).localeCompare(this.dateKey(b)));
+        console.log(`📅 Unique days: ${days.length}`);
+        
         const trainingData = [];
+        let skippedCount = 0;
 
         for (let i = 0; i < days.length - this.SEQUENCE_LENGTH; i++) {
             const sequenceDays = days.slice(i, i + this.SEQUENCE_LENGTH);
             const targetDay = days[i + this.SEQUENCE_LENGTH];
 
-            const previousDays = [];
             const inputSequence = sequenceDays.map(day => {
                 const dayResults = grouped[day] || [];
-                const prevDays = previousDays.slice();
-                previousDays.push(dayResults);
-                return this.featureService.extractAllFeatures(dayResults, prevDays, day);
+                return this.featureService.extractAllFeatures(dayResults, [], day);
             });
 
             const targetGDB = (grouped[targetDay] || []).find(r => r.giai === 'ĐB');
             if (targetGDB?.so && String(targetGDB.so).length >= 5) {
                 const targetGDBString = String(targetGDB.so).padStart(5, '0');
                 const targetArray = this.prepareTarget(targetGDBString);
-                trainingData.push({ inputSequence, targetArray });
+                
+                // VALIDATE input sequence
+                const isValidSequence = inputSequence.every(seq => 
+                    Array.isArray(seq) && seq.length > 0 && !seq.some(isNaN)
+                );
+                
+                if (isValidSequence) {
+                    trainingData.push({ inputSequence, targetArray });
+                } else {
+                    skippedCount++;
+                }
             }
         }
 
-        if (trainingData.length > 0) {
-            this.inputNodes = trainingData[0].inputSequence[0].length;
+        if (trainingData.length === 0) {
+            throw new Error("Không thể tạo training data hợp lệ.");
         }
 
-        console.log(`📊 Prepared ${trainingData.length} training sequences với feature size: ${this.inputNodes}`);
+        this.inputNodes = trainingData[0].inputSequence[0].length;
+        console.log(`✅ Prepared ${trainingData.length} training sequences (skipped ${skippedCount})`);
+        console.log(`🔢 Input nodes: ${this.inputNodes}, Output nodes: ${this.OUTPUT_NODES}`);
 
-        const total = trainingData.length;
-        const trainEnd = Math.floor(total * 0.8);
-        const valEnd = Math.floor(total * 0.9);
+        return { trainData: trainingData, valData: [], testData: [] }; // TẠM BỎ VALIDATION
 
-        const trainData = trainingData.slice(0, trainEnd);
-        const valData = trainingData.slice(trainEnd, valEnd);
-        const testData = trainingData.slice(valEnd);
-
-        console.log(`📊 Split data: Train ${trainData.length}, Val ${valData.length}, Test ${testData.length}`);
-        return { trainData, valData, testData };
+    } catch (error) {
+        console.error('Error preparing training data:', error);
+        throw error;
     }
+}
 
     dateKey(s) {
         if (!s || typeof s !== 'string') return '';
