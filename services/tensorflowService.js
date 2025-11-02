@@ -147,40 +147,51 @@ class TensorFlowService {
   }
 
   async saveModel() {
-    if (!this.model) {
-      throw new Error('No model to save');
-    }
-
-    const modelInfo = {
-      modelName: NN_MODEL_NAME,
-      inputNodes: this.inputNodes,
-      savedAt: new Date().toISOString()
-    };
-
-    const saveResult = await this.model.save('file://./models/tfjs_model');
-    
-    await NNState.findOneAndUpdate(
-      { modelName: NN_MODEL_NAME },
-      { 
-        state: modelInfo,
-        modelArtifacts: saveResult 
-      },
-      { upsert: true }
-    );
-
-    console.log(`💾 TensorFlow model saved với ${this.inputNodes} input nodes`);
+  if (!this.model) {
+    throw new Error('No model to save');
   }
 
-  async loadModel() {
-    const modelState = await NNState.findOne({ modelName: NN_MODEL_NAME });
-    if (modelState && modelState.modelArtifacts) {
-      this.model = await tf.loadLayersModel('file://./models/tfjs_model/model.json');
-      this.inputNodes = modelState.state.inputNodes;
-      console.log(`✅ TensorFlow model loaded với ${this.inputNodes} input nodes`);
-      return true;
-    }
-    return false;
+  // Extract model topology (config) và weights
+  const modelTopology = this.model.toJSON(); // Trả về object config của model
+  const weightSpecs = this.model.weights.map(w => w.read().dataSync()); // Extract weights as arrays
+
+  // Convert weights thành dạng lưu được (JSON stringifiable)
+  const weightData = weightSpecs.map(ws => Array.from(ws)); // Chuyển DataSync() thành array
+
+  const modelInfo = {
+    modelName: NN_MODEL_NAME,
+    inputNodes: this.inputNodes,
+    topology: modelTopology, // Lưu config
+    weights: weightData,     // Lưu weights arrays
+    savedAt: new Date().toISOString()
+  };
+
+  // Lưu vào DB (NNState)
+  await NNState.findOneAndUpdate(
+    { modelName: NN_MODEL_NAME },
+    { state: modelInfo }, // Lưu toàn bộ info vào state
+    { upsert: true }
+  );
+
+  console.log(`💾 TensorFlow model saved to DB với ${this.inputNodes} input nodes`);
+}
+
+async loadModel() {
+  const modelState = await NNState.findOne({ modelName: NN_MODEL_NAME });
+  if (modelState && modelState.state && modelState.state.topology && modelState.state.weights) {
+    // Rebuild model từ topology
+    this.model = tf.models.modelFromJSON(modelState.state.topology);
+
+    // Set weights
+    const weightTensors = modelState.state.weights.map(w => tf.tensor(w));
+    this.model.setWeights(weightTensors);
+
+    this.inputNodes = modelState.state.inputNodes;
+    console.log(`✅ TensorFlow model loaded từ DB với ${this.inputNodes} input nodes`);
+    return true;
   }
+  return false;
+}
 
   async runHistoricalTraining() {
     console.log('🔔 [TensorFlow Service] Starting Historical Training...');
