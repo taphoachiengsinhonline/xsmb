@@ -1,5 +1,3 @@
-// file: services/tensorflowService.js
-
 const tf = require('@tensorflow/tfjs-node');
 const Result = require('../models/Result');
 const NNPrediction = require('../models/NNPrediction');
@@ -13,16 +11,14 @@ const OUTPUT_NODES = 50;
 const EPOCHS = 50;
 const BATCH_SIZE = 32;
 const MODEL_VERSION = 'v1.0';
-const DEFAULT_INPUT_NODES = 234; // Full with external features
 
 class TensorFlowService {
   constructor() {
     this.model = null;
     this.featureService = new FeatureEngineeringService();
-    this.inputNodes = DEFAULT_INPUT_NODES; // Default to avoid 0
+    this.inputNodes = 0;
   }
-
-  precisionAt5(yTrue, yPred) {
+precisionAt5(yTrue, yPred) {
     const trueLabels = tf.argMax(yTrue, -1).dataSync();
     const predTop5 = tf.topk(yPred, 5).indices.dataSync();
     
@@ -36,7 +32,7 @@ class TensorFlowService {
     return correct / trueLabels.length;
   }
 
-  async computeConfusionMatrix(testData, model) {
+    async computeConfusionMatrix(testData, model) {
     const predictions = [];
     const truths = [];
 
@@ -64,21 +60,15 @@ class TensorFlowService {
     console.log('Confusion Matrix (simplified log):', cm.slice(0, 10)); // Log top 10 để tránh spam
     return cm;
   }
-
-  async buildModel(inputNodes = DEFAULT_INPUT_NODES) {
-    this.inputNodes = inputNodes || DEFAULT_INPUT_NODES;
-    if (this.inputNodes <= 0) {
-      console.warn('Invalid inputNodes, using default:', DEFAULT_INPUT_NODES);
-      this.inputNodes = DEFAULT_INPUT_NODES;
-    }
-
+  async buildModel(inputNodes) {
+    this.inputNodes = inputNodes;
     this.model = tf.sequential({
       layers: [
         tf.layers.bidirectional({
-          inputShape: [SEQUENCE_LENGTH, this.inputNodes],  // Move inputShape to Bidirectional layer
           layer: tf.layers.lstm({
             units: 128,
-            returnSequences: true
+            returnSequences: true,
+            inputShape: [SEQUENCE_LENGTH, inputNodes]
           }),
           mergeMode: 'concat'
         }),
@@ -105,7 +95,7 @@ class TensorFlowService {
       metrics: ['accuracy']
     });
 
-    console.log('✅ TensorFlow LSTM model built with inputShape:', [SEQUENCE_LENGTH, this.inputNodes]);
+    console.log('✅ TensorFlow LSTM model built with Bidirectional');
     return this.model;
   }
 
@@ -159,11 +149,7 @@ class TensorFlowService {
   buildTempModel(inputNodes, units, dropout) {
     return tf.sequential({
       layers: [
-        tf.layers.lstm({ 
-          units, 
-          returnSequences: true, 
-          inputShape: [SEQUENCE_LENGTH, inputNodes]  // Ensure inputShape here for temp model
-        }),
+        tf.layers.lstm({ units, returnSequences: true, inputShape: [SEQUENCE_LENGTH, inputNodes] }),
         tf.layers.dropout({ rate: dropout }),
         tf.layers.lstm({ units: units / 2 }),
         tf.layers.dense({ units: OUTPUT_NODES, activation: 'sigmoid' })
@@ -172,88 +158,107 @@ class TensorFlowService {
   }
 
   async trainModel(trainingSplit, params = { lr: 0.001, units: 128, dropout: 0.2 }) {
-    const { trainData, valData, testData } = trainingSplit; // Sử dụng testData cho eval
+  const { trainData, valData, testData } = trainingSplit; // Sử dụng testData cho eval
 
-    const classWeights = this.calculateClassWeights(trainData.map(d => d.targetArray));
+  const classWeights = this.calculateClassWeights(trainData.map(d => d.targetArray));
 
-    await this.buildModel(this.inputNodes);  // Ensure model built with correct inputNodes
+  await this.buildModelWithParams(this.inputNodes, params.units, params.dropout);
 
-    const trainInputs = trainData.map(d => d.inputSequence);
-    const trainTargets = trainData.map(d => d.targetArray);
-    const valInputs = valData.map(d => d.inputSequence);
-    const valTargets = valData.map(d => d.targetArray);
+  const trainInputs = trainData.map(d => d.inputSequence);
+  const trainTargets = trainData.map(d => d.targetArray);
+  const valInputs = valData.map(d => d.inputSequence);
+  const valTargets = valData.map(d => d.targetArray);
 
-    const trainInputTensor = tf.tensor3d(trainInputs);
-    const trainTargetTensor = tf.tensor2d(trainTargets);
-    const valInputTensor = tf.tensor3d(valInputs);
-    const valTargetTensor = tf.tensor2d(valTargets);
+  const trainInputTensor = tf.tensor3d(trainInputs);
+  const trainTargetTensor = tf.tensor2d(trainTargets);
+  const valInputTensor = tf.tensor3d(valInputs);
+  const valTargetTensor = tf.tensor2d(valTargets);
 
-    // TensorBoard callback (chỉ Node.js, log vào folder ./logs)
-    const tensorBoard = tf.node.tensorBoard('./logs');
+  // TensorBoard callback (chỉ Node.js, log vào folder ./logs)
+  const tensorBoard = tf.node.tensorBoard('./logs');
 
-    const history = await this.model.fit(trainInputTensor, trainTargetTensor, {
-      epochs: EPOCHS,
-      batchSize: BATCH_SIZE,
-      validationData: [valInputTensor, valTargetTensor],
-      classWeight: classWeights,
-      callbacks: [
-        tensorBoard,
-        {
-          onEpochEnd: (epoch, logs) => {
-            console.log(`Epoch ${epoch + 1}: Loss = ${logs.loss?.toFixed(4)}, Val Loss = ${logs.val_loss?.toFixed(4)}`);
-          }
+  const history = await this.model.fit(trainInputTensor, trainTargetTensor, {
+    epochs: EPOCHS,
+    batchSize: BATCH_SIZE,
+    validationData: [valInputTensor, valTargetTensor],
+    classWeight: classWeights,
+    callbacks: [
+      tensorBoard,
+      {
+        onEpochEnd: (epoch, logs) => {
+          console.log(`Epoch ${epoch + 1}: Loss = ${logs.loss?.toFixed(4)}, Val Loss = ${logs.val_loss?.toFixed(4)}`);
         }
-      ],
-      optimizer: tf.train.adam(params.lr)
+      }
+    ],
+    optimizer: tf.train.adam(params.lr)
+  });
+
+  // Post-training eval: Precision@5 và confusion matrix trên test set
+  if (testData.length > 0) {
+    const testInputs = testData.map(d => d.inputSequence);
+    const testInputTensor = tf.tensor3d(testInputs);
+    const testPreds = this.model.predict(testInputTensor);
+    const testPredData = await testPreds.data();
+
+    const testTrue = tf.tensor2d(testData.map(d => d.targetArray));
+    const p5 = this.precisionAt5(testTrue, tf.tensor2d(testPredData));
+    console.log(`Precision@5 on test set: ${p5.toFixed(4)}`);
+
+    await this.computeConfusionMatrix(testData, this.model);
+
+    testInputTensor.dispose();
+    testPreds.dispose();
+    testTrue.dispose();
+  }
+
+  trainInputTensor.dispose();
+  trainTargetTensor.dispose();
+  valInputTensor.dispose();
+  valTargetTensor.dispose();
+
+  return history;
+}
+
+  buildModelWithParams(inputNodes, units, dropout) {
+    this.inputNodes = inputNodes;
+    this.model = tf.sequential({
+      layers: [
+        tf.layers.bidirectional({
+          layer: tf.layers.lstm({ units, returnSequences: true, inputShape: [SEQUENCE_LENGTH, inputNodes] })
+        }),
+        tf.layers.dropout({ rate: dropout }),
+        tf.layers.lstm({ units: units / 2 }),
+        tf.layers.dropout({ rate: dropout }),
+        tf.layers.dense({ units: 32, activation: 'relu' }),
+        tf.layers.dense({ units: OUTPUT_NODES, activation: 'sigmoid' })
+      ]
     });
 
-    // Post-training eval: Precision@5 và confusion matrix trên test set
-    if (testData.length > 0) {
-      const testInputs = testData.map(d => d.inputSequence);
-      const testInputTensor = tf.tensor3d(testInputs);
-      const testPreds = this.model.predict(testInputTensor);
-      const testPredData = await testPreds.data();
+    this.model.compile({
+      optimizer: tf.train.adam(0.001),
+      loss: 'binaryCrossentropy',
+      metrics: ['accuracy']
+    });
 
-      const testTrue = tf.tensor2d(testData.map(d => d.targetArray));
-      const p5 = this.precisionAt5(testTrue, tf.tensor2d(testPredData));
-      console.log(`Precision@5 on test set: ${p5.toFixed(4)}`);
-
-      await this.computeConfusionMatrix(testData, this.model);
-
-      testInputTensor.dispose();
-      testPreds.dispose();
-      testTrue.dispose();
-    }
-
-    trainInputTensor.dispose();
-    trainTargetTensor.dispose();
-    valInputTensor.dispose();
-    valTargetTensor.dispose();
-
-    return history;
+    console.log(`✅ Model built with params: units=${units}, dropout=${dropout}`);
+    return this.model;
   }
 
   async loadPretrainedModel(pretrainedPath = 'file://./models/pretrained_lottery_model/model.json') {
     try {
-      // Graceful skip if path doesn't exist (as per user issue)
-      console.log('Attempting to load pre-trained model from:', pretrainedPath);
       const pretrainedModel = await tf.loadLayersModel(pretrainedPath);
-      // Freeze early layers if loaded
-      for (let i = 0; i < Math.min(2, pretrainedModel.layers.length); i++) {
+      for (let i = 0; i < 2; i++) {
         pretrainedModel.layers[i].trainable = false;
       }
       console.log('✅ Pre-trained model loaded and partially frozen');
       return pretrainedModel;
     } catch (error) {
-      console.warn('❌ Failed to load pre-trained model (path may not exist), building new one:', error.message);
+      console.warn('❌ Failed to load pre-trained model, building new one:', error.message);
       return null;
     }
   }
 
   async predict(inputSequence) {
-    if (!this.model) {
-      throw new Error('Model not built or loaded. Call buildModel first.');
-    }
     const inputTensor = tf.tensor3d([inputSequence], [1, SEQUENCE_LENGTH, this.inputNodes]);
     const prediction = this.model.predict(inputTensor);
     const output = await prediction.data();
@@ -288,18 +293,17 @@ class TensorFlowService {
     const days = Object.keys(grouped).sort((a, b) => this.dateKey(a).localeCompare(this.dateKey(b)));
     const trainingData = [];
 
-    // Use for loop to handle async extractAllFeatures
     for (let i = 0; i < days.length - SEQUENCE_LENGTH; i++) {
       const sequenceDays = days.slice(i, i + SEQUENCE_LENGTH);
       const targetDay = days[i + SEQUENCE_LENGTH];
 
-      // Async map for inputSequence
-      const inputPromises = sequenceDays.map(async (day) => {
+      const previousDays = [];
+      const inputSequence = sequenceDays.map(day => {
         const dayResults = grouped[day] || [];
-        const previousDaysResults = sequenceDays.slice(0, sequenceDays.indexOf(day)).map(d => grouped[d] || []);
-        return await this.featureService.extractAllFeatures(dayResults, previousDaysResults, day);
+        const prevDays = previousDays.slice();
+        previousDays.push(dayResults);
+        return this.featureService.extractAllFeatures(dayResults, prevDays, day);
       });
-      const inputSequence = await Promise.all(inputPromises);
 
       const targetGDB = (grouped[targetDay] || []).find(r => r.giai === 'ĐB');
       if (targetGDB?.so && String(targetGDB.so).length >= 5) {
@@ -311,10 +315,6 @@ class TensorFlowService {
 
     if (trainingData.length > 0) {
       this.inputNodes = trainingData[0].inputSequence[0].length;
-      console.log('Detected inputNodes from data:', this.inputNodes);
-    } else {
-      console.warn('No training data generated, using default inputNodes:', DEFAULT_INPUT_NODES);
-      this.inputNodes = DEFAULT_INPUT_NODES;
     }
 
     console.log(`📊 Prepared ${trainingData.length} training sequences với feature size: ${this.inputNodes}`);
@@ -397,12 +397,11 @@ class TensorFlowService {
       throw new Error('Không có dữ liệu training');
     }
 
-    // Skip pre-trained if not exist, build new
     const pretrained = await this.loadPretrainedModel();
     if (pretrained) {
       this.model = pretrained;
     } else {
-      await this.buildModel(this.inputNodes);  // Build with detected inputNodes
+      await this.buildModelWithParams(this.inputNodes, 128, 0.2);
     }
 
     const paramGrid = {
@@ -423,13 +422,73 @@ class TensorFlowService {
     };
   }
 
+  async runNNLearning() {
+    console.log('🔔 [TensorFlow Service] Incremental Learning from new results...');
+    
+    if (!this.model) {
+      const loaded = await this.loadModel();
+      if (!loaded) throw new Error('Model chưa được load. Chạy training trước.');
+    }
+
+    const predictionsToLearn = await NNPrediction.find({ danhDauDaSo: false }).lean();
+    if (!predictionsToLearn.length) return { message: 'Không có dự đoán mới để học.' };
+
+    const allResults = await Result.find().sort({ 'ngay': 1 }).lean();
+    const grouped = {};
+    allResults.forEach(r => { if (!grouped[r.ngay]) grouped[r.ngay] = []; grouped[r.ngay].push(r); });
+    const days = Object.keys(grouped).sort((a, b) => this.dateKey(a).localeCompare(this.dateKey(b)));
+
+    let learnedCount = 0;
+    for (const pred of predictionsToLearn) {
+      const targetDayStr = pred.ngayDuDoan;
+      const targetDayIndex = days.indexOf(targetDayStr);
+
+      if (targetDayIndex >= SEQUENCE_LENGTH) {
+        const actualResult = (grouped[targetDayStr] || []).find(r => r.giai === 'ĐB');
+        
+        if (actualResult?.so && String(actualResult.so).length >= 5) {
+          const sequenceDays = days.slice(targetDayIndex - SEQUENCE_LENGTH, targetDayIndex);
+          const previousDays = [];
+          const inputSequence = sequenceDays.map(day => {
+            const dayResults = grouped[day] || [];
+            const prevDays = previousDays.slice();
+            previousDays.push(dayResults);
+            return this.featureService.extractAllFeatures(dayResults, prevDays, day);
+          });
+
+          const targetGDBString = String(actualResult.so).padStart(5, '0');
+          const targetArray = this.prepareTarget(targetGDBString);
+          const newData = [{ inputSequence, targetArray }];
+
+          const originalOptimizer = this.model.optimizer;
+          const fineTuneOptimizer = tf.train.adam(0.0001);
+          this.model.compile({ optimizer: fineTuneOptimizer, loss: 'binaryCrossentropy' });
+
+          await this.model.fit(
+            tf.tensor3d(newData.map(d => d.inputSequence)),
+            tf.tensor2d(newData.map(d => d.targetArray)),
+            { epochs: 10, verbose: 0 }
+          );
+
+          this.model.compile({ optimizer: originalOptimizer, loss: 'binaryCrossentropy' });
+
+          learnedCount++;
+        }
+      }
+      await NNPrediction.updateOne({ _id: pred._id }, { danhDauDaSo: true });
+    }
+    
+    await this.saveModel();
+    return { message: `Incremental learning completed. Learned ${learnedCount} new results.` };
+  }
+
   async runNextDayPrediction() {
     console.log('🔔 [TensorFlow Service] Generating next day prediction...');
     
     if (!this.model) {
       const modelLoaded = await this.loadModel();
       if (!modelLoaded) {
-        await this.buildModel();  // Build default if not loaded
+        throw new Error('Model chưa được huấn luyện. Hãy chạy huấn luyện trước.');
       }
     }
 
@@ -447,20 +506,21 @@ class TensorFlowService {
     const days = Object.keys(grouped).sort((a, b) => this.dateKey(a).localeCompare(this.dateKey(b)));
     let latestSequenceDays = days.slice(-SEQUENCE_LENGTH);
 
-    // Pad if needed
     const paddingDay = Array(this.inputNodes).fill(0);
     while (latestSequenceDays.length < SEQUENCE_LENGTH) {
       latestSequenceDays.unshift('padding');
     }
 
-    // Async extract for sequence
-    const inputPromises = latestSequenceDays.map(async (day, index) => {
-      if (day === 'padding') return paddingDay;
+    const previousDays = [];
+    const inputSequence = latestSequenceDays.map((day, index) => {
+      if (day === 'padding') {
+        return paddingDay;
+      }
       const dayResults = grouped[day] || [];
-      const previousDaysResults = latestSequenceDays.slice(0, index).map(d => grouped[d] || []);
-      return await this.featureService.extractAllFeatures(dayResults, previousDaysResults, day);
+      const prevDays = previousDays.slice();
+      previousDays.push(dayResults);
+      return this.featureService.extractAllFeatures(dayResults, prevDays, day);
     });
-    const inputSequence = await Promise.all(inputPromises);
 
     const output = await this.predict(inputSequence);
     const prediction = this.decodeOutput(output);
@@ -486,7 +546,7 @@ class TensorFlowService {
     if (!this.model) {
       const modelLoaded = await this.loadModel();
       if (!modelLoaded) {
-        await this.buildModel();  // Build default
+        throw new Error('Model chưa được huấn luyện. Hãy chạy huấn luyện trước.');
       }
     }
 
@@ -516,15 +576,13 @@ class TensorFlowService {
         if (actualResult?.so && String(actualResult.so).length >= 5) {
           const sequenceDays = days.slice(targetDayIndex - SEQUENCE_LENGTH, targetDayIndex);
           
-          // Async extract
           const previousDays = [];
-          const inputPromises = sequenceDays.map(async (day) => {
+          const inputSequence = sequenceDays.map(day => {
             const dayResults = grouped[day] || [];
             const prevDays = previousDays.slice();
             previousDays.push(dayResults);
-            return await this.featureService.extractAllFeatures(dayResults, prevDays, day);
+            return this.featureService.extractAllFeatures(dayResults, prevDays, day);
           });
-          const inputSequence = await Promise.all(inputPromises);
 
           const targetGDBString = String(actualResult.so).padStart(5, '0');
           const targetArray = this.prepareTarget(targetGDBString);
