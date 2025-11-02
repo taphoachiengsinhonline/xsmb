@@ -10,6 +10,7 @@ const SEQUENCE_LENGTH = 7;
 const OUTPUT_NODES = 50;
 const EPOCHS = 50;
 const BATCH_SIZE = 32;
+const MODEL_VERSION = 'v1.0'; // Thêm version control cho model state (tăng khi thay đổi features hoặc architecture)
 
 class TensorFlowService {
   constructor() {
@@ -163,6 +164,7 @@ class TensorFlowService {
     inputNodes: this.inputNodes,
     topology: modelTopology, // Lưu config
     weights: weightData,     // Lưu weights arrays
+    version: MODEL_VERSION,  // Thêm version để check khi load
     savedAt: new Date().toISOString()
   };
 
@@ -177,21 +179,27 @@ class TensorFlowService {
 }
 
 async loadModel() {
-  const modelState = await NNState.findOne({ modelName: NN_MODEL_NAME });
-  if (modelState && modelState.state && modelState.state.topology && modelState.state.weights) {
-    // Rebuild model từ topology
-    this.model = tf.models.modelFromJSON(modelState.state.topology);
+    const modelState = await NNState.findOne({ modelName: NN_MODEL_NAME });
+    if (modelState && modelState.state && modelState.state.topology && modelState.state.weights) {
+      // Check version để tránh load model cũ với features mới
+      if (modelState.state.version !== MODEL_VERSION) {
+        console.warn(`❌ Model version mismatch: expected ${MODEL_VERSION}, got ${modelState.state.version}. Will rebuild.`);
+        return false;
+      }
 
-    // Set weights
-    const weightTensors = modelState.state.weights.map(w => tf.tensor(w));
-    this.model.setWeights(weightTensors);
+      // Rebuild model từ topology
+      this.model = tf.models.modelFromJSON(modelState.state.topology);
 
-    this.inputNodes = modelState.state.inputNodes;
-    console.log(`✅ TensorFlow model loaded từ DB với ${this.inputNodes} input nodes`);
-    return true;
+      // Set weights
+      const weightTensors = modelState.state.weights.map(w => tf.tensor(w));
+      this.model.setWeights(weightTensors);
+
+      this.inputNodes = modelState.state.inputNodes;
+      console.log(`✅ TensorFlow model loaded từ DB với ${this.inputNodes} input nodes`);
+      return true;
+    }
+    return false;
   }
-  return false;
-}
 
   async runHistoricalTraining() {
     console.log('🔔 [TensorFlow Service] Starting Historical Training...');
@@ -227,8 +235,8 @@ async loadModel() {
     }
 
     const results = await Result.find().lean();
-    if (results.length < SEQUENCE_LENGTH) {
-      throw new Error(`Không đủ dữ liệu. Cần ít nhất ${SEQUENCE_LENGTH} ngày.`);
+    if (results.length < 1) { // Không yêu cầu đủ SEQUENCE_LENGTH nữa, vì sẽ pad
+      throw new Error('Không có dữ liệu.');
     }
 
     const grouped = {};
@@ -238,10 +246,19 @@ async loadModel() {
     });
 
     const days = Object.keys(grouped).sort((a, b) => this.dateKey(a).localeCompare(this.dateKey(b)));
-    const latestSequenceDays = days.slice(-SEQUENCE_LENGTH);
+    let latestSequenceDays = days.slice(-SEQUENCE_LENGTH);
+
+    // Nếu không đủ sequence, pad với ngày giả (features zeros)
+    const paddingDay = Array(this.inputNodes).fill(0); // Pad với zeros
+    while (latestSequenceDays.length < SEQUENCE_LENGTH) {
+      latestSequenceDays.unshift('padding'); // Thêm padding ở đầu
+    }
 
     const previousDays = [];
-    const inputSequence = latestSequenceDays.map(day => {
+    const inputSequence = latestSequenceDays.map((day, index) => {
+      if (day === 'padding') {
+        return paddingDay; // Sử dụng padding zeros cho ngày giả
+      }
       const dayResults = grouped[day] || [];
       const prevDays = previousDays.slice();
       previousDays.push(dayResults);
@@ -251,7 +268,7 @@ async loadModel() {
     const output = await this.predict(inputSequence);
     const prediction = this.decodeOutput(output);
 
-    const latestDay = latestSequenceDays[latestSequenceDays.length - 1];
+    const latestDay = days[days.length - 1]; // Lấy ngày thật cuối cùng
     const nextDayStr = DateTime.fromFormat(latestDay, 'dd/MM/yyyy').plus({ days: 1 }).toFormat('dd/MM/yyyy');
 
     await NNPrediction.findOneAndUpdate(
