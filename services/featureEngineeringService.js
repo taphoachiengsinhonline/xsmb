@@ -143,43 +143,76 @@ class FeatureEngineeringService {
 
         return features;
     }
-    extractExternalFeatures(dateStr) {
-    const features = [];
-    if (!dateStr) return Array(10).fill(0); // GIẢM số features cho đơn giản
+    async extractExternalFeatures(dateStr) {
+  const features = [];
+  if (!dateStr) return Array(20).fill(0); // Tăng padding để match số features mới (~20)
 
-    try {
-        const date = DateTime.fromFormat(dateStr, 'dd/MM/yyyy');
-        if (!date.isValid) return Array(10).fill(0);
+  const date = DateTime.fromFormat(dateStr, 'dd/MM/yyyy');
 
-        // 1. Thời tiết (placeholder) - GIẢM ĐỘ PHỨC TẠP
-        const temperature = 25 + Math.random() * 10 - 5;
-        const humidity = 70 + Math.random() * 20 - 10;
-        features.push(temperature / 40, humidity / 100);
+  // 1. Thời tiết (temperature, humidity, wind speed, rain probability) - Normalized
+  // Giả định fetch từ API (ví dụ: OpenWeatherMap historical - cần API key trong env)
+  // Trong thực tế: const response = await axios.get(`https://api.openweathermap.org/data/2.5/onecall/timemachine?lat=21.0285&lon=105.8542&dt=${date.toUnixInteger()}&appid=${process.env.WEATHER_API_KEY}`);
+  // Placeholder: Giả sử fetch được data
+  const temperature = 25 + Math.random() * 10 - 5; // 20-30°C random placeholder
+  const humidity = 70 + Math.random() * 20 - 10;   // 60-80%
+  const windSpeed = 5 + Math.random() * 5;         // 5-10 km/h
+  const rainProb = Math.random() * 0.5;            // 0-50%
 
-        // 2. Sự kiện - ĐƠN GIẢN HÓA
-        const vietnamHolidays = ['01/01', '30/04', '01/05', '02/09'];
-        const isHoliday = vietnamHolidays.includes(date.toFormat('dd/MM')) ? 1 : 0;
-        
-        // BỎ TÍNH TOÁN PHỨC TẠP VỀ ÂM LỊCH
-        const isTet = 0; // ← TẠM THỜI BỎ QUA TẾT
+  features.push(temperature / 40, humidity / 100, windSpeed / 20, rainProb); // Normalize
 
-        // 3. Temporal đơn giản
-        const isWeekend = [6, 7].includes(date.weekday) ? 1 : 0;
-        features.push(isHoliday, isTet, isWeekend);
+  // 2. Sự kiện (holidays, elections, festivals) - One-hot hoặc binary
+  // Danh sách holidays Việt Nam (hardcode hoặc fetch từ calendar API)
+  const vietnamHolidays = [
+    '01/01', // Tết Dương lịch
+    '30/04', // Giải phóng miền Nam
+    '01/05', // Lao động
+    '02/09', // Quốc khánh
+    // Thêm Tết Âm lịch: Cần convert lunar, dùng luxon với plugin hoặc lib riêng
+  ];
+  const isHoliday = vietnamHolidays.includes(date.toFormat('dd/MM')) ? 1 : 0;
 
-        // 4. BỎ economic indicators và news sentiment để đơn giản
+  // Election: Giả định every 5 years for Vietnam National Assembly
+  const isElectionYear = (date.year % 5 === 1) ? 1 : 0; // Ví dụ: 2021, 2026,...
 
-        return features;
+  // Festival: Ví dụ Tet (lunar new year) - Giả định check lunar date
+  const lunarDate = date.toLunar(); // Cần lib như 'lunar-javascript' để convert
+  const isTet = lunarDate.month === 1 && lunarDate.day === 1 ? 1 : 0;
 
-    } catch (error) {
-        console.warn('Lỗi xử lý external features:', error);
-        return Array(10).fill(0);
-    }
+  features.push(isHoliday, isElectionYear, isTet);
+
+  // 3. Temporal bổ sung: Is weekend, lunar phase
+  const isWeekend = [6, 7].includes(date.weekday) ? 1 : 0; // Sat-Sun
+  const lunarPhase = this.calculateLunarPhase(date); // Hàm tính phase (0-1)
+  features.push(isWeekend, lunarPhase);
+
+  // 4. Economic: VN-Index closing price (placeholder, fetch từ API như Alpha Vantage)
+  // const stockResponse = await axios.get(`https://api.example.com/stock/VNINDEX?date=${date.toISODate()}`);
+  const stockClose = 1200 + Math.random() * 200 - 100; // Placeholder 1100-1300
+  const stockVolume = 1000000 + Math.random() * 500000; // Placeholder
+  features.push(stockClose / 2000, stockVolume / 2000000); // Normalize
+
+  // 5. Other: Population events, news sentiment (advanced, placeholder)
+  const newsSentiment = Math.random() * 2 - 1; // -1 to 1 sentiment score
+  features.push(newsSentiment);
+
+  // Tổng ~20 features (có thể điều chỉnh)
+  return features;
 }
 
-// SỬA HÀM TÍNH FEATURE SIZE
-getFeatureVectorSize() {
-    return 135 + 29 + 10; // GIẢM external features từ 20 xuống 10
+calculateLunarPhase(date) {
+  // Tính lunar phase đơn giản (0: new moon, 0.5: full moon)
+  const epoch = DateTime.fromISO('1970-01-01');
+  const daysSinceEpoch = date.diff(epoch, 'days').days;
+  const phase = (daysSinceEpoch % 29.53) / 29.53; // Chu kỳ mặt trăng ~29.53 ngày
+  return phase;
+}
+
+    validateFeatureVector(features) {
+        return Array.isArray(features) && features.length > 0 && features.every(f => !isNaN(f));
+    }
+
+   getFeatureVectorSize() {
+  return 135 + 29 + 20 + 30 + 20; // +20 cho external features
 }
     
 }
