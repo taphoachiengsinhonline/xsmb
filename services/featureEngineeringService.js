@@ -8,28 +8,37 @@ class FeatureEngineeringService {
         this.prizeOrderLength = PRIZE_ORDER.length; // 27
     }
 
-    extractAllFeatures(currentDayResults, previousDaysResults = [], dateStr = null) {
-        let features = [];
+    async extractAllFeatures(currentDayResults, previousDaysResults = [], dateStr = null) {
+    let features = [];
 
-        // 1. Basic number features (digits normalized, 27 prizes * 5 digits = 135)
-        features = features.concat(this.extractBasicFeatures(currentDayResults));
+    // 1. Basic number features
+    features = features.concat(this.extractBasicFeatures(currentDayResults));
 
-        // 2. Statistical features (29)
-        features = features.concat(this.extractStatisticalFeatures(currentDayResults));
+    // 2. Statistical features
+    features = features.concat(this.extractStatisticalFeatures(currentDayResults));
 
-        // 3. Temporal features (20)
-        features = features.concat(this.extractTemporalFeatures(dateStr));
+    // 3. Temporal features
+    features = features.concat(this.extractTemporalFeatures(dateStr));
 
-        // 4. Pattern features từ các ngày trước (30)
-        features = features.concat(this.extractPatternFeatures(previousDaysResults));
+    // 4. Pattern features
+    features = features.concat(this.extractPatternFeatures(previousDaysResults));
 
-        // 5. External features: Thời tiết và sự kiện (async, placeholder ~20)
-        // Note: In practice, call await this.extractExternalFeatures(dateStr) in async context
-        // For sync fallback, use empty array here; handle async in caller (e.g., tensorflowService)
-        // features = features.concat(this.extractExternalFeaturesSync(dateStr)); // Sync placeholder
+    // 5. External features (async)
+    const externalFeatures = await this.extractExternalFeatures(dateStr);
+    features = features.concat(externalFeatures);
 
-        return features;
+    // Validate length
+    if (features.length !== this.getFeatureVectorSize()) {
+        console.warn(`Feature vector length mismatch: expected ${this.getFeatureVectorSize()}, got ${features.length}. Padding/truncating.`);
+        if (features.length < this.getFeatureVectorSize()) {
+            features = features.concat(Array(this.getFeatureVectorSize() - features.length).fill(0));
+        } else {
+            features = features.slice(0, this.getFeatureVectorSize());
+        }
     }
+
+    return features;
+}
 
     extractBasicFeatures(results) {
         const input = [];
@@ -204,13 +213,8 @@ class FeatureEngineeringService {
     }
 
     getFeatureVectorSize() {
-        // Basic: 135 (27*5)
-        // Stats: 29
-        // Temporal: 20
-        // Pattern: 30
-        // External: 20
-        return 135 + 29 + 20 + 30 + 20; // 234 total
-    }
+    return 135 + 29 + 20 + 30 + 20; // 234 total with external
+}
 }
 
 module.exports = FeatureEngineeringService;
