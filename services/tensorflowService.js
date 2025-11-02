@@ -68,28 +68,66 @@ class TensorFlowService {
   return this.model;
 }
 
-  async trainModel(trainingData) {
-    const { inputs, targets } = trainingData;
+  async trainModel(trainingSplit) {
+  const { trainData, valData } = trainingSplit;
 
-    const inputTensor = tf.tensor3d(inputs, [inputs.length, SEQUENCE_LENGTH, this.inputNodes]);
-    const targetTensor = tf.tensor2d(targets, [targets.length, OUTPUT_NODES]);
+  const classWeights = this.calculateClassWeights(trainData.map(d => d.targetArray));
 
-    const history = await this.model.fit(inputTensor, targetTensor, {
+  const trainInputs = trainData.map(d => d.inputSequence);
+  const trainTargets = trainData.map(d => d.targetArray);
+  const valInputs = valData.map(d => d.inputSequence);
+  const valTargets = valData.map(d => d.targetArray);
+
+  const trainInputTensor = tf.tensor3d(trainInputs);
+  const trainTargetTensor = tf.tensor2d(trainTargets);
+  const valInputTensor = tf.tensor3d(valInputs);
+  const valTargetTensor = tf.tensor2d(valTargets);
+
+  const k = 5;
+  const foldSize = Math.floor(trainInputs.length / k);
+  let histories = [];
+
+  for (let fold = 0; fold < k; fold++) {
+    const foldStart = fold * foldSize;
+    const foldEnd = (fold + 1) * foldSize;
+
+    const foldValInputs = trainInputs.slice(foldStart, foldEnd);
+    const foldValTargets = trainTargets.slice(foldStart, foldEnd);
+    const foldTrainInputs = trainInputs.slice(0, foldStart).concat(trainInputs.slice(foldEnd));
+    const foldTrainTargets = trainTargets.slice(0, foldStart).concat(trainTargets.slice(foldEnd));
+
+    const foldTrainTensorX = tf.tensor3d(foldTrainInputs);
+    const foldTrainTensorY = tf.tensor2d(foldTrainTargets);
+    const foldValTensorX = tf.tensor3d(foldValInputs);
+    const foldValTensorY = tf.tensor2d(foldValTargets);
+
+    const history = await this.model.fit(foldTrainTensorX, foldTrainTensorY, {
       epochs: EPOCHS,
       batchSize: BATCH_SIZE,
-      validationSplit: 0.1,
+      validationData: [foldValTensorX, foldValTensorY],
+      classWeight: classWeights,
       callbacks: {
         onEpochEnd: (epoch, logs) => {
-          console.log(`Epoch ${epoch + 1}: Loss = ${logs.loss.toFixed(4)}, Accuracy = ${logs.acc.toFixed(4)}`);
+          console.log(`Fold ${fold + 1} - Epoch ${epoch + 1}: Loss = ${logs.loss.toFixed(4)}`);
         }
       }
     });
 
-    inputTensor.dispose();
-    targetTensor.dispose();
+    histories.push(history);
 
-    return history;
+    foldTrainTensorX.dispose();
+    foldTrainTensorY.dispose();
+    foldValTensorX.dispose();
+    foldValTensorY.dispose();
   }
+
+  trainInputTensor.dispose();
+  trainTargetTensor.dispose();
+  valInputTensor.dispose();
+  valTargetTensor.dispose();
+
+  return histories;
+}
 
   async predict(inputSequence) {
     const inputTensor = tf.tensor3d([inputSequence], [1, SEQUENCE_LENGTH, this.inputNodes]);
@@ -112,47 +150,57 @@ class TensorFlowService {
   }
 
   async prepareTrainingData() {
-    const results = await Result.find().sort({ 'ngay': 1 }).lean();
-    if (results.length < SEQUENCE_LENGTH + 1) {
-      throw new Error(`Không đủ dữ liệu. Cần ít nhất ${SEQUENCE_LENGTH + 1} ngày.`);
-    }
+  const results = await Result.find().sort({ 'ngay': 1 }).lean();
+  if (results.length < SEQUENCE_LENGTH + 1) {
+    throw new Error(`Không đủ dữ liệu. Cần ít nhất ${SEQUENCE_LENGTH + 1} ngày.`);
+  }
 
-    const grouped = {};
-    results.forEach(r => {
-      if (!grouped[r.ngay]) grouped[r.ngay] = [];
-      grouped[r.ngay].push(r);
+  const grouped = {};
+  results.forEach(r => {
+    if (!grouped[r.ngay]) grouped[r.ngay] = [];
+    grouped[r.ngay].push(r);
+  });
+
+  const days = Object.keys(grouped).sort((a, b) => this.dateKey(a).localeCompare(this.dateKey(b)));
+  const trainingData = [];
+
+  for (let i = 0; i < days.length - SEQUENCE_LENGTH; i++) {
+    const sequenceDays = days.slice(i, i + SEQUENCE_LENGTH);
+    const targetDay = days[i + SEQUENCE_LENGTH];
+
+    const previousDays = [];
+    const inputSequence = sequenceDays.map(day => {
+      const dayResults = grouped[day] || [];
+      const prevDays = previousDays.slice();
+      previousDays.push(dayResults);
+      return this.featureService.extractAllFeatures(dayResults, prevDays, day);
     });
 
-    const days = Object.keys(grouped).sort((a, b) => this.dateKey(a).localeCompare(this.dateKey(b)));
-    const trainingData = [];
-
-    for (let i = 0; i < days.length - SEQUENCE_LENGTH; i++) {
-      const sequenceDays = days.slice(i, i + SEQUENCE_LENGTH);
-      const targetDay = days[i + SEQUENCE_LENGTH];
-
-      const previousDays = [];
-      const inputSequence = sequenceDays.map(day => {
-        const dayResults = grouped[day] || [];
-        const prevDays = previousDays.slice();
-        previousDays.push(dayResults);
-        return this.featureService.extractAllFeatures(dayResults, prevDays, day);
-      });
-
-      const targetGDB = (grouped[targetDay] || []).find(r => r.giai === 'ĐB');
-      if (targetGDB?.so && String(targetGDB.so).length >= 5) {
-        const targetGDBString = String(targetGDB.so).padStart(5, '0');
-        const targetArray = this.prepareTarget(targetGDBString);
-        trainingData.push({ inputSequence, targetArray });
-      }
+    const targetGDB = (grouped[targetDay] || []).find(r => r.giai === 'ĐB');
+    if (targetGDB?.so && String(targetGDB.so).length >= 5) {
+      const targetGDBString = String(targetGDB.so).padStart(5, '0');
+      const targetArray = this.prepareTarget(targetGDBString);
+      trainingData.push({ inputSequence, targetArray });
     }
-
-    if (trainingData.length > 0) {
-      this.inputNodes = trainingData[0].inputSequence[0].length;
-    }
-
-    console.log(`📊 Prepared ${trainingData.length} training sequences với feature size: ${this.inputNodes}`);
-    return trainingData;
   }
+
+  if (trainingData.length > 0) {
+    this.inputNodes = trainingData[0].inputSequence[0].length;
+  }
+
+  console.log(`📊 Prepared ${trainingData.length} training sequences với feature size: ${this.inputNodes}`);
+
+  const total = trainingData.length;
+  const trainEnd = Math.floor(total * 0.8);
+  const valEnd = Math.floor(total * 0.9);
+
+  const trainData = trainingData.slice(0, trainEnd);
+  const valData = trainingData.slice(trainEnd, valEnd);
+  const testData = trainingData.slice(valEnd);
+
+  console.log(`📊 Split data: Train ${trainData.length}, Val ${valData.length}, Test ${testData.length}`);
+  return { trainData, valData, testData };
+}
 
   dateKey(s) {
     if (!s || typeof s !== 'string') return '';
