@@ -7,7 +7,7 @@ const FeatureEngineeringService = require('./featureEngineeringService');
 
 const NN_MODEL_NAME = 'GDB_LSTM_TFJS';
 const SEQUENCE_LENGTH = 7;
-const OUTPUT_NODES = 50; // 5 vị trí * 10 số
+const OUTPUT_NODES = 50;
 const EPOCHS = 50;
 const BATCH_SIZE = 32;
 
@@ -15,7 +15,7 @@ class TensorFlowService {
   constructor() {
     this.model = null;
     this.featureService = new FeatureEngineeringService();
-    this.inputNodes = 0; // Sẽ được xác định khi chuẩn bị dữ liệu
+    this.inputNodes = 0;
   }
 
   async buildModel(inputNodes) {
@@ -119,7 +119,6 @@ class TensorFlowService {
       const previousDays = [];
       const inputSequence = sequenceDays.map(day => {
         const dayResults = grouped[day] || [];
-        // Lấy các ngày trước đó để tính pattern features
         const prevDays = previousDays.slice();
         previousDays.push(dayResults);
         return this.featureService.extractAllFeatures(dayResults, prevDays, day);
@@ -133,7 +132,6 @@ class TensorFlowService {
       }
     }
 
-    // Xác định inputNodes từ dữ liệu training
     if (trainingData.length > 0) {
       this.inputNodes = trainingData[0].inputSequence[0].length;
     }
@@ -159,7 +157,6 @@ class TensorFlowService {
       savedAt: new Date().toISOString()
     };
 
-    // Lưu model dưới dạng JSON (có thể lưu vào file hoặc database)
     const saveResult = await this.model.save('file://./models/tfjs_model');
     
     await NNState.findOneAndUpdate(
@@ -255,6 +252,92 @@ class TensorFlowService {
     return {
       message: `TensorFlow LSTM đã tạo dự đoán cho ngày ${nextDayStr}.`,
       ngayDuDoan: nextDayStr
+    };
+  }
+
+  // THÊM HÀM runLearning ĐẦY ĐỦ
+  async runLearning() {
+    console.log('🔔 [TensorFlow Service] Learning from new results...');
+    
+    if (!this.model) {
+      const modelLoaded = await this.loadModel();
+      if (!modelLoaded) {
+        throw new Error('Model chưa được huấn luyện. Hãy chạy huấn luyện trước.');
+      }
+    }
+
+    const predictionsToLearn = await NNPrediction.find({ danhDauDaSo: false }).lean();
+    if (!predictionsToLearn.length) {
+      return { message: 'Không có dự đoán mới nào để học.' };
+    }
+
+    const allResults = await Result.find().sort({ 'ngay': 1 }).lean();
+    const grouped = {};
+    allResults.forEach(r => {
+      if (!grouped[r.ngay]) grouped[r.ngay] = [];
+      grouped[r.ngay].push(r);
+    });
+    const days = Object.keys(grouped).sort((a, b) => this.dateKey(a).localeCompare(this.dateKey(b)));
+    
+    let learnedCount = 0;
+    const trainingData = [];
+
+    for (const pred of predictionsToLearn) {
+      const targetDayStr = pred.ngayDuDoan;
+      const targetDayIndex = days.indexOf(targetDayStr);
+
+      if (targetDayIndex >= SEQUENCE_LENGTH) {
+        const actualResult = (grouped[targetDayStr] || []).find(r => r.giai === 'ĐB');
+        
+        if (actualResult?.so && String(actualResult.so).length >= 5) {
+          const sequenceDays = days.slice(targetDayIndex - SEQUENCE_LENGTH, targetDayIndex);
+          
+          const previousDays = [];
+          const inputSequence = sequenceDays.map(day => {
+            const dayResults = grouped[day] || [];
+            const prevDays = previousDays.slice();
+            previousDays.push(dayResults);
+            return this.featureService.extractAllFeatures(dayResults, prevDays, day);
+          });
+
+          const targetGDBString = String(actualResult.so).padStart(5, '0');
+          const targetArray = this.prepareTarget(targetGDBString);
+          
+          trainingData.push({ inputSequence, targetArray });
+          learnedCount++;
+        }
+      }
+      
+      await NNPrediction.updateOne({ _id: pred._id }, { danhDauDaSo: true });
+    }
+
+    if (trainingData.length > 0) {
+      const inputs = trainingData.map(d => d.inputSequence);
+      const targets = trainingData.map(d => d.targetArray);
+
+      const inputTensor = tf.tensor3d(inputs, [inputs.length, SEQUENCE_LENGTH, this.inputNodes]);
+      const targetTensor = tf.tensor2d(targets, [targets.length, OUTPUT_NODES]);
+
+      await this.model.fit(inputTensor, targetTensor, {
+        epochs: 10,
+        batchSize: Math.min(8, trainingData.length),
+        validationSplit: 0.2,
+        callbacks: {
+          onEpochEnd: (epoch, logs) => {
+            console.log(`Fine-tuning Epoch ${epoch + 1}: Loss = ${logs.loss?.toFixed(4) || 'N/A'}`);
+          }
+        }
+      });
+
+      inputTensor.dispose();
+      targetTensor.dispose();
+      
+      await this.saveModel();
+    }
+    
+    return { 
+      message: `TensorFlow LSTM đã học từ ${learnedCount} kết quả mới.`,
+      learnedCount 
     };
   }
 
