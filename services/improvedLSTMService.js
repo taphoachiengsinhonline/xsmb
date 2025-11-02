@@ -17,13 +17,16 @@ class ImprovedLSTMService {
     this.model = null;
   }
 
-  // SỬA LỖI: Thiếu dấu đóng ngoặc và async
-async buildModel(trainingData) {
+  async buildModel(trainingData) {
     if (!trainingData || trainingData.length === 0) {
         throw new Error('Không có dữ liệu training để xác định kích thước model');
     }
 
+    // TÍNH KÍCH THƯỚC FEATURE VECTOR TỪ DỮ LIỆU THỰC TẾ
     const sampleInput = trainingData[0].inputSequence[0];
+    if (!sampleInput || sampleInput.length === 0) {
+        throw new Error('Invalid sample input'); // Thêm check để tránh crash nếu sampleInput rỗng
+    }
     this.inputNodes = sampleInput.length;
     const outputNodes = trainingData[0].targetArray.length;
 
@@ -34,7 +37,7 @@ async buildModel(trainingData) {
             tf.layers.lstm({
                 units: 128,
                 returnSequences: true,
-                inputShape: [SEQUENCE_LENGTH, this.inputNodes],
+                inputShape: [SEQUENCE_LENGTH, this.inputNodes], // DÙNG this.inputNodes ĐỘNG
                 dropout: 0.2,
                 recurrentDropout: 0.2
             }),
@@ -49,20 +52,11 @@ async buildModel(trainingData) {
             }),
             tf.layers.dropout({ rate: 0.3 }),
             tf.layers.dense({
-                units: outputNodes,
+                units: outputNodes, // DÙNG outputNodes ĐỘNG
                 activation: 'sigmoid'
             })
         ]
     });
-    
-    this.model.compile({
-        optimizer: 'adam',
-        loss: 'binaryCrossentropy',
-        metrics: ['accuracy']
-    });
-    
-    return this.model;
-} // THÊM DẤU ĐÓNG NGOẶC
 
   async trainModel(trainingData) {
     const { inputs, targets } = trainingData;
