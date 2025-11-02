@@ -176,11 +176,11 @@ async function saveToDb(data) {
 async function fixChanLeInDb() {
   console.log('🔧 Bắt đầu fix chanle cho các bản ghi cũ...');
   try {
-    const cursor = Prize.find({ $or: [{ chanle: '' }, { chanle: null }, { chanle: { $exists: false } }] }).cursor();
+    const cursor = Result.find({ $or: [{ chanle: '' }, { chanle: null }, { chanle: { $exists: false } }] }).cursor();
     let count = 0;
     for (let doc = await cursor.next(); doc != null; doc = await cursor.next()) {
       const baso = doc.basocuoi || '';
-      if (baso && baso.length === 3 && !String(doc.chanle).trim() && !doc.giai.startsWith('G7')) {
+      if (baso && baso.length === 3 && baso.match(/^\d{3}$/) && !String(doc.chanle || '').trim().length && !doc.giai.startsWith('G7')) {
         doc.chanle = getChanLe(baso);
         await doc.save();
         count++;
@@ -217,4 +217,5 @@ module.exports = {
 if (require.main === module) {
   runOnceAndExit();
 }
+
 
