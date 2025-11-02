@@ -85,34 +85,34 @@ function createPrizeRecord(ngay, prizeCode, index, numberRaw) {
   };
 }
 
-// ---------- Parse 1 ngày (Cải thiện robust parsing với selectors) ----------
-function parseDayResults($, ngay) {
+// ---------- Parse 1 ngày ----------
+function parseDayResults(dayText, ngay) {
   const resultData = [];
-  const prizeCodes = ['ĐB', 'G1', 'G2', 'G3', 'G4', 'G5', 'G6', 'G7'];
-  const prizeNames = ['Đặc biệt', 'Giải nhất', 'Giải nhì', 'Giải ba', 'Giải tư', 'Giải năm', 'Giải sáu', 'Giải bảy'];
+  const prizeNames = ['Đặc biệt','Giải nhất','Giải nhì','Giải ba','Giải tư','Giải năm','Giải sáu','Giải bảy'];
+  const slices = {};
 
-  // Giả định cấu trúc site: Tìm div hoặc table chứa kết quả cho ngày cụ thể
-  // Thay vì $.text(), sử dụng selectors: Ví dụ, '.ketqua' là class chứa table kết quả
-  // Điều chỉnh selectors dựa trên inspect site thực tế (ví dụ: '#result_table tr' cho rows)
-  const resultContainer = $('.ketqua'); // Thay bằng selector thực tế, ví dụ: 'div[id^="result_"]' hoặc 'table.ketqua'
-  if (resultContainer.length === 0) {
-    console.warn(`Không tìm thấy container cho ngày ${ngay}`);
-    return [];
+  // Tách từng block theo tên giải (từ vị trí tìm thấy)
+  let lastIdx = 0;
+  for (let i = 0; i < prizeNames.length; i++) {
+    const name = prizeNames[i];
+    const idx = dayText.indexOf(name, lastIdx);
+    if (idx !== -1) {
+      const endIdx = (i < prizeNames.length - 1) ? dayText.indexOf(prizeNames[i+1], idx) : dayText.length;
+      slices[name] = dayText.slice(idx, endIdx === -1 ? dayText.length : endIdx);
+      lastIdx = idx;
+    }
   }
 
-  prizeNames.forEach((name, idx) => {
-    // Tìm phần tử chứa tên giải (robust: tìm text chứa name)
-    const prizeSection = resultContainer.find(`:contains("${name}")`).closest('tr'); // Giả định table, tìm row chứa name
-    if (prizeSection.length > 0) {
-      // Lấy các số từ các td tiếp theo (robust: lấy text từ td.number hoặc class tương tự)
-      const numbers = prizeSection.nextAll('td.number').map((i, el) => $(el).text().trim()).get(); // Thay 'td.number' bằng selector thực tế
-      numbers.forEach((num, subIdx) => {
-        if (num) {
-          resultData.push(createPrizeRecord(ngay, prizeCodes[idx], subIdx, num));
-        }
-      });
-    }
-  });
+  const findAllLen = (txt, n) => (txt.match(new RegExp(`\\d{${n}}`, 'g')) || []);
+
+  if (slices['Đặc biệt']) findAllLen(slices['Đặc biệt'], 5).forEach((num, i) => resultData.push(createPrizeRecord(ngay, 'ĐB', i, num)));
+  if (slices['Giải nhất']) findAllLen(slices['Giải nhất'], 5).forEach((num, i) => resultData.push(createPrizeRecord(ngay, 'G1', i, num)));
+  if (slices['Giải nhì']) findAllLen(slices['Giải nhì'], 5).forEach((num, i) => resultData.push(createPrizeRecord(ngay, 'G2', i, num)));
+  if (slices['Giải ba']) findAllLen(slices['Giải ba'], 5).forEach((num, i) => resultData.push(createPrizeRecord(ngay, 'G3', i, num)));
+  if (slices['Giải tư']) findAllLen(slices['Giải tư'], 4).forEach((num, i) => resultData.push(createPrizeRecord(ngay, 'G4', i, num)));
+  if (slices['Giải năm']) findAllLen(slices['Giải năm'], 4).forEach((num, i) => resultData.push(createPrizeRecord(ngay, 'G5', i, num)));
+  if (slices['Giải sáu']) findAllLen(slices['Giải sáu'], 3).forEach((num, i) => resultData.push(createPrizeRecord(ngay, 'G6', i, num)));
+  if (slices['Giải bảy']) findAllLen(slices['Giải bảy'], 2).slice(0,4).forEach((num, i) => resultData.push(createPrizeRecord(ngay, 'G7', i, num)));
 
   return resultData;
 }
@@ -123,19 +123,22 @@ async function extractXsData() {
   try {
     const res = await axios.get(CRAWL_URL, { headers: { 'User-Agent': 'Mozilla/5.0' }, timeout: 20000 });
     const $ = cheerio.load(res.data);
+    const allText = $.text();
 
+    const dateMatches = [...allText.matchAll(/\d{1,2}[\/-]\d{1,2}[\/-]\d{4}/g)];
     const resultData = [];
-    // Tìm tất cả các ngày (robust: tìm div hoặc h3 chứa ngày)
-    const dateElements = $('h3.ngay, div.date-header'); // Thay bằng selector thực tế cho ngày
-    dateElements.each((idx, el) => {
-      const dateStr = $(el).text().trim().match(/\d{1,2}[\/-]\d{1,2}[\/-]\d{4}/)?.[0].replace(/-/g, '/') || '';
-      if (dateStr) {
-        // Lấy phần kết quả cho ngày này (robust: lấy sibling table hoặc div tiếp theo)
-        const dayContainer = $(el).next('table.ketqua'); // Thay bằng selector thực tế
-        const dayData = parseDayResults(dayContainer, dateStr);
-        if (dayData.length) resultData.push(...dayData);
-      }
-    });
+
+    for (let dm of dateMatches) {
+      const dateStr = dm[0].replace(/-/g, '/');
+      const startPos = dm.index + dm[0].length;
+      // lấy phần text từ ngày này tới ngày tiếp theo (nếu có) để giới hạn parse
+      // tìm vị trí của match tiếp theo
+      const nextMatch = dateMatches.find(m => m.index > dm.index);
+      const endPos = nextMatch ? nextMatch.index : allText.length;
+      const dayText = allText.slice(startPos, endPos);
+      const dayData = parseDayResults(dayText, dateStr);
+      if (dayData.length) resultData.push(...dayData);
+    }
 
     console.log(`✅ Crawl xong, tổng bản ghi thu được: ${resultData.length}`);
     return resultData;
@@ -155,14 +158,13 @@ async function saveToDb(data) {
   let inserted = 0;
   for (const item of data) {
     try {
-      // Kiểm tra tồn tại trước upsert để tránh duplicate (dù index unique)
-      const exists = await Result.findOne({ ngay: item.ngay, giai: item.giai });
-      if (!exists) {
-        await Result.create(item); // Sử dụng create thay vì updateOne để tận dụng schema validation
-        inserted++;
-      } else {
-        console.log(`Bản ghi đã tồn tại: ${item.ngay} - ${item.giai}, bỏ qua.`);
-      }
+      // SỬA: Prize thành Result
+      await Result.updateOne(
+        { ngay: item.ngay, giai: item.giai },
+        { $setOnInsert: item },
+        { upsert: true }
+      );
+      inserted++;
     } catch (e) {
       console.error('Lỗi insert/update:', e && e.message ? e.message : e, item);
     }
@@ -178,7 +180,7 @@ async function fixChanLeInDb() {
     let count = 0;
     for (let doc = await cursor.next(); doc != null; doc = await cursor.next()) {
       const baso = doc.basocuoi || '';
-      if (baso && baso.length === 3 && !String(doc.chanle).trim() && !doc.giai.startsWith('G7')) {
+      if (baso && baso.length === 3 && baso.match(/^\d{3}$/) && !String(doc.chanle || '').trim().length && !doc.giai.startsWith('G7')) {
         doc.chanle = getChanLe(baso);
         await doc.save();
         count++;
@@ -215,3 +217,4 @@ module.exports = {
 if (require.main === module) {
   runOnceAndExit();
 }
+
