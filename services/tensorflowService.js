@@ -2,8 +2,10 @@ const tf = require('@tensorflow/tfjs-node');
 const Result = require('../models/Result');
 const NNPrediction = require('../models/NNPrediction');
 const NNState = require('../models/NNState');
-const { DateTime } = require('luxon');
+const AdvancedFeatureEngineer = require('./advancedFeatureService');
 const FeatureEngineeringService = require('./featureEngineeringService');
+const { DateTime } = require('luxon');
+
 
 const NN_MODEL_NAME = 'GDB_LSTM_TFJS';
 const SEQUENCE_LENGTH = 7;
@@ -15,6 +17,7 @@ class TensorFlowService {
   constructor() {
     this.model = null;
     this.featureService = new FeatureEngineeringService();
+    this.advancedFeatureEngineer = new AdvancedFeatureEngineer();
     this.inputNodes = 0; // Sẽ được xác định khi chuẩn bị dữ liệu
   }
 
@@ -100,47 +103,64 @@ class TensorFlowService {
   async prepareTrainingData() {
     const results = await Result.find().sort({ 'ngay': 1 }).lean();
     if (results.length < SEQUENCE_LENGTH + 1) {
-      throw new Error(`Không đủ dữ liệu. Cần ít nhất ${SEQUENCE_LENGTH + 1} ngày.`);
+        throw new Error(`Không đủ dữ liệu. Cần ít nhất ${SEQUENCE_LENGTH + 1} ngày.`);
     }
 
     const grouped = {};
     results.forEach(r => {
-      if (!grouped[r.ngay]) grouped[r.ngay] = [];
-      grouped[r.ngay].push(r);
+        if (!grouped[r.ngay]) grouped[r.ngay] = [];
+        grouped[r.ngay].push(r);
     });
 
     const days = Object.keys(grouped).sort((a, b) => this.dateKey(a).localeCompare(this.dateKey(b)));
     const trainingData = [];
 
+    // Lặp qua tất cả các chuỗi (sequence) có thể có trong lịch sử
     for (let i = 0; i < days.length - SEQUENCE_LENGTH; i++) {
-      const sequenceDays = days.slice(i, i + SEQUENCE_LENGTH);
-      const targetDay = days[i + SEQUENCE_LENGTH];
+        const sequenceDaysStrings = days.slice(i, i + SEQUENCE_LENGTH);
+        const targetDayString = days[i + SEQUENCE_LENGTH];
+        
+        // Lấy dữ liệu đầy đủ cho các ngày trong chuỗi
+        const allHistoryForSequence = days.slice(0, i + SEQUENCE_LENGTH).map(dayStr => grouped[dayStr] || []);
 
-      const previousDays = [];
-      const inputSequence = sequenceDays.map(day => {
-        const dayResults = grouped[day] || [];
-        // Lấy các ngày trước đó để tính pattern features
-        const prevDays = previousDays.slice();
-        previousDays.push(dayResults);
-        return this.featureService.extractAllFeatures(dayResults, prevDays, day);
-      });
+        const inputSequence = [];
+        
+        // Tạo feature vector cho từng ngày trong chuỗi
+        for(let j = 0; j < SEQUENCE_LENGTH; j++) {
+            const currentDayForFeature = grouped[sequenceDaysStrings[j]] || [];
+            const dateStr = sequenceDaysStrings[j];
+            
+            // Lấy lịch sử các ngày *trước* ngày đang xét để tính toán
+            const previousDaysForBasicFeatures = allHistoryForSequence.slice(0, i + j);
+            const previousDaysForAdvancedFeatures = previousDaysForBasicFeatures.slice().reverse(); // reverse để hàm gap chạy đúng
 
-      const targetGDB = (grouped[targetDay] || []).find(r => r.giai === 'ĐB');
-      if (targetGDB?.so && String(targetGDB.so).length >= 5) {
-        const targetGDBString = String(targetGDB.so).padStart(5, '0');
-        const targetArray = this.prepareTarget(targetGDBString);
-        trainingData.push({ inputSequence, targetArray });
-      }
+            // **ĐÂY LÀ PHẦN THAY ĐỔI QUAN TRỌNG**
+            // 1. Lấy features cơ bản
+            const basicFeatures = this.featureService.extractAllFeatures(currentDayForFeature, previousDaysForBasicFeatures, dateStr);
+            // 2. Lấy features nâng cao
+            const advancedFeatures = this.advancedFeatureEngineer.extractPremiumFeatures(currentDayForFeature, previousDaysForAdvancedFeatures);
+            
+            // 3. Gộp lại
+            const finalFeatureVector = [...basicFeatures, ...advancedFeatures];
+            inputSequence.push(finalFeatureVector);
+        }
+
+        const targetGDB = (grouped[targetDayString] || []).find(r => r.giai === 'ĐB');
+        if (targetGDB?.so && String(targetGDB.so).length >= 5) {
+            const targetGDBString = String(targetGDB.so).padStart(5, '0');
+            const targetArray = this.prepareTarget(targetGDBString);
+            trainingData.push({ inputSequence, targetArray });
+        }
     }
 
-    // Xác định inputNodes từ dữ liệu training
     if (trainingData.length > 0) {
-      this.inputNodes = trainingData[0].inputSequence[0].length;
+        // Cập nhật số node input tự động từ dữ liệu thực tế
+        this.inputNodes = trainingData[0].inputSequence[0].length;
     }
 
-    console.log(`📊 Prepared ${trainingData.length} training sequences với feature size: ${this.inputNodes}`);
+    console.log(`📊 Đã chuẩn bị ${trainingData.length} chuỗi dữ liệu huấn luyện với feature size: ${this.inputNodes}`);
     return trainingData;
-  }
+}
 
   dateKey(s) {
     if (!s || typeof s !== 'string') return '';
