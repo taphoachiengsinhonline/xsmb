@@ -271,12 +271,8 @@ class TensorFlowService {
     this.model.compile({
       optimizer: tf.train.adam({learningRate: 0.0005}),
       loss: 'binaryCrossentropy',
-      // SỬA LỖI: Thay thế các chuỗi 'precision', 'recall' bằng các hàm tf.metrics tương ứng.
-      metrics: [
-        'accuracy', 
-        tf.metrics.precision(), 
-        tf.metrics.recall()
-      ]
+      // TẠM THỜI CHỈ DÙNG 'accuracy' ĐỂ KIỂM TRA
+      metrics: ['accuracy']
     });
 
     console.log('✅ Model đã được compile. Bắt đầu quá trình training...');
