@@ -248,9 +248,14 @@ class TensorFlowService {
 
     // COMPILE MODEL: Cấu hình quá trình học
     this.model.compile({
-      optimizer: tf.train.adam({learningRate: 0.0005}), // Adam optimizer là lựa chọn tốt và an toàn. Giảm learning rate một chút (0.0005) vì mô hình phức tạp hơn, cần đi những bước nhỏ và cẩn thận hơn.
-      loss: 'binaryCrossentropy',                      // Hàm mất mát phù hợp cho output sigmoid và bài toán multi-label. Nó đo lường sự khác biệt giữa xác suất dự đoán và giá trị thực tế (0 hoặc 1).
-      metrics: ['accuracy', 'precision', 'recall']     // Các chỉ số để theo dõi trong quá trình training.
+      optimizer: tf.train.adam({learningRate: 0.0005}),
+      loss: 'binaryCrossentropy',
+      // SỬA LỖI: Thay thế các chuỗi 'precision', 'recall' bằng các hàm tf.metrics tương ứng.
+      metrics: [
+        'accuracy', 
+        tf.metrics.precision(), 
+        tf.metrics.recall()
+      ]
     });
 
     console.log('✅ Model đã được compile. Bắt đầu quá trình training...');
