@@ -124,6 +124,7 @@ class TensorFlowService {
   }
 
   async prepareTrainingData() {
+    console.log('📝 Bắt đầu chuẩn bị dữ liệu huấn luyện...');
     const results = await Result.find().sort({ 'ngay': 1 }).lean();
     if (results.length < SEQUENCE_LENGTH + 1) {
         throw new Error(`Không đủ dữ liệu. Cần ít nhất ${SEQUENCE_LENGTH + 1} ngày.`);
@@ -138,33 +139,51 @@ class TensorFlowService {
     const days = Object.keys(grouped).sort((a, b) => this.dateKey(a).localeCompare(this.dateKey(b)));
     const trainingData = [];
 
-    // Lặp qua tất cả các chuỗi (sequence) có thể có trong lịch sử
     for (let i = 0; i < days.length - SEQUENCE_LENGTH; i++) {
         const sequenceDaysStrings = days.slice(i, i + SEQUENCE_LENGTH);
         const targetDayString = days[i + SEQUENCE_LENGTH];
         
-        // Lấy dữ liệu đầy đủ cho các ngày trong chuỗi
         const allHistoryForSequence = days.slice(0, i + SEQUENCE_LENGTH).map(dayStr => grouped[dayStr] || []);
-
         const inputSequence = [];
         
-        // Tạo feature vector cho từng ngày trong chuỗi
+        let sequenceHasInvalidData = false; // Cờ để kiểm tra sequence hiện tại
+
         for(let j = 0; j < SEQUENCE_LENGTH; j++) {
             const currentDayForFeature = grouped[sequenceDaysStrings[j]] || [];
             const dateStr = sequenceDaysStrings[j];
             
-            // Lấy lịch sử các ngày *trước* ngày đang xét để tính toán
             const previousDaysForBasicFeatures = allHistoryForSequence.slice(0, i + j);
-            const previousDaysForAdvancedFeatures = previousDaysForBasicFeatures.slice().reverse(); // reverse để hàm gap chạy đúng
+            const previousDaysForAdvancedFeatures = previousDaysForBasicFeatures.slice().reverse();
 
-            // **ĐÂY LÀ PHẦN THAY ĐỔI QUAN TRỌNG**
-            // 1. Lấy features cơ bản
             const basicFeatures = this.featureService.extractAllFeatures(currentDayForFeature, previousDaysForBasicFeatures, dateStr);
-            // 2. Lấy features nâng cao
             const advancedFeatures = this.advancedFeatureEngineer.extractPremiumFeatures(currentDayForFeature, previousDaysForAdvancedFeatures);
             
-            // 3. Gộp lại
-            const finalFeatureVector = [...basicFeatures, ...advancedFeatures];
+            let finalFeatureVector = [...basicFeatures, ...advancedFeatures];
+
+            // =================================================================
+            // ĐÂY LÀ "TẤM LÁ CHẮN" MỚI - BƯỚC KIỂM TRA VÀ LÀM SẠCH
+            // =================================================================
+            const initialLength = finalFeatureVector.length;
+            finalFeatureVector = finalFeatureVector.map(val => {
+                // Kiểm tra xem giá trị có phải là null, undefined, hoặc NaN không.
+                if (val === null || val === undefined || isNaN(val)) {
+                    // Nếu không hợp lệ, ghi lại cảnh báo và thay thế bằng 0.
+                    // Việc này giúp chương trình không bị sập và ta có thể điều tra sau.
+                    if (!sequenceHasInvalidData) { // Chỉ log 1 lần cho mỗi sequence bị lỗi
+                        console.warn(`
+                            ⚠️ CẢNH BÁO: Phát hiện dữ liệu không hợp lệ trong chuỗi bắt đầu từ ngày ${sequenceDaysStrings[0]}.
+                            Ngày cụ thể có vấn đề: ${dateStr}.
+                            Giá trị không hợp lệ đã được thay thế bằng 0.
+                            Hãy kiểm tra lại logic trong các hàm feature engineering cho ngày này.
+                        `);
+                    }
+                    sequenceHasInvalidData = true;
+                    return 0; // Thay thế giá trị không hợp lệ bằng 0.
+                }
+                return val;
+            });
+            // =================================================================
+
             inputSequence.push(finalFeatureVector);
         }
 
@@ -177,11 +196,13 @@ class TensorFlowService {
     }
 
     if (trainingData.length > 0) {
-        // Cập nhật số node input tự động từ dữ liệu thực tế
         this.inputNodes = trainingData[0].inputSequence[0].length;
+        console.log(`✅ Đã chuẩn bị ${trainingData.length} chuỗi dữ liệu huấn luyện hợp lệ với feature size: ${this.inputNodes}`);
+    } else {
+        console.error("❌ LỖI NGHIÊM TRỌNG: Không thể tạo được bất kỳ chuỗi dữ liệu huấn luyện nào. Vui lòng kiểm tra lại toàn bộ dữ liệu nguồn và logic `prepareTrainingData`.");
+        throw new Error("Không có dữ liệu training hợp lệ.");
     }
 
-    console.log(`📊 Đã chuẩn bị ${trainingData.length} chuỗi dữ liệu huấn luyện với feature size: ${this.inputNodes}`);
     return trainingData;
 }
 
