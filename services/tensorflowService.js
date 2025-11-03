@@ -4,13 +4,14 @@ const NNPrediction = require('../models/NNPrediction');
 const NNState = require('../models/NNState');
 const AdvancedFeatureEngineer = require('./advancedFeatureService');
 const FeatureEngineeringService = require('./featureEngineeringService');
+
 const { DateTime } = require('luxon');
 
 
-const NN_MODEL_NAME = 'GDB_LSTM_TFJS';
+const NN_MODEL_NAME = 'GDB_LSTM_TFJS_PREMIUM_V1'; // Đổi tên model để lưu trạng thái mới
 const SEQUENCE_LENGTH = 7;
-const OUTPUT_NODES = 50; // 5 vị trí * 10 số
-const EPOCHS = 50;
+const OUTPUT_NODES = 50;
+const EPOCHS = 50; // Có thể tăng lên 70-100 với model phức tạp hơn
 const BATCH_SIZE = 32;
 
 class TensorFlowService {
@@ -18,42 +19,64 @@ class TensorFlowService {
     this.model = null;
     this.featureService = new FeatureEngineeringService();
     this.advancedFeatureEngineer = new AdvancedFeatureEngineer();
-    this.inputNodes = 0; // Sẽ được xác định khi chuẩn bị dữ liệu
+    this.inputNodes = 0; 
   }
 
   async buildModel(inputNodes) {
+    console.log(`🏗️ Bắt đầu xây dựng kiến trúc Premium Model với ${inputNodes} features...`);
     this.inputNodes = inputNodes;
-    this.model = tf.sequential({
-      layers: [
-        tf.layers.lstm({
-          units: 128,
-          returnSequences: true,
-          inputShape: [SEQUENCE_LENGTH, inputNodes]
-        }),
-        tf.layers.dropout({ rate: 0.2 }),
-        tf.layers.lstm({
-          units: 64,
-          returnSequences: false
-        }),
-        tf.layers.dropout({ rate: 0.2 }),
-        tf.layers.dense({
-          units: 32,
-          activation: 'relu'
-        }),
-        tf.layers.dense({
-          units: OUTPUT_NODES,
-          activation: 'sigmoid'
-        })
-      ]
-    });
 
-    this.model.compile({
-      optimizer: tf.train.adam(0.001),
-      loss: 'binaryCrossentropy',
-      metrics: ['accuracy']
-    });
+    const model = tf.sequential();
 
-    console.log('✅ TensorFlow LSTM model built successfully');
+    // --- TẦNG 1: LỚP LSTM CHÍNH ---
+    // Nhiệm vụ: Xử lý trực tiếp chuỗi 7 ngày x 346 features. Lớp này học các mẫu hình thời gian (temporal patterns) ở mức độ thấp.
+    model.add(tf.layers.lstm({
+      units: 192,                         // Số lượng nơ-ron (bộ nhớ) trong lớp LSTM. 192 là một con số lớn, phù hợp với lượng features đầu vào cao.
+      returnSequences: true,              // Rất QUAN TRỌNG. Đặt là `true` để output của lớp này vẫn là một chuỗi (sequence), làm đầu vào cho lớp LSTM tiếp theo.
+      inputShape: [SEQUENCE_LENGTH, inputNodes], // Định nghĩa hình dạng đầu vào: 7 bước thời gian, mỗi bước có `inputNodes` features.
+      kernelRegularizer: tf.regularizers.l2({l2: 0.001}), // Kỹ thuật chính quy hóa L2: "Phạt" các trọng số (weights) có giá trị quá lớn, buộc mô hình phải học các mẫu hình tổng quát hơn thay vì dựa dẫm vào một vài features. Giúp chống overfitting.
+      recurrentRegularizer: tf.regularizers.l2({l2: 0.001}) // Tương tự L2 nhưng áp dụng cho các trọng số kết nối nội bộ (recurrent connections) của LSTM.
+    }));
+
+    // --- LỚP ỔN ĐỊNH HÓA ---
+    // Nhiệm vụ: Chuẩn hóa output của lớp LSTM trên, giúp quá trình học ở các lớp sau diễn ra nhanh và ổn định hơn.
+    model.add(tf.layers.batchNormalization());
+
+    // --- LỚP LOẠI BỎ (DROPOUT) ---
+    // Nhiệm vụ: Chống overfitting. Trong mỗi lượt training, nó sẽ ngẫu nhiên "tắt" 25% các nơ-ron, buộc các nơ-ron còn lại phải học một cách độc lập và mạnh mẽ hơn.
+    model.add(tf.layers.dropout({rate: 0.25}));
+
+    // --- TẦNG 2: LỚP LSTM THỨ HAI ---
+    // Nhiệm vụ: Nhận chuỗi output từ tầng 1 và học các mẫu hình ở mức cao hơn ("mẫu hình của các mẫu hình").
+    model.add(tf.layers.lstm({
+      units: 96,                          // Số units có thể giảm dần ở các lớp sau vì thông tin đã được trừu tượng hóa.
+      returnSequences: false,             // QUAN TRỌNG. Đặt là `false` vì đây là lớp LSTM cuối cùng. Output của nó sẽ là một vector duy nhất (kích thước 96) đại diện cho toàn bộ chuỗi, sẵn sàng để đưa vào các lớp Dense.
+      kernelRegularizer: tf.regularizers.l2({l2: 0.001}),
+      recurrentRegularizer: tf.regularizers.l2({l2: 0.001})
+    }));
+
+    model.add(tf.layers.batchNormalization());
+    model.add(tf.layers.dropout({rate: 0.25}));
+    
+    // --- TẦNG 3: LỚP KẾT NỐI ĐẦY ĐỦ (DENSE) ---
+    // Nhiệm vụ: Hoạt động như một lớp phân loại cuối cùng, kết hợp các features bậc cao đã được học bởi các lớp LSTM để đưa ra quyết định.
+    model.add(tf.layers.dense({
+      units: 48,
+      activation: 'relu',                 // Hàm kích hoạt 'relu' (Rectified Linear Unit) rất phổ biến và hiệu quả, giúp mô hình học các mối quan hệ phi tuyến.
+      kernelRegularizer: tf.regularizers.l2({l2: 0.001})
+    }));
+
+    // --- TẦNG 4: LỚP OUTPUT CUỐI CÙNG ---
+    // Nhiệm vụ: Đưa ra dự đoán cuối cùng.
+    model.add(tf.layers.dense({
+      units: OUTPUT_NODES,                // 50 units (5 vị trí * 10 chữ số).
+      activation: 'sigmoid'               // Hàm kích hoạt 'sigmoid' ép các giá trị output về khoảng [0, 1]. Rất phù hợp cho bài toán phân loại đa nhãn (multi-label classification) này, vì mỗi output đại diện cho "xác suất" một chữ số xuất hiện ở một vị trí.
+    }));
+    
+    // In ra cấu trúc của model để kiểm tra.
+    model.summary();
+
+    this.model = model;
     return this.model;
   }
 
@@ -205,10 +228,13 @@ class TensorFlowService {
     return false;
   }
 
+  // =================================================================
+  // CẬP NHẬT HÀM runHistoricalTraining ĐỂ SỬ DỤNG MODEL MỚI
+  // =================================================================
   async runHistoricalTraining() {
-    console.log('🔔 [TensorFlow Service] Starting Historical Training...');
+    console.log('🔔 [TensorFlow Service] Bắt đầu Huấn luyện Lịch sử với kiến trúc Premium...');
     
-    const trainingData = await this.prepareTrainingData();
+    const trainingData = await this.prepareTrainingData(); // Hàm này đã được cập nhật ở Bước 1
     if (trainingData.length === 0) {
       throw new Error('Không có dữ liệu training');
     }
@@ -216,15 +242,31 @@ class TensorFlowService {
     const inputs = trainingData.map(d => d.inputSequence);
     const targets = trainingData.map(d => d.targetArray);
 
-    await this.buildModel(this.inputNodes);
-    await this.trainModel({ inputs, targets });
-    await this.saveModel();
+    // Xây dựng model mới dựa trên số features thực tế
+    // this.inputNodes đã được cập nhật trong `prepareTrainingData`
+    this.buildModel(this.inputNodes); 
+
+    // COMPILE MODEL: Cấu hình quá trình học
+    this.model.compile({
+      optimizer: tf.train.adam({learningRate: 0.0005}), // Adam optimizer là lựa chọn tốt và an toàn. Giảm learning rate một chút (0.0005) vì mô hình phức tạp hơn, cần đi những bước nhỏ và cẩn thận hơn.
+      loss: 'binaryCrossentropy',                      // Hàm mất mát phù hợp cho output sigmoid và bài toán multi-label. Nó đo lường sự khác biệt giữa xác suất dự đoán và giá trị thực tế (0 hoặc 1).
+      metrics: ['accuracy', 'precision', 'recall']     // Các chỉ số để theo dõi trong quá trình training.
+    });
+
+    console.log('✅ Model đã được compile. Bắt đầu quá trình training...');
+
+    // Huấn luyện model
+    await this.trainModel({ inputs, targets }); 
+    
+    // Lưu model sau khi huấn luyện xong
+    await this.saveModel(); 
 
     return {
-      message: `TensorFlow LSTM training completed. ${trainingData.length} sequences, ${EPOCHS} epochs.`,
+      message: `Huấn luyện Premium Model hoàn tất. Đã xử lý ${trainingData.length} chuỗi, ${EPOCHS} epochs.`,
       sequences: trainingData.length,
       epochs: EPOCHS,
-      featureSize: this.inputNodes
+      featureSize: this.inputNodes,
+      modelName: NN_MODEL_NAME
     };
   }
 
