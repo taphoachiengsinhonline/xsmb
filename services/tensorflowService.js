@@ -280,11 +280,13 @@ class TensorFlowService {
 
     // COMPILE MODEL: Cấu hình quá trình học
     this.model.compile({
-      optimizer: tf.train.adam({learningRate: 0.0005}),
+      // ÁP DỤNG GRADIENT CLIPPING
+      optimizer: tf.train.adam({
+        learningRate: 0.00005, 
+        // Thêm clipvalue: giới hạn giá trị tuyệt đối của gradient ở mức 1.0
+        clipvalue: 1.0 
+      }),
       loss: 'binaryCrossentropy'
-      // TẠM THỜI LOẠI BỎ HOÀN TOÀN 'metrics'.
-      // Quá trình học của mô hình dựa trên 'loss', nên vẫn sẽ hoạt động bình thường.
-      // Chúng ta sẽ chỉ mất đi phần hiển thị accuracy/precision trong log của mỗi epoch.
     });
     console.log('✅ Model đã được compile. Bắt đầu quá trình training...');
 
