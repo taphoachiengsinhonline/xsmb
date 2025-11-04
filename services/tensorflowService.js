@@ -116,8 +116,13 @@ class TensorFlowService {
             const previousDaysForBasicFeatures = allHistoryForSequence.slice(0, i + j);
             const previousDaysForAdvancedFeatures = previousDaysForBasicFeatures.slice().reverse();
             const basicFeatures = this.featureService.extractAllFeatures(currentDayForFeature, previousDaysForBasicFeatures, dateStr);
-            const advancedFeatures = this.advancedFeatureEngineer.extractPremiumFeatures(currentDayForFeature, previousDaysForAdvancedFeatures);
-            let finalFeatureVector = [...basicFeatures, ...advancedFeatures];
+            // VÔ HIỆU HÓA TẠM THỜI ADVANCED FEATURES ĐỂ CÁCH LY LỖI
+            // const advancedFeatures = this.advancedFeatureEngineer.extractPremiumFeatures(currentDayForFeature, previousDaysForAdvancedFeatures);
+            
+            // Chỉ sử dụng basic features cho lần chẩn đoán này
+            let finalFeatureVector = [...basicFeatures];
+            //const advancedFeatures = this.advancedFeatureEngineer.extractPremiumFeatures(currentDayForFeature, previousDaysForAdvancedFeatures);
+            //let finalFeatureVector = [...basicFeatures, ...advancedFeatures];
 
             for(let k = 0; k < finalFeatureVector.length; k++) {
                 const val = finalFeatureVector[k];
@@ -157,7 +162,7 @@ class TensorFlowService {
   }
   
   async runHistoricalTraining() {
-    console.log('🔔 [TensorFlow Service] Bắt đầu Huấn luyện Lịch sử với kiến trúc Multi-Head...');
+    console.log('🔔 [CHẨN ĐOÁN] Bắt đầu Huấn luyện với bộ features cơ bản...');
     const trainingData = await this.prepareTrainingData(); 
     if (trainingData.length === 0) throw new Error('Không có dữ liệu training');
 
@@ -168,21 +173,44 @@ class TensorFlowService {
         targets[headName] = trainingData.map(d => d.targets[i]);
     }
     
-    await this.buildModel(this.inputNodes); 
-
-    this.model.compile({
-        optimizer: tf.train.adam({ learningRate: 0.0001, clipvalue: 1.0 }),
-        loss: {
-            'pos1': 'categoricalCrossentropy',
-            'pos2': 'categoricalCrossentropy',
-            'pos3': 'categoricalCrossentropy',
-            'pos4': 'categoricalCrossentropy',
-            'pos5': 'categoricalCrossentropy'
-        },
-    });
+    // =================================================================
+    // KHỐI PHÂN TÍCH DỮ LIỆU CHẨN ĐOÁN (THÊM VÀO ĐÂY)
+    // =================================================================
+    console.log('📊 [CHẨN ĐOÁN] Bắt đầu phân tích toàn bộ dữ liệu training...');
+    // Làm phẳng mảng 3D [samples, timesteps, features] thành 1D để tính toán
+    const flatInputs = inputs.flat(2);
     
-    console.log('✅ Model đã được compile. Bắt đầu quá trình training...');
-    await this.trainModel({ inputs, targets }); 
+    const stats = flatInputs.reduce((acc, val) => {
+        acc.min = Math.min(acc.min, val);
+        acc.max = Math.max(acc.max, val);
+        acc.sum += val;
+        return acc;
+    }, { min: Infinity, max: -Infinity, sum: 0 });
+
+    const mean = stats.sum / flatInputs.length;
+    
+    const variance = flatInputs.reduce((acc, val) => acc + Math.pow(val - mean, 2), 0) / flatInputs.length;
+    const stdDev = Math.sqrt(variance);
+
+    console.log(`
+    ============================================================
+    [CHẨN ĐOÁN] KẾT QUẢ PHÂN TÍCH DỮ LIỆU ĐẦU VÀO:
+    ------------------------------------------------------------
+    - Tổng số điểm dữ liệu: ${flatInputs.length}
+    - Giá trị NHỎ NHẤT (Min): ${stats.min}
+    - Giá trị LỚN NHẤT (Max): ${stats.max}
+    - Giá trị TRUNG BÌNH (Mean): ${mean.toFixed(4)}
+    - ĐỘ LỆCH CHUẨN (StdDev): ${stdDev.toFixed(4)}
+    ============================================================
+    `);
+    
+    // Nếu giá trị max quá lớn, dừng lại và báo lỗi.
+    if (stats.max > 100) { // Đặt một ngưỡng hợp lý
+        throw new Error(`[CHẨN ĐOÁN] DỮ LIỆU BẤT THƯỜNG! Giá trị Max quá lớn (${stats.max}). Vui lòng kiểm tra lại các hàm feature engineering.`);
+    }
+    // =================================================================
+
+    await this.buildModel(this.inputNodes); 
     await this.saveModel(); 
     return { message: `Huấn luyện Multi-Head Model hoàn tất.`, /*...*/ };
   }
