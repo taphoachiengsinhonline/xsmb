@@ -269,12 +269,12 @@ class TensorFlowService {
 
     // COMPILE MODEL: Cấu hình quá trình học
     this.model.compile({
-      optimizer: tf.train.adam({learningRate: 0.0005}),
-      loss: 'binaryCrossentropy',
-      // TẠM THỜI CHỈ DÙNG 'accuracy' ĐỂ KIỂM TRA
-      metrics: ['accuracy']
-    });
-
+optimizer: tf.train.adam({learningRate: 0.0005}),
+loss: 'binaryCrossentropy',
+// GIẢI PHÁP: Sử dụng 'binaryAccuracy' thay vì precision/recall.
+// 'binaryAccuracy' được thiết kế để hoạt động tốt với loss 'binaryCrossentropy' và output sigmoid.
+metrics: [tf.metrics.binaryAccuracy()]
+});
     console.log('✅ Model đã được compile. Bắt đầu quá trình training...');
 
     // Huấn luyện model
