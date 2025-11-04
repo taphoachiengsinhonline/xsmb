@@ -6,6 +6,9 @@ const AdvancedFeatureEngineer = require('./advancedFeatureService');
 const FeatureEngineeringService = require('./featureEngineeringService');
 const { DateTime } = require('luxon');
 
+// =================================================================
+// HẰNG SỐ CẤU HÌNH
+// =================================================================
 const NN_MODEL_NAME = 'GDB_MULTIHEAD_TFJS_V1';
 const SEQUENCE_LENGTH = 7;
 const EPOCHS = 50;
@@ -13,6 +16,9 @@ const BATCH_SIZE = 32;
 const NUM_POSITIONS = 5;
 const NUM_CLASSES = 10;
 
+// =================================================================
+// HÀM TIỆN ÍCH
+// =================================================================
 const dateKey = (s) => {
     if (!s || typeof s !== 'string') return '';
     const parts = s.split('/');
@@ -53,9 +59,6 @@ class TensorFlowService {
     for (let i = 0; i < NUM_POSITIONS; i++) {
         const headName = `pos${i + 1}`;
         const denseHead = tf.layers.dense({ units: 48, activation: 'relu', name: `${headName}_dense` }).apply(sharedOutput);
-        
-        // QUAN TRỌNG: Khi dùng softmaxCrossentropy, lớp cuối cùng nên có activation là 'linear' (hoặc không có).
-        // Phép tính softmax sẽ được tích hợp sẵn trong hàm loss.
         const outputHead = tf.layers.dense({ units: NUM_CLASSES, activation: 'linear', name: headName }).apply(denseHead);
         outputLayers.push(outputHead);
     }
@@ -89,6 +92,37 @@ class TensorFlowService {
     inputTensor.dispose();
     Object.values(targetTensors).forEach(t => t.dispose());
     return history;
+  }
+
+  async predict(inputSequence) {
+    const inputTensor = tf.tensor3d([inputSequence], [1, SEQUENCE_LENGTH, this.inputNodes]);
+    const predictions = this.model.predict(inputTensor);
+    
+    const outputs = [];
+    // model.predict trả về mảng tensor khi có nhiều output
+    for (const predTensor of Array.isArray(predictions) ? predictions : [predictions]) {
+        outputs.push(await predTensor.data());
+    }
+
+    inputTensor.dispose();
+    (Array.isArray(predictions) ? predictions : [predictions]).forEach(t => t.dispose());
+    
+    return outputs;
+  }
+
+  decodeOutput(outputs) {
+    const prediction = {};
+    for (let i = 0; i < NUM_POSITIONS; i++) {
+        const headName = `pos${i + 1}`;
+        const positionOutput = outputs[i];
+        const digitsWithValues = Array.from(positionOutput)
+            .map((value, index) => ({ digit: String(index), value }))
+            .sort((a, b) => b.value - a.value)
+            .slice(0, 5)
+            .map(item => item.digit);
+        prediction[headName] = digitsWithValues;
+    }
+    return prediction;
   }
   
   async prepareTrainingData() {
@@ -158,7 +192,26 @@ class TensorFlowService {
     console.log(`✅ Đã chuẩn bị ${trainingData.length} chuỗi dữ liệu huấn luyện hợp lệ với feature size: ${this.inputNodes}`);
     return trainingData;
   }
-  
+
+  async saveModel() {
+    if (!this.model) throw new Error('No model to save');
+    const modelInfo = { modelName: NN_MODEL_NAME, inputNodes: this.inputNodes, savedAt: new Date().toISOString() };
+    const saveResult = await this.model.save('file://./models/tfjs_model');
+    await NNState.findOneAndUpdate({ modelName: NN_MODEL_NAME }, { state: modelInfo, modelArtifacts: saveResult }, { upsert: true });
+    console.log(`💾 TensorFlow model saved với ${this.inputNodes} input nodes`);
+  }
+
+  async loadModel() {
+    const modelState = await NNState.findOne({ modelName: NN_MODEL_NAME });
+    if (modelState && modelState.modelArtifacts) {
+        this.model = await tf.loadLayersModel('file://./models/tfjs_model/model.json');
+        this.inputNodes = modelState.state.inputNodes;
+        console.log(`✅ TensorFlow model loaded với ${this.inputNodes} input nodes`);
+        return true;
+    }
+    return false;
+  }
+
   async runHistoricalTraining() {
     console.log('🔔 [TensorFlow Service] Bắt đầu Huấn luyện Lịch sử với kiến trúc Multi-Head...');
     const trainingData = await this.prepareTrainingData(); 
@@ -175,16 +228,20 @@ class TensorFlowService {
 
     this.model.compile({
         optimizer: tf.train.adam({ learningRate: 0.0001, clipvalue: 1.0 }),
-        // SỬ DỤNG HÀM LOSS ỔN ĐỊNH NHẤT
-        loss: tf.losses.softmaxCrossentropy,
+        loss: {
+            'pos1': tf.losses.softmaxCrossentropy,
+            'pos2': tf.losses.softmaxCrossentropy,
+            'pos3': tf.losses.softmaxCrossentropy,
+            'pos4': tf.losses.softmaxCrossentropy,
+            'pos5': tf.losses.softmaxCrossentropy
+        },
     });
     
     console.log('✅ Model đã được compile. Bắt đầu quá trình training...');
     await this.trainModel({ inputs, targets }); 
     await this.saveModel(); 
-    return { message: `Huấn luyện Multi-Head Model hoàn tất.`, /*...*/ };
+    return { message: `Huấn luyện Multi-Head Model hoàn tất.`, sequences: trainingData.length, epochs: EPOCHS, featureSize: this.inputNodes, modelName: NN_MODEL_NAME };
   }
-
   
   async runLearning() {
     console.warn("⚠️ Chức năng 'Học hỏi' (runLearning) đang được tạm vô hiệu hóa cho kiến trúc Multi-Head.");
@@ -204,20 +261,15 @@ class TensorFlowService {
     const grouped = {};
     results.forEach(r => { if (!grouped[r.ngay]) grouped[r.ngay] = []; grouped[r.ngay].push(r); });
     
-    // SỬA LỖI Ở ĐÂY: Gọi `dateKey` thay vì `this.dateKey`
     const days = Object.keys(grouped).sort((a, b) => dateKey(a).localeCompare(dateKey(b)));
     const latestSequenceDays = days.slice(-SEQUENCE_LENGTH);
     console.log(`🔮 Sử dụng dữ liệu từ các ngày: ${latestSequenceDays.join(', ')} để dự đoán.`);
-
-    // Sửa lại logic lấy `allHistoryForSequence` để nó bao gồm tất cả các ngày
-    const allHistoryForSequence = days.map(dayStr => grouped[dayStr] || []);
 
     const inputSequence = [];
     for(let j = 0; j < SEQUENCE_LENGTH; j++) {
         const currentDayForFeature = grouped[latestSequenceDays[j]] || [];
         const dateStr = latestSequenceDays[j];
         
-        // Sửa lại logic lấy `previousDays` cho đúng
         const historyIndex = days.indexOf(dateStr);
         const previousDaysForBasicFeatures = days.slice(0, historyIndex).map(d => grouped[d] || []);
         const previousDaysForAdvancedFeatures = previousDaysForBasicFeatures.slice().reverse();
