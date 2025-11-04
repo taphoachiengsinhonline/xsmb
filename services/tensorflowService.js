@@ -117,7 +117,7 @@ class TensorFlowService {
             const previousDaysForAdvancedFeatures = previousDaysForBasicFeatures.slice().reverse();
             const basicFeatures = this.featureService.extractAllFeatures(currentDayForFeature, previousDaysForBasicFeatures, dateStr);
             // VÔ HIỆU HÓA TẠM THỜI ADVANCED FEATURES ĐỂ CÁCH LY LỖI
-            // const advancedFeatures = this.advancedFeatureEngineer.extractPremiumFeatures(currentDayForFeature, previousDaysForAdvancedFeatures);
+            const advancedFeatures = this.advancedFeatureEngineer.extractPremiumFeatures(currentDayForFeature, previousDaysForAdvancedFeatures);
             
             // Chỉ sử dụng basic features cho lần chẩn đoán này
             let finalFeatureVector = [...basicFeatures];
