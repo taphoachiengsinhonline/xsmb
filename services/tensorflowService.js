@@ -258,39 +258,61 @@ class TensorFlowService {
   }
 
   async saveModel() {
-    if (!this.model) {
-      throw new Error('No model to save');
-    }
-    const modelInfo = {
-      modelName: NN_MODEL_NAME,
-      inputNodes: this.inputNodes,
-      savedAt: new Date().toISOString()
-    };
-    
-    const saveResult = await this.model.save('file://./models/tfjs_model');
-   
-    await NNState.findOneAndUpdate(
-      { modelName: NN_MODEL_NAME },
-      {
-        state: modelInfo,
-        modelArtifacts: saveResult
-      },
-      { upsert: true }
-    );
-    console.log(`💾 TensorFlow model saved với ${this.inputNodes} input nodes`);
+  if (!this.model) {
+    throw new Error('No model to save');
   }
 
+  const modelInfo = {
+    modelName: NN_MODEL_NAME,
+    inputNodes: this.inputNodes,
+    savedAt: new Date().toISOString()
+  };
+
+  try {
+    // Lưu model ra file
+    const saveResult = await this.model.save('file://./models/tfjs_model');
+    console.log('💾 Model đã được lưu ra file');
+    
+    // Lưu thông tin vào database
+    await NNState.findOneAndUpdate(
+      { modelName: NN_MODEL_NAME },
+      { 
+        state: modelInfo,
+        modelArtifacts: saveResult 
+      },
+      { upsert: true, new: true }
+    );
+    
+    console.log(`💾 TensorFlow model saved với ${this.inputNodes} input nodes`);
+  } catch (error) {
+    console.error('❌ Lỗi khi save model:', error);
+    throw error;
+  }
+}
+
   async loadModel() {
-    const modelState = await NNState.findOne({ modelName: NN_MODEL_NAME });
-    if (modelState && modelState.modelArtifacts) {
+  console.log('🔍 [LoadModel] Đang tìm model trong database...');
+  const modelState = await NNState.findOne({ modelName: NN_MODEL_NAME });
+  
+  if (modelState && modelState.modelArtifacts) {
+    console.log('✅ [LoadModel] Đã tìm thấy model state trong database');
+    try {
       this.model = await tf.loadLayersModel('file://./models/tfjs_model/model.json');
       this.inputNodes = modelState.state.inputNodes;
       console.log(`✅ TensorFlow model loaded với ${this.inputNodes} input nodes`);
       return true;
+    } catch (error) {
+      console.error('❌ [LoadModel] Lỗi khi load model từ file:', error.message);
+      return false;
     }
+  } else {
+    console.log('❌ [LoadModel] Không tìm thấy model trong database:', {
+      modelStateExists: !!modelState,
+      hasArtifacts: !!(modelState && modelState.modelArtifacts)
+    });
     return false;
   }
-
+}
   async runHistoricalTraining() {
     console.log('🔔 [TensorFlow Service] Bắt đầu Huấn luyện Lịch sử với kiến trúc Premium...');
    
