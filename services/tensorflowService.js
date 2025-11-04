@@ -7,7 +7,7 @@ const FeatureEngineeringService = require('./featureEngineeringService');
 const { DateTime } = require('luxon');
 
 // Hằng số cấu hình
-const NN_MODEL_NAME = 'GDB_SINGLEHEAD_STABLE_V1';
+const NN_MODEL_NAME = 'GDB_SINGLEHEAD_ULTRASTABLE_V1'; // Tên mới
 const SEQUENCE_LENGTH = 7;
 const EPOCHS = 50;
 const BATCH_SIZE = 32;
@@ -29,34 +29,7 @@ class TensorFlowService {
   }
 
   async buildModel(inputNodes) {
-    console.log(`🏗️ [CHẨN ĐOÁN] Bắt đầu xây dựng kiến trúc TỐI GIẢN...`);
-    this.inputNodes = inputNodes;
-
-    const model = tf.sequential();
-
-    // CHỈ CÒN MỘT LỚP LSTM DUY NHẤT
-    model.add(tf.layers.lstm({
-      units: 128, // Giảm số units một chút
-      inputShape: [SEQUENCE_LENGTH, inputNodes],
-      returnSequences: false // Output trực tiếp ra vector cuối cùng
-    }));
-    
-    // Giữ lại Dropout để chống overfitting
-    model.add(tf.layers.dropout({rate: 0.3}));
-
-    // LỚP OUTPUT CUỐI CÙNG
-    model.add(tf.layers.dense({
-      units: OUTPUT_NODES,
-      activation: 'linear' // Vẫn giữ 'linear' để đi cặp với sigmoidCrossentropy
-    }));
-    
-    model.summary();
-    this.model = model;
-    return this.model;
-  }
-
-  async buildModel(inputNodes) {
-    console.log(`🏗️ [CHẨN ĐOÁN] Bắt đầu xây dựng kiến trúc TỐI GIẢN và ỔN ĐỊNH...`);
+    console.log(`🏗️ Bắt đầu xây dựng kiến trúc Tối giản và Siêu ổn định...`);
     this.inputNodes = inputNodes;
 
     const model = tf.sequential();
@@ -69,10 +42,9 @@ class TensorFlowService {
     
     model.add(tf.layers.dropout({rate: 0.3}));
 
-    // LỚP OUTPUT CUỐI CÙNG SỬ DỤNG 'sigmoid'
     model.add(tf.layers.dense({
       units: OUTPUT_NODES,
-      activation: 'sigmoid' // Quay lại với 'sigmoid'
+      activation: 'sigmoid'
     }));
     
     model.summary();
@@ -80,14 +52,34 @@ class TensorFlowService {
     return this.model;
   }
 
+  // HÀM BỊ THIẾU ĐÃ ĐƯỢC KHÔI PHỤC
+  async trainModel({ inputs, targets }) {
+    const inputTensor = tf.tensor3d(inputs, [inputs.length, SEQUENCE_LENGTH, this.inputNodes]);
+    const targetTensor = tf.tensor2d(targets, [targets.length, OUTPUT_NODES]);
+
+    const history = await this.model.fit(inputTensor, targetTensor, {
+      epochs: EPOCHS,
+      batchSize: BATCH_SIZE,
+      validationSplit: 0.1,
+      callbacks: {
+        onEpochEnd: (epoch, logs) => {
+            const valLossLog = logs.val_loss ? `, Val_Loss = ${logs.val_loss.toFixed(4)}` : '';
+            console.log(`Epoch ${epoch + 1}: Loss = ${logs.loss.toFixed(4)}${valLossLog}`);
+        }
+      }
+    });
+
+    inputTensor.dispose();
+    targetTensor.dispose();
+    return history;
+  }
+
   async predict(inputSequence) {
     const inputTensor = tf.tensor3d([inputSequence], [1, SEQUENCE_LENGTH, this.inputNodes]);
-    const logits = this.model.predict(inputTensor);
-    const probabilities = logits.sigmoid(); 
+    const probabilities = this.model.predict(inputTensor); 
     const output = await probabilities.data();
 
     inputTensor.dispose();
-    logits.dispose();
     probabilities.dispose();
     
     return Array.from(output);
@@ -178,7 +170,7 @@ class TensorFlowService {
   }
   
   async runHistoricalTraining() {
-    console.log('🔔 [CHẨN ĐOÁN] Bắt đầu Huấn luyện Lịch sử với kiến trúc TỐI GIẢN...');
+    console.log('🔔 Bắt đầu Huấn luyện Lịch sử với kiến trúc Tối giản...');
     const trainingData = await this.prepareTrainingData(); 
     if (trainingData.length === 0) throw new Error('Không có dữ liệu training');
 
@@ -187,20 +179,17 @@ class TensorFlowService {
     
     await this.buildModel(this.inputNodes); 
 
-    // =================================================================
-    // GIẢI PHÁP CUỐI CÙNG: CẶP ĐÔI KINH ĐIỂN VỚI LEARNING RATE CỰC THẤP
-    // =================================================================
     this.model.compile({
         optimizer: tf.train.adam({ 
-            learningRate: 0.00001 // Bắt đầu với learning rate cực kỳ thấp để đảm bảo ổn định
+            learningRate: 0.0001 // Bắt đầu với learning rate thấp
         }),
-        loss: 'binaryCrossentropy', // Quay lại với chuỗi ký tự loss đúng
+        loss: 'binaryCrossentropy',
     });
     
     console.log('✅ Model đã được compile. Bắt đầu quá trình training...');
     await this.trainModel({ inputs, targets }); 
     await this.saveModel(); 
-    return { message: `Huấn luyện Single-Head TỐI GIẢN hoàn tất.`, /*...*/ };
+    return { message: `Huấn luyện Single-Head Tối giản hoàn tất.`, /*...*/ };
   }
 
   async saveModel() {
@@ -223,76 +212,9 @@ class TensorFlowService {
   }
 
   async runLearning() {
-    console.log('🔔 [TensorFlow Service] Learning from new results (Single-Head)...');
-    if (!this.model) {
-        const modelLoaded = await this.loadModel();
-        if (!modelLoaded) throw new Error('Model chưa được huấn luyện.');
-    }
-
-    const predictionsToLearn = await NNPrediction.find({ danhDauDaSo: false }).lean();
-    if (predictionsToLearn.length === 0) return { message: 'Không có dự đoán mới nào để học.' };
-
-    const results = await Result.find().sort({ 'ngay': 1 }).lean();
-    const grouped = {};
-    results.forEach(r => { if (!grouped[r.ngay]) grouped[r.ngay] = []; grouped[r.ngay].push(r); });
-    const days = Object.keys(grouped).sort((a, b) => dateKey(a).localeCompare(dateKey(b)));
-    
-    const trainingData = [];
-    for (const pred of predictionsToLearn) {
-        const targetDayStr = pred.ngayDuDoan;
-        const targetDayIndex = days.indexOf(targetDayStr);
-
-        if (targetDayIndex >= SEQUENCE_LENGTH) {
-            const actualResult = (grouped[targetDayStr] || []).find(r => r.giai === 'ĐB');
-            if (actualResult?.so && String(actualResult.so).length >= 5) {
-                const sequenceDays = days.slice(targetDayIndex - SEQUENCE_LENGTH, targetDayIndex);
-                
-                const inputSequence = [];
-                for(let j=0; j < sequenceDays.length; j++) {
-                    const dateStr = sequenceDays[j];
-                    const currentDayForFeature = grouped[dateStr] || [];
-                    const historyIndex = days.indexOf(dateStr);
-                    const previousDaysForBasicFeatures = days.slice(0, historyIndex).map(d => grouped[d] || []);
-                    const previousDaysForAdvancedFeatures = previousDaysForBasicFeatures.slice().reverse();
-                    const basicFeatures = this.featureService.extractAllFeatures(currentDayForFeature, previousDaysForBasicFeatures, dateStr);
-                    const advancedFeaturesObject = this.advancedFeatureEngineer.extractPremiumFeatures(currentDayForFeature, previousDaysForAdvancedFeatures);
-                    let finalFeatureVector = [
-                        ...basicFeatures, ...advancedFeaturesObject.prizeCorrelationFeatures,
-                        ...advancedFeaturesObject.sumFrequencyFeatures, ...advancedFeaturesObject.chanLePatterns,
-                        ...advancedFeaturesObject.gapAnalysis
-                    ];
-                    inputSequence.push(finalFeatureVector);
-                }
-                
-                const targetGDBString = String(actualResult.so).padStart(5, '0');
-                const targetArray = this.prepareTarget(targetGDBString);
-                trainingData.push({ inputSequence, targetArray });
-            }
-        }
-        await NNPrediction.updateOne({ _id: pred._id }, { danhDauDaSo: true });
-    }
-
-    if (trainingData.length > 0) {
-        const inputs = trainingData.map(d => d.inputSequence);
-        const targets = trainingData.map(d => d.targetArray);
-        
-        // Huấn luyện thêm với số Epoch ít hơn
-        const tempFitConfig = {
-            epochs: 5,
-            batchSize: BATCH_SIZE,
-            // Không có validationSplit khi học thêm
-        };
-        const inputTensor = tf.tensor3d(inputs, [inputs.length, SEQUENCE_LENGTH, this.inputNodes]);
-        const targetTensor = tf.tensor2d(targets, [targets.length, OUTPUT_NODES]);
-        await this.model.fit(inputTensor, targetTensor, tempFitConfig);
-        inputTensor.dispose();
-        targetTensor.dispose();
-
-        await this.saveModel();
-        console.log(`✅ AI đã học hỏi từ ${trainingData.length} kết quả mới.`);
-    }
-    
-    return { message: `AI đã xử lý ${predictionsToLearn.length} kết quả mới.` };
+    // Tạm thời vô hiệu hóa để tập trung vào lỗi chính
+    console.warn("⚠️ Chức năng 'Học hỏi' (runLearning) đang được tạm vô hiệu hóa.");
+    return { message: 'Chức năng học hỏi tạm vô hiệu hóa.' };
   }
 
   async runNextDayPrediction() {
