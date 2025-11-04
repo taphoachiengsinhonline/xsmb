@@ -269,20 +269,32 @@ class TensorFlowService {
   };
 
   try {
-    // Lưu model ra file
-    const saveResult = await this.model.save('file://./models/tfjs_model');
-    console.log('💾 Model đã được lưu ra file');
+    console.log('💾 Bắt đầu lưu model...');
     
-    // Lưu thông tin vào database
+    // ĐẢM BẢO THƯ MỤC TỒN TẠI
+    const fs = require('fs');
+    const modelDir = './models/tfjs_model';
+    if (!fs.existsSync(modelDir)) {
+      fs.mkdirSync(modelDir, { recursive: true });
+      console.log('📁 Đã tạo thư mục model');
+    }
+
+    // LƯU MODEL RA FILE
+    console.log('📤 Đang lưu model ra file...');
+    const saveResult = await this.model.save(`file://${modelDir}`);
+    console.log('✅ Model đã được lưu ra file thành công');
+
+    // LƯU THÔNG TIN VÀO DATABASE - CHỈ LƯU METADATA
     await NNState.findOneAndUpdate(
       { modelName: NN_MODEL_NAME },
       { 
         state: modelInfo,
-        modelArtifacts: saveResult 
+        // KHÔNG lưu modelArtifacts vì nó quá lớn, chỉ lưu cờ đánh dấu
+        modelArtifacts: { exists: true, path: `${modelDir}/model.json` }
       },
       { upsert: true, new: true }
     );
-    
+
     console.log(`💾 TensorFlow model saved với ${this.inputNodes} input nodes`);
   } catch (error) {
     console.error('❌ Lỗi khi save model:', error);
@@ -294,10 +306,21 @@ class TensorFlowService {
   console.log('🔍 [LoadModel] Đang tìm model trong database...');
   const modelState = await NNState.findOne({ modelName: NN_MODEL_NAME });
   
-  if (modelState && modelState.modelArtifacts) {
+  if (modelState && modelState.state) {
     console.log('✅ [LoadModel] Đã tìm thấy model state trong database');
+    
+    // CHỈ CẦN KIỂM TRA modelState.state, KHÔNG CẦN modelArtifacts
     try {
-      this.model = await tf.loadLayersModel('file://./models/tfjs_model/model.json');
+      const fs = require('fs');
+      const modelPath = './models/tfjs_model/model.json';
+      
+      // KIỂM TRA FILE MODEL CÓ TỒN TẠI KHÔNG
+      if (!fs.existsSync(modelPath)) {
+        console.error('❌ [LoadModel] File model không tồn tại:', modelPath);
+        return false;
+      }
+      
+      this.model = await tf.loadLayersModel(`file://${modelPath}`);
       this.inputNodes = modelState.state.inputNodes;
       console.log(`✅ TensorFlow model loaded với ${this.inputNodes} input nodes`);
       return true;
@@ -306,10 +329,7 @@ class TensorFlowService {
       return false;
     }
   } else {
-    console.log('❌ [LoadModel] Không tìm thấy model trong database:', {
-      modelStateExists: !!modelState,
-      hasArtifacts: !!(modelState && modelState.modelArtifacts)
-    });
+    console.log('❌ [LoadModel] Không tìm thấy model trong database');
     return false;
   }
 }
