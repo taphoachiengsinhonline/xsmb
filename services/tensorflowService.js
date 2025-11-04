@@ -91,11 +91,14 @@ class TensorFlowService {
       batchSize: BATCH_SIZE,
       validationSplit: 0.1,
       callbacks: {
-        onEpochEnd: (epoch, logs) => {
-          // Chỉ in ra loss để đảm bảo không có lỗi nào khác xảy ra.
-          console.log(`Epoch ${epoch + 1}: Loss = ${logs.loss.toFixed(4)}`);
+    onEpochEnd: (epoch, logs) => {
+        if (isNaN(logs.loss)) {
+            console.error('NaN loss detected! Stopping training.');
+            this.model.stopTraining = true;
         }
-      }
+        console.log(`Epoch ${epoch + 1}: Loss = ${logs.loss.toFixed(4)}`);
+    }
+}
     });
 
     inputTensor.dispose();
@@ -114,7 +117,8 @@ class TensorFlowService {
   }
 
   prepareTarget(gdbString) {
-    const target = Array(OUTPUT_NODES).fill(0.01);
+    const target = Array(OUTPUT_NODES).fill(0);
+// ... target[index * 10 + d] = 1;
     gdbString.split('').forEach((digit, index) => {
       const d = parseInt(digit);
       if (!isNaN(d) && index < 5) {
@@ -160,29 +164,16 @@ class TensorFlowService {
             const advancedFeatures = this.advancedFeatureEngineer.extractPremiumFeatures(currentDayForFeature, previousDaysForAdvancedFeatures);
             
             let finalFeatureVector = [...basicFeatures, ...Object.values(advancedFeatures).flat()];
-
+            
             // =================================================================
             // ĐÂY LÀ "TẤM LÁ CHẮN" MỚI - BƯỚC KIỂM TRA VÀ LÀM SẠCH
             // =================================================================
             const initialLength = finalFeatureVector.length;
-            finalFeatureVector = finalFeatureVector.map(val => {
-                // Kiểm tra xem giá trị có phải là null, undefined, hoặc NaN không.
-                if (val === null || val === undefined || isNaN(val)) {
-                    // Nếu không hợp lệ, ghi lại cảnh báo và thay thế bằng 0.
-                    // Việc này giúp chương trình không bị sập và ta có thể điều tra sau.
-                    if (!sequenceHasInvalidData) { // Chỉ log 1 lần cho mỗi sequence bị lỗi
-                        console.warn(`
-                            ⚠️ CẢNH BÁO: Phát hiện dữ liệu không hợp lệ trong chuỗi bắt đầu từ ngày ${sequenceDaysStrings[0]}.
-                            Ngày cụ thể có vấn đề: ${dateStr}.
-                            Giá trị không hợp lệ đã được thay thế bằng 0.
-                            Hãy kiểm tra lại logic trong các hàm feature engineering cho ngày này.
-                        `);
-                    }
-                    sequenceHasInvalidData = true;
-                    return 0; // Thay thế giá trị không hợp lệ bằng 0.
-                }
-                return val;
-            });
+            if (finalFeatureVector.some(isNaN)) {
+              console.error('NaN detected in features for day:', dateStr);
+            finalFeatureVector = finalFeatureVector.map(v => isNaN(v) ? 0 : v); // Thay toàn bộ
+            }
+            
             // =================================================================
 
             inputSequence.push(finalFeatureVector);
@@ -281,8 +272,8 @@ class TensorFlowService {
     // COMPILE MODEL: Cấu hình quá trình học
     this.model.compile({
       optimizer: tf.train.adam({learningRate: 0.0005}),
-      loss: 'binaryCrossentropy'
-      // TẠM THỜI LOẠI BỎ HOÀN TOÀN 'metrics'.
+      loss: 'binaryCrossentropy',
+      metrics: [tf.metrics.binaryAccuracy()]
       // Quá trình học của mô hình dựa trên 'loss', nên vẫn sẽ hoạt động bình thường.
       // Chúng ta sẽ chỉ mất đi phần hiển thị accuracy/precision trong log của mỗi epoch.
     });
