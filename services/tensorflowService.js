@@ -118,10 +118,13 @@ class TensorFlowService {
             const basicFeatures = this.featureService.extractAllFeatures(currentDayForFeature, previousDaysForBasicFeatures, dateStr);
             const advancedFeatures = this.advancedFeatureEngineer.extractPremiumFeatures(currentDayForFeature, previousDaysForAdvancedFeatures);
             
-            // CHỈ KIỂM TRA NHÓM 1
+            // BẮT ĐẦU KIỂM TRA TỪNG NHÓM
             let finalFeatureVector = [
                 ...basicFeatures, 
-                ...advancedFeatures.prizeCorrelationFeatures // Chỉ thêm nhóm đầu tiên
+                ...advancedFeatures.prizeCorrelationFeatures,
+                // ...advancedFeatures.sumFrequencyFeatures,
+                // ...advancedFeatures.chanLePatterns,
+                // ...advancedFeatures.gapAnalysis
             ];
 
             for(let k = 0; k < finalFeatureVector.length; k++) {
