@@ -55,25 +55,29 @@ class TensorFlowService {
     return this.model;
   }
 
-  async trainModel({ inputs, targets }) {
-    const inputTensor = tf.tensor3d(inputs, [inputs.length, SEQUENCE_LENGTH, this.inputNodes]);
-    const targetTensor = tf.tensor2d(targets, [targets.length, OUTPUT_NODES]);
+  async buildModel(inputNodes) {
+    console.log(`🏗️ [CHẨN ĐOÁN] Bắt đầu xây dựng kiến trúc TỐI GIẢN và ỔN ĐỊNH...`);
+    this.inputNodes = inputNodes;
 
-    const history = await this.model.fit(inputTensor, targetTensor, {
-      epochs: EPOCHS,
-      batchSize: BATCH_SIZE,
-      validationSplit: 0.1,
-      callbacks: {
-        onEpochEnd: (epoch, logs) => {
-            const valLossLog = logs.val_loss ? `, Val_Loss = ${logs.val_loss.toFixed(4)}` : '';
-            console.log(`Epoch ${epoch + 1}: Loss = ${logs.loss.toFixed(4)}${valLossLog}`);
-        }
-      }
-    });
+    const model = tf.sequential();
 
-    inputTensor.dispose();
-    targetTensor.dispose();
-    return history;
+    model.add(tf.layers.lstm({
+      units: 128,
+      inputShape: [SEQUENCE_LENGTH, inputNodes],
+      returnSequences: false
+    }));
+    
+    model.add(tf.layers.dropout({rate: 0.3}));
+
+    // LỚP OUTPUT CUỐI CÙNG SỬ DỤNG 'sigmoid'
+    model.add(tf.layers.dense({
+      units: OUTPUT_NODES,
+      activation: 'sigmoid' // Quay lại với 'sigmoid'
+    }));
+    
+    model.summary();
+    this.model = model;
+    return this.model;
   }
 
   async predict(inputSequence) {
@@ -184,15 +188,13 @@ class TensorFlowService {
     await this.buildModel(this.inputNodes); 
 
     // =================================================================
-    // GIẢI PHÁP CUỐI CÙNG: ĐỊNH NGHĨA LOSS DƯỚI DẠNG MỘT HÀM CUSTOM
+    // GIẢI PHÁP CUỐI CÙNG: CẶP ĐÔI KINH ĐIỂN VỚI LEARNING RATE CỰC THẤP
     // =================================================================
-    const customLoss = (yTrue, yPred) => {
-        return tf.losses.sigmoidCrossentropy(yTrue, yPred);
-    };
-
     this.model.compile({
-        optimizer: tf.train.adam({ learningRate: 0.001 }), // Thử lại learning rate mặc định với model đơn giản
-        loss: customLoss,
+        optimizer: tf.train.adam({ 
+            learningRate: 0.00001 // Bắt đầu với learning rate cực kỳ thấp để đảm bảo ổn định
+        }),
+        loss: 'binaryCrossentropy', // Quay lại với chuỗi ký tự loss đúng
     });
     
     console.log('✅ Model đã được compile. Bắt đầu quá trình training...');
