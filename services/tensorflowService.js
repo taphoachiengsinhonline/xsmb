@@ -217,28 +217,69 @@ class TensorFlowService {
       }
     }
 
-    if (trainingData.length > 0) {
-      console.log('🔍 DEBUG - Kiểm tra dữ liệu training:');
-      console.log(`- Số chuỗi: ${trainingData.length}`);
-      console.log(`- Kích thước input sequence: ${trainingData[0].inputSequence.length}`);
-      console.log(`- Kích thước feature vector: ${trainingData[0].inputSequence[0].length}`);
-      
-      const allFeatures = trainingData.flatMap(d => d.inputSequence.flat());
-      const allTargets = trainingData.flatMap(d => d.targetArray);
-      
-      console.log(`- Features - Min: ${Math.min(...allFeatures)}, Max: ${Math.max(...allFeatures)}`);
-      console.log(`- Targets - Min: ${Math.min(...allTargets)}, Max: ${Math.max(...allTargets)}`);
-      
-      const nanFeatures = allFeatures.filter(v => isNaN(v));
-      const nanTargets = allTargets.filter(v => isNaN(v));
-      console.log(`- NaN trong features: ${nanFeatures.length}`);
-      console.log(`- NaN trong targets: ${nanTargets.length}`);
-      
-      this.inputNodes = trainingData[0].inputSequence[0].length;
-      console.log(`✅ Đã chuẩn bị ${trainingData.length} chuỗi dữ liệu hợp lệ`);
-    } else {
-      throw new Error("❌ Không có dữ liệu training hợp lệ sau khi kiểm tra.");
+    // DEBUG CHI TIẾT
+if (trainingData.length > 0) {
+  console.log('🔍 DEBUG - Kiểm tra dữ liệu training:');
+  console.log(`- Số chuỗi: ${trainingData.length}`);
+  console.log(`- Kích thước input sequence: ${trainingData[0].inputSequence.length}`);
+  console.log(`- Kích thước feature vector: ${trainingData[0].inputSequence[0].length}`);
+  
+  // THAY THẾ flatMap BẰNG VÒNG LẶP THÔNG THƯỜNG ĐỂ TRÁNH TRÀN STACK
+  let allFeatures = [];
+  let allTargets = [];
+  
+  // Sử dụng vòng lặp thay vì flatMap để tránh tràn stack
+  for (let i = 0; i < trainingData.length; i++) {
+    const data = trainingData[i];
+    
+    // Xử lý features
+    for (let j = 0; j < data.inputSequence.length; j++) {
+      allFeatures = allFeatures.concat(data.inputSequence[j]);
     }
+    
+    // Xử lý targets
+    allTargets = allTargets.concat(data.targetArray);
+  }
+  
+  // Kiểm tra min/max an toàn hơn
+  let featuresMin = Infinity, featuresMax = -Infinity;
+  let targetsMin = Infinity, targetsMax = -Infinity;
+  
+  for (let i = 0; i < allFeatures.length; i++) {
+    const val = allFeatures[i];
+    if (val < featuresMin) featuresMin = val;
+    if (val > featuresMax) featuresMax = val;
+  }
+  
+  for (let i = 0; i < allTargets.length; i++) {
+    const val = allTargets[i];
+    if (val < targetsMin) targetsMin = val;
+    if (val > targetsMax) targetsMax = val;
+  }
+  
+  console.log(`- Features - Min: ${featuresMin}, Max: ${featuresMax}`);
+  console.log(`- Targets - Min: ${targetsMin}, Max: ${targetsMax}`);
+  
+  // Kiểm tra NaN an toàn hơn
+  let nanFeaturesCount = 0;
+  let nanTargetsCount = 0;
+  
+  for (let i = 0; i < allFeatures.length; i++) {
+    if (isNaN(allFeatures[i])) nanFeaturesCount++;
+  }
+  
+  for (let i = 0; i < allTargets.length; i++) {
+    if (isNaN(allTargets[i])) nanTargetsCount++;
+  }
+  
+  console.log(`- NaN trong features: ${nanFeaturesCount}`);
+  console.log(`- NaN trong targets: ${nanTargetsCount}`);
+  
+  this.inputNodes = trainingData[0].inputSequence[0].length;
+  console.log(`✅ Đã chuẩn bị ${trainingData.length} chuỗi dữ liệu hợp lệ`);
+} else {
+  throw new Error("❌ Không có dữ liệu training hợp lệ sau khi kiểm tra.");
+}
 
     return trainingData;
   }
