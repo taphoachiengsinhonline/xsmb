@@ -191,6 +191,16 @@ class TensorFlowService {
         if (targetGDB?.so && String(targetGDB.so).length >= 5) {
             const targetGDBString = String(targetGDB.so).padStart(5, '0');
             const targetArray = this.prepareTarget(targetGDBString);
+
+            // BƯỚC KIỂM TRA BỔ SUNG CHO MẢNG TARGETS
+            if (targetArray.some(val => val === null || val === undefined || isNaN(val))) {
+                console.error(`
+                    ❌ LỖI NGHIÊM TRỌNG: Mảng target cho ngày ${targetDayString} chứa giá trị không hợp lệ.
+                    Bỏ qua chuỗi này. Vui lòng kiểm tra hàm prepareTarget.
+                `);
+                continue; // Bỏ qua, không thêm chuỗi này vào trainingData
+            }
+
             trainingData.push({ inputSequence, targetArray });
         }
     }
