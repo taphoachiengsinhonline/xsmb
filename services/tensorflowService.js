@@ -159,7 +159,7 @@ class TensorFlowService {
             const basicFeatures = this.featureService.extractAllFeatures(currentDayForFeature, previousDaysForBasicFeatures, dateStr);
             const advancedFeatures = this.advancedFeatureEngineer.extractPremiumFeatures(currentDayForFeature, previousDaysForAdvancedFeatures);
             
-            let finalFeatureVector = [...basicFeatures, ...advancedFeatures];
+            let finalFeatureVector = [...basicFeatures, ...Object.values(advancedFeatures).flat()];
 
             // =================================================================
             // ĐÂY LÀ "TẤM LÁ CHẮN" MỚI - BƯỚC KIỂM TRA VÀ LÀM SẠCH
