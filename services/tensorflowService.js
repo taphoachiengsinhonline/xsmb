@@ -122,7 +122,7 @@ class TensorFlowService {
             let finalFeatureVector = [
                 ...basicFeatures, 
                 ...advancedFeatures.prizeCorrelationFeatures,
-                // ...advancedFeatures.sumFrequencyFeatures,
+                ...advancedFeatures.sumFrequencyFeatures,
                 // ...advancedFeatures.chanLePatterns,
                 // ...advancedFeatures.gapAnalysis
             ];
