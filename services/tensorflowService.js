@@ -81,33 +81,54 @@ class TensorFlowService {
   }
 
   async trainModel(trainingData) {
-    const { inputs, targets } = trainingData;
-    if (inputs.length === 0) {
-    throw new Error('Inputs rỗng - Không thể huấn luyện với data empty.');
-}
-    const inputTensor = tf.tensor3d(inputs, [inputs.length, SEQUENCE_LENGTH, this.inputNodes]);
-    const targetTensor = tf.tensor2d(targets, [targets.length, OUTPUT_NODES]);
+  const { inputs, targets } = trainingData;
+  
+  // THÊM KIỂM TRA DỮ LIỆU KỸ LƯỠNG
+  if (!inputs || !targets || inputs.length === 0 || targets.length === 0) {
+    throw new Error('Dữ liệu training rỗng hoặc không hợp lệ');
+  }
 
-    const history = await this.model.fit(inputTensor, targetTensor, {
-      epochs: EPOCHS,
-      batchSize: BATCH_SIZE,
-      validationSplit: 0.1,
-      callbacks: {
-    onEpochEnd: (epoch, logs) => {
+  // KIỂM TRA TỪNG PHẦN TỬ
+  inputs.forEach((input, idx) => {
+    if (!input || input.length !== SEQUENCE_LENGTH) {
+      throw new Error(`Input tại index ${idx} không hợp lệ: ${input}`);
+    }
+  });
+
+  targets.forEach((target, idx) => {
+    if (!target || target.length !== OUTPUT_NODES) {
+      throw new Error(`Target tại index ${idx} không hợp lệ: ${target}`);
+    }
+  });
+
+  const inputTensor = tf.tensor3d(inputs, [inputs.length, SEQUENCE_LENGTH, this.inputNodes]);
+  const targetTensor = tf.tensor2d(targets, [targets.length, OUTPUT_NODES]);
+
+  // THÊM KIỂM TRA TENSOR
+  if (inputTensor.shape.some(dim => dim === 0) || targetTensor.shape.some(dim => dim === 0)) {
+    throw new Error('Tensor có shape không hợp lệ');
+  }
+
+  const history = await this.model.fit(inputTensor, targetTensor, {
+    epochs: EPOCHS,
+    batchSize: BATCH_SIZE,
+    validationSplit: 0.1,
+    callbacks: {
+      onEpochEnd: (epoch, logs) => {
         if (isNaN(logs.loss)) {
-            console.error('NaN loss detected! Stopping training.');
-            this.model.stopTraining = true;
+          console.error('NaN loss detected! Stopping training.');
+          this.model.stopTraining = true;
         }
         console.log(`Epoch ${epoch + 1}: Loss = ${logs.loss.toFixed(4)}`);
+      }
     }
+  });
+
+  inputTensor.dispose();
+  targetTensor.dispose();
+
+  return history;
 }
-    });
-
-    inputTensor.dispose();
-    targetTensor.dispose();
-
-    return history;
-  }
 
   async predict(inputSequence) {
     const inputTensor = tf.tensor3d([inputSequence], [1, SEQUENCE_LENGTH, this.inputNodes]);
@@ -131,86 +152,88 @@ class TensorFlowService {
   }
 
   async prepareTrainingData() {
-    console.log('📝 Bắt đầu chuẩn bị dữ liệu huấn luyện...');
-    const results = await Result.find().sort({ 'ngay': 1 }).lean();
-    if (results.length < SEQUENCE_LENGTH + 1) {
-        throw new Error(`Không đủ dữ liệu. Cần ít nhất ${SEQUENCE_LENGTH + 1} ngày.`);
-    }
+  console.log('📝 Bắt đầu chuẩn bị dữ liệu huấn luyện...');
+  const results = await Result.find().sort({ 'ngay': 1 }).lean();
+  
+  if (results.length < SEQUENCE_LENGTH + 1) {
+    throw new Error(`Không đủ dữ liệu. Cần ít nhất ${SEQUENCE_LENGTH + 1} ngày.`);
+  }
 
-    const grouped = {};
-    results.forEach(r => {
-        if (!grouped[r.ngay]) grouped[r.ngay] = [];
-        grouped[r.ngay].push(r);
-    });
+  const grouped = {};
+  results.forEach(r => {
+    if (!grouped[r.ngay]) grouped[r.ngay] = [];
+    grouped[r.ngay].push(r);
+  });
 
-    const days = Object.keys(grouped).sort((a, b) => this.dateKey(a).localeCompare(this.dateKey(b)));
-    const trainingData = [];
+  const days = Object.keys(grouped).sort((a, b) => this.dateKey(a).localeCompare(this.dateKey(b)));
+  const trainingData = [];
 
-    for (let i = 0; i < days.length - SEQUENCE_LENGTH; i++) {
-        const sequenceDaysStrings = days.slice(i, i + SEQUENCE_LENGTH);
-        const targetDayString = days[i + SEQUENCE_LENGTH];
-        
-        const allHistoryForSequence = days.slice(0, i + SEQUENCE_LENGTH).map(dayStr => grouped[dayStr] || []);
-        const inputSequence = [];
-        
-        let sequenceHasInvalidData = false; // Cờ để kiểm tra sequence hiện tại
+  for (let i = 0; i < days.length - SEQUENCE_LENGTH; i++) {
+    const sequenceDaysStrings = days.slice(i, i + SEQUENCE_LENGTH);
+    const targetDayString = days[i + SEQUENCE_LENGTH];
+    
+    const allHistoryForSequence = days.slice(0, i + SEQUENCE_LENGTH).map(dayStr => grouped[dayStr] || []);
+    const inputSequence = [];
+    
+    let sequenceHasInvalidData = false;
 
-        for(let j = 0; j < SEQUENCE_LENGTH; j++) {
-            const currentDayForFeature = grouped[sequenceDaysStrings[j]] || [];
-            const dateStr = sequenceDaysStrings[j];
-            
-            const previousDaysForBasicFeatures = allHistoryForSequence.slice(0, i + j);
-            const previousDaysForAdvancedFeatures = previousDaysForBasicFeatures.slice().reverse();
+    for(let j = 0; j < SEQUENCE_LENGTH; j++) {
+      const currentDayForFeature = grouped[sequenceDaysStrings[j]] || [];
+      const dateStr = sequenceDaysStrings[j];
+      
+      const previousDaysForBasicFeatures = allHistoryForSequence.slice(0, i + j);
+      const previousDaysForAdvancedFeatures = previousDaysForBasicFeatures.slice().reverse();
 
-            const basicFeatures = this.featureService.extractAllFeatures(currentDayForFeature, previousDaysForBasicFeatures, dateStr);
-            const advancedFeatures = this.advancedFeatureEngineer.extractPremiumFeatures(currentDayForFeature, previousDaysForAdvancedFeatures);
-            
-            let finalFeatureVector = [...basicFeatures, ...Object.values(advancedFeatures).flat()];
-            
-            // =================================================================
-            // ĐÂY LÀ "TẤM LÁ CHẮN" MỚI - BƯỚC KIỂM TRA VÀ LÀM SẠCH
-            // =================================================================
-            const initialLength = finalFeatureVector.length;
-            if (finalFeatureVector.some(isNaN)) {
-              console.error('NaN detected in features for day:', dateStr);
-            finalFeatureVector = finalFeatureVector.map(val => isNaN(val) || val === null ? 0 : val); // Thay null/NaN
-if (finalFeatureVector.length !== EXPECTED_FEATURE_SIZE) { // Ví dụ: 346
-    console.warn(`Feature vector sai size cho ngày ${dateStr}: ${finalFeatureVector.length} thay vì 346`);
-}
-            }
-            
-            // =================================================================
-
-            inputSequence.push(finalFeatureVector);
+      const basicFeatures = this.featureService.extractAllFeatures(currentDayForFeature, previousDaysForBasicFeatures, dateStr);
+      const advancedFeatures = this.advancedFeatureEngineer.extractPremiumFeatures(currentDayForFeature, previousDaysForAdvancedFeatures);
+      
+      let finalFeatureVector = [...basicFeatures, ...Object.values(advancedFeatures).flat()];
+      
+      // KIỂM TRA VÀ LÀM SẠCH FEATURE VECTOR
+      const EXPECTED_FEATURE_SIZE = 346; // Số feature mong đợi
+      if (finalFeatureVector.some(isNaN) || finalFeatureVector.some(val => val === null || val === undefined)) {
+        console.warn(`⚠️ Phát hiện giá trị không hợp lệ trong features cho ngày ${dateStr}. Đang làm sạch...`);
+        finalFeatureVector = finalFeatureVector.map(val => 
+          isNaN(val) || val === null || val === undefined ? 0 : val
+        );
+      }
+      
+      // ĐẢM BẢO ĐÚNG KÍCH THƯỚC
+      if (finalFeatureVector.length !== EXPECTED_FEATURE_SIZE) {
+        console.warn(`Feature vector sai size cho ngày ${dateStr}: ${finalFeatureVector.length} thay vì ${EXPECTED_FEATURE_SIZE}. Đang cắt/đệm...`);
+        if (finalFeatureVector.length > EXPECTED_FEATURE_SIZE) {
+          finalFeatureVector = finalFeatureVector.slice(0, EXPECTED_FEATURE_SIZE);
+        } else {
+          finalFeatureVector = [...finalFeatureVector, ...Array(EXPECTED_FEATURE_SIZE - finalFeatureVector.length).fill(0)];
         }
-
-        const targetGDB = (grouped[targetDayString] || []).find(r => r.giai === 'ĐB');
-        if (targetGDB?.so && String(targetGDB.so).length >= 5) {
-            const targetGDBString = String(targetGDB.so).padStart(5, '0');
-            const targetArray = this.prepareTarget(targetGDBString);
-
-            // BƯỚC KIỂM TRA BỔ SUNG CHO MẢNG TARGETS
-            if (targetArray.some(val => val === null || val === undefined || isNaN(val))) {
-                console.error(`
-                    ❌ LỖI NGHIÊM TRỌNG: Mảng target cho ngày ${targetDayString} chứa giá trị không hợp lệ.
-                    Bỏ qua chuỗi này. Vui lòng kiểm tra hàm prepareTarget.
-                `);
-                continue; // Bỏ qua, không thêm chuỗi này vào trainingData
-            }
-
-            trainingData.push({ inputSequence, targetArray });
-        }
+      }
+      
+      inputSequence.push(finalFeatureVector);
     }
 
-    if (trainingData.length > 0) {
-        this.inputNodes = trainingData[0].inputSequence[0].length;
-        console.log(`✅ Đã chuẩn bị ${trainingData.length} chuỗi dữ liệu huấn luyện hợp lệ với feature size: ${this.inputNodes}`);
-    } else {
-        console.error("❌ LỖI NGHIÊM TRỌNG: Không thể tạo được bất kỳ chuỗi dữ liệu huấn luyện nào. Vui lòng kiểm tra lại toàn bộ dữ liệu nguồn và logic `prepareTrainingData`.");
-        throw new Error("Không có dữ liệu training hợp lệ.");
-    }
+    const targetGDB = (grouped[targetDayString] || []).find(r => r.giai === 'ĐB');
+    if (targetGDB?.so && String(targetGDB.so).length >= 5) {
+      const targetGDBString = String(targetGDB.so).padStart(5, '0');
+      const targetArray = this.prepareTarget(targetGDBString);
 
-    return trainingData;
+      // KIỂM TRA TARGET ARRAY
+      if (targetArray.some(val => val === null || val === undefined || isNaN(val))) {
+        console.error(`❌ Target array không hợp lệ cho ngày ${targetDayString}. Bỏ qua.`);
+        continue;
+      }
+
+      trainingData.push({ inputSequence, targetArray });
+    }
+  }
+
+  if (trainingData.length > 0) {
+    this.inputNodes = trainingData[0].inputSequence[0].length;
+    console.log(`✅ Đã chuẩn bị ${trainingData.length} chuỗi dữ liệu huấn luyện hợp lệ với feature size: ${this.inputNodes}`);
+  } else {
+    throw new Error("❌ Không có dữ liệu training hợp lệ.");
+  }
+
+  return trainingData;
 }
 
   dateKey(s) {
@@ -277,12 +300,12 @@ if (finalFeatureVector.length !== EXPECTED_FEATURE_SIZE) { // Ví dụ: 346
 
     // COMPILE MODEL: Cấu hình quá trình học
     this.model.compile({
-      optimizer: tf.train.adam({learningRate: 0.0005}),
-      loss: 'binaryCrossentropy',
-      metrics: [tf.metrics.binaryAccuracy()]
-      // Quá trình học của mô hình dựa trên 'loss', nên vẫn sẽ hoạt động bình thường.
-      // Chúng ta sẽ chỉ mất đi phần hiển thị accuracy/precision trong log của mỗi epoch.
-    });
+  optimizer: tf.train.adam({learningRate: 0.0005}),
+  loss: 'binaryCrossentropy',
+  // TẠM BỎ METRICS ĐỂ DEBUG
+  // metrics: [tf.metrics.binaryAccuracy()]
+  metrics: [] // Bỏ trống để tránh lỗi
+});
     console.log('✅ Model đã được compile. Bắt đầu quá trình training...');
 
     // Huấn luyện model
