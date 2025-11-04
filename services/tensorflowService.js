@@ -269,32 +269,20 @@ class TensorFlowService {
   };
 
   try {
-    console.log('💾 Bắt đầu lưu model...');
+    // Lưu model ra file
+    const saveResult = await this.model.save('file://./models/tfjs_model');
+    console.log('💾 Model đã được lưu ra file');
     
-    // ĐẢM BẢO THƯ MỤC TỒN TẠI
-    const fs = require('fs');
-    const modelDir = './models/tfjs_model';
-    if (!fs.existsSync(modelDir)) {
-      fs.mkdirSync(modelDir, { recursive: true });
-      console.log('📁 Đã tạo thư mục model');
-    }
-
-    // LƯU MODEL RA FILE
-    console.log('📤 Đang lưu model ra file...');
-    const saveResult = await this.model.save(`file://${modelDir}`);
-    console.log('✅ Model đã được lưu ra file thành công');
-
-    // LƯU THÔNG TIN VÀO DATABASE - CHỈ LƯU METADATA
+    // Lưu thông tin vào database
     await NNState.findOneAndUpdate(
       { modelName: NN_MODEL_NAME },
       { 
         state: modelInfo,
-        // KHÔNG lưu modelArtifacts vì nó quá lớn, chỉ lưu cờ đánh dấu
-        modelArtifacts: { exists: true, path: `${modelDir}/model.json` }
+        modelArtifacts: saveResult 
       },
       { upsert: true, new: true }
     );
-
+    
     console.log(`💾 TensorFlow model saved với ${this.inputNodes} input nodes`);
   } catch (error) {
     console.error('❌ Lỗi khi save model:', error);
@@ -306,21 +294,10 @@ class TensorFlowService {
   console.log('🔍 [LoadModel] Đang tìm model trong database...');
   const modelState = await NNState.findOne({ modelName: NN_MODEL_NAME });
   
-  if (modelState && modelState.state) {
+  if (modelState && modelState.modelArtifacts) {
     console.log('✅ [LoadModel] Đã tìm thấy model state trong database');
-    
-    // CHỈ CẦN KIỂM TRA modelState.state, KHÔNG CẦN modelArtifacts
     try {
-      const fs = require('fs');
-      const modelPath = './models/tfjs_model/model.json';
-      
-      // KIỂM TRA FILE MODEL CÓ TỒN TẠI KHÔNG
-      if (!fs.existsSync(modelPath)) {
-        console.error('❌ [LoadModel] File model không tồn tại:', modelPath);
-        return false;
-      }
-      
-      this.model = await tf.loadLayersModel(`file://${modelPath}`);
+      this.model = await tf.loadLayersModel('file://./models/tfjs_model/model.json');
       this.inputNodes = modelState.state.inputNodes;
       console.log(`✅ TensorFlow model loaded với ${this.inputNodes} input nodes`);
       return true;
@@ -329,46 +306,46 @@ class TensorFlowService {
       return false;
     }
   } else {
-    console.log('❌ [LoadModel] Không tìm thấy model trong database');
+    console.log('❌ [LoadModel] Không tìm thấy model trong database:', {
+      modelStateExists: !!modelState,
+      hasArtifacts: !!(modelState && modelState.modelArtifacts)
+    });
     return false;
   }
 }
   async runHistoricalTraining() {
-    console.log('🔔 [TensorFlow Service] Bắt đầu Huấn luyện Lịch sử...');
+    console.log('🔔 [TensorFlow Service] Bắt đầu Huấn luyện Lịch sử với kiến trúc Premium...');
    
     const trainingData = await this.prepareTrainingData();
-    if (trainingData.length === 0) {
-        throw new Error('Dữ liệu training rỗng');
+    if (trainingData.length === 0 || trainingData.some(d => d.inputSequence.length !== SEQUENCE_LENGTH || d.inputSequence.flat().some(isNaN))) {
+      throw new Error('Dữ liệu training rỗng hoặc chứa giá trị không hợp lệ. Kiểm tra DB và feature engineering.');
     }
     
     const inputs = trainingData.map(d => d.inputSequence);
     const targets = trainingData.map(d => d.targetArray);
     
-    console.log('🏗️ Xây dựng model mới...');
     await this.buildModel(this.inputNodes);
+    
+    this.model.compile({
+      optimizer: tf.train.adam({learningRate: 0.0005}),
+      loss: 'binaryCrossentropy',
+      metrics: []
+    });
     
     console.log('✅ Model đã được compile. Bắt đầu quá trình training...');
     
     await this.trainModel({ inputs, targets });
    
-    console.log('💾 Đang lưu model...');
     await this.saveModel();
     
-    // KIỂM TRA MODEL ĐÃ ĐƯỢC LƯU THÀNH CÔNG
-    console.log('🔍 Kiểm tra model files...');
-    const filesOk = this.checkModelFiles();
-    
-    if (!filesOk) {
-        throw new Error('Model files không được tạo thành công');
-    }
-    
     return {
-        message: `Huấn luyện hoàn tất. Đã xử lý ${trainingData.length} chuỗi.`,
-        sequences: trainingData.length,
-        featureSize: this.inputNodes,
-        modelName: NN_MODEL_NAME
+      message: `Huấn luyện Premium Model hoàn tất. Đã xử lý ${trainingData.length} chuỗi, ${EPOCHS} epochs.`,
+      sequences: trainingData.length,
+      epochs: EPOCHS,
+      featureSize: this.inputNodes,
+      modelName: NN_MODEL_NAME
     };
-}
+  }
 
   async runLearning() {
   console.log('🔔 [TensorFlow Service] Learning from new results...');
