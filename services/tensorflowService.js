@@ -29,36 +29,25 @@ class TensorFlowService {
   }
 
   async buildModel(inputNodes) {
-    console.log(`🏗️ Bắt đầu xây dựng kiến trúc Single-Head Ổn định với ${inputNodes} features...`);
+    console.log(`🏗️ [CHẨN ĐOÁN] Bắt đầu xây dựng kiến trúc TỐI GIẢN...`);
     this.inputNodes = inputNodes;
 
     const model = tf.sequential();
 
+    // CHỈ CÒN MỘT LỚP LSTM DUY NHẤT
     model.add(tf.layers.lstm({
-      units: 192, returnSequences: true,
+      units: 128, // Giảm số units một chút
       inputShape: [SEQUENCE_LENGTH, inputNodes],
-      kernelRegularizer: tf.regularizers.l2({l2: 0.001}),
-      recurrentRegularizer: tf.regularizers.l2({l2: 0.001})
+      returnSequences: false // Output trực tiếp ra vector cuối cùng
     }));
-    model.add(tf.layers.batchNormalization());
-    model.add(tf.layers.dropout({rate: 0.25}));
-
-    model.add(tf.layers.lstm({
-      units: 96, returnSequences: false,
-      kernelRegularizer: tf.regularizers.l2({l2: 0.001}),
-      recurrentRegularizer: tf.regularizers.l2({l2: 0.001})
-    }));
-    model.add(tf.layers.batchNormalization());
-    model.add(tf.layers.dropout({rate: 0.25}));
     
-    model.add(tf.layers.dense({
-      units: 48, activation: 'relu',
-      kernelRegularizer: tf.regularizers.l2({l2: 0.001})
-    }));
+    // Giữ lại Dropout để chống overfitting
+    model.add(tf.layers.dropout({rate: 0.3}));
 
+    // LỚP OUTPUT CUỐI CÙNG
     model.add(tf.layers.dense({
       units: OUTPUT_NODES,
-      activation: 'linear'
+      activation: 'linear' // Vẫn giữ 'linear' để đi cặp với sigmoidCrossentropy
     }));
     
     model.summary();
@@ -185,7 +174,7 @@ class TensorFlowService {
   }
   
   async runHistoricalTraining() {
-    console.log('🔔 Bắt đầu Huấn luyện Lịch sử với kiến trúc Single-Head Ổn định...');
+    console.log('🔔 [CHẨN ĐOÁN] Bắt đầu Huấn luyện Lịch sử với kiến trúc TỐI GIẢN...');
     const trainingData = await this.prepareTrainingData(); 
     if (trainingData.length === 0) throw new Error('Không có dữ liệu training');
 
@@ -195,20 +184,22 @@ class TensorFlowService {
     await this.buildModel(this.inputNodes); 
 
     // =================================================================
-    // SỬA LỖI DUY NHẤT TẠI ĐÂY
+    // GIẢI PHÁP CUỐI CÙNG: ĐỊNH NGHĨA LOSS DƯỚI DẠNG MỘT HÀM CUSTOM
     // =================================================================
+    const customLoss = (yTrue, yPred) => {
+        return tf.losses.sigmoidCrossentropy(yTrue, yPred);
+    };
+
     this.model.compile({
-        optimizer: tf.train.adam({ learningRate: 0.0001, clipvalue: 1.0 }),
-        // Cung cấp một giá trị loss duy nhất, đúng như yêu cầu của mô hình Single-Head.
-        loss: tf.losses.sigmoidCrossentropy,
+        optimizer: tf.train.adam({ learningRate: 0.001 }), // Thử lại learning rate mặc định với model đơn giản
+        loss: customLoss,
     });
-    // =================================================================
     
     console.log('✅ Model đã được compile. Bắt đầu quá trình training...');
     await this.trainModel({ inputs, targets }); 
     await this.saveModel(); 
-    return { message: `Huấn luyện Single-Head Model hoàn tất.`, sequences: trainingData.length, epochs: EPOCHS, featureSize: this.inputNodes, modelName: NN_MODEL_NAME };
-}
+    return { message: `Huấn luyện Single-Head TỐI GIẢN hoàn tất.`, /*...*/ };
+  }
 
   async saveModel() {
     if (!this.model) throw new Error('No model to save');
