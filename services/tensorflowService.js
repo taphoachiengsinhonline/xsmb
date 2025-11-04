@@ -37,7 +37,7 @@ class TensorFlowService {
     }));
     // --- LỚP ỔN ĐỊNH HÓA ---
     // Nhiệm vụ: Chuẩn hóa output của lớp LSTM trên, giúp quá trình học ở các lớp sau diễn ra nhanh và ổn định hơn.
-    model.add(tf.layers.batchNormalization());
+    model.add(tf.layers.batchNormalization({ epsilon: 1e-5 })); // Tăng epsilon để tránh div 0
     // --- LỚP LOẠI BỎ (DROPOUT) ---
     // Nhiệm vụ: Chống overfitting. Trong mỗi lượt training, nó sẽ ngẫu nhiên "tắt" 25% các nơ-ron, buộc các nơ-ron còn lại phải học một cách độc lập và mạnh mẽ hơn.
     model.add(tf.layers.dropout({rate: 0.25}));
@@ -49,7 +49,7 @@ class TensorFlowService {
       kernelRegularizer: tf.regularizers.l2({l2: 0.001}),
       recurrentRegularizer: tf.regularizers.l2({l2: 0.001})
     }));
-    model.add(tf.layers.batchNormalization());
+    model.add(tf.layers.batchNormalization({ epsilon: 1e-5 }));
     model.add(tf.layers.dropout({rate: 0.25}));
    
     // --- TẦNG 3: LỚP KẾT NỐI ĐẦY ĐỦ (DENSE) ---
@@ -72,47 +72,55 @@ class TensorFlowService {
     return this.model;
   }
   async trainModel(trainingData) {
-  const { inputs, targets } = trainingData;
- 
-  // THÊM KIỂM TRA DỮ LIỆU KỸ LƯỠNG
-  if (!inputs || !targets || inputs.length === 0 || targets.length === 0) {
-    throw new Error('Dữ liệu training rỗng hoặc không hợp lệ');
-  }
-  // KIỂM TRA TỪNG PHẦN TỬ
-  inputs.forEach((input, idx) => {
-    if (!input || input.length !== SEQUENCE_LENGTH) {
-      throw new Error(`Input tại index ${idx} không hợp lệ: ${input}`);
+    const { inputs, targets } = trainingData;
+    // THÊM KIỂM TRA DỮ LIỆU KỸ LƯỠNG
+    if (!inputs || !targets || inputs.length === 0 || targets.length === 0) {
+      throw new Error('Dữ liệu training rỗng hoặc không hợp lệ');
     }
-  });
-  targets.forEach((target, idx) => {
-    if (!target || target.length !== OUTPUT_NODES) {
-      throw new Error(`Target tại index ${idx} không hợp lệ: ${target}`);
-    }
-  });
-  const inputTensor = tf.tensor3d(inputs, [inputs.length, SEQUENCE_LENGTH, this.inputNodes]);
-  const targetTensor = tf.tensor2d(targets, [targets.length, OUTPUT_NODES]);
-  // THÊM KIỂM TRA TENSOR
-  if (inputTensor.shape.some(dim => dim === 0) || targetTensor.shape.some(dim => dim === 0)) {
-    throw new Error('Tensor có shape không hợp lệ');
-  }
-  const history = await this.model.fit(inputTensor, targetTensor, {
-    epochs: EPOCHS,
-    batchSize: BATCH_SIZE,
-    validationSplit: 0.1,
-    callbacks: {
-      onEpochEnd: (epoch, logs) => {
-        if (isNaN(logs.loss)) {
-          console.error('NaN loss detected! Stopping training.');
-          this.model.stopTraining = true;
-        }
-        console.log(`Epoch ${epoch + 1}: Loss = ${logs.loss.toFixed(4)}`);
+    // KIỂM TRA TỪNG PHẦN TỬ
+    inputs.forEach((input, idx) => {
+      if (!input || input.length !== SEQUENCE_LENGTH) {
+        throw new Error(`Input tại index ${idx} không hợp lệ: ${input}`);
       }
+    });
+    targets.forEach((target, idx) => {
+      if (!target || target.length !== OUTPUT_NODES) {
+        throw new Error(`Target tại index ${idx} không hợp lệ: ${target}`);
+      }
+    });
+    const inputTensor = tf.tensor3d(inputs, [inputs.length, SEQUENCE_LENGTH, this.inputNodes]);
+    const targetTensor = tf.tensor2d(targets, [targets.length, OUTPUT_NODES]);
+    // THÊM KIỂM TRA TENSOR
+    if (inputTensor.shape.some(dim => dim === 0) || targetTensor.shape.some(dim => dim === 0)) {
+      throw new Error('Tensor có shape không hợp lệ');
     }
-  });
-  inputTensor.dispose();
-  targetTensor.dispose();
-  return history;
-}
+    // Debug min/max input
+    const inputData = await inputTensor.data();
+    const minInput = Math.min(...inputData);
+    const maxInput = Math.max(...inputData);
+    console.log(`Input data min/max: ${minInput} / ${maxInput}`);
+    if (isNaN(minInput) || isNaN(maxInput)) {
+      throw new Error('Input chứa NaN');
+    }
+    const validationSplit = inputs.length >= 100 ? 0.1 : 0; // Tránh val empty
+    const history = await this.model.fit(inputTensor, targetTensor, {
+      epochs: EPOCHS,
+      batchSize: BATCH_SIZE,
+      validationSplit: validationSplit,
+      callbacks: {
+        onEpochEnd: (epoch, logs) => {
+          if (isNaN(logs.loss)) {
+            console.error('NaN loss detected! Stopping training.');
+            this.model.stopTraining = true;
+          }
+          console.log(`Epoch ${epoch + 1}: Loss = ${logs.loss ? logs.loss.toFixed(4) : 'NaN'}`);
+        }
+      }
+    });
+    inputTensor.dispose();
+    targetTensor.dispose();
+    return history;
+  }
   async predict(inputSequence) {
     const inputTensor = tf.tensor3d([inputSequence], [1, SEQUENCE_LENGTH, this.inputNodes]);
     const prediction = this.model.predict(inputTensor);
@@ -123,11 +131,10 @@ class TensorFlowService {
   }
   prepareTarget(gdbString) {
     const target = Array(OUTPUT_NODES).fill(0);
-// ... target[index * 10 + d] = 1;
     gdbString.split('').forEach((digit, index) => {
       const d = parseInt(digit);
       if (!isNaN(d) && index < 5) {
-        target[index * 10 + d] = 0.99;
+        target[index * 10 + d] = 1; // Đổi thành 1 để ổn định
       }
     });
     return target;
@@ -145,6 +152,7 @@ class TensorFlowService {
     });
     const days = Object.keys(grouped).sort((a, b) => this.dateKey(a).localeCompare(this.dateKey(b)));
     const trainingData = [];
+    let allFeatures = []; // Để normalize toàn bộ
     for (let i = 0; i < days.length - SEQUENCE_LENGTH; i++) {
         const sequenceDaysStrings = days.slice(i, i + SEQUENCE_LENGTH);
         const targetDayString = days[i + SEQUENCE_LENGTH];
@@ -186,6 +194,7 @@ class TensorFlowService {
                 return val;
             });
             // =================================================================
+            allFeatures = allFeatures.concat(finalFeatureVector); // Thu thập để normalize
             inputSequence.push(finalFeatureVector);
         }
         const targetGDB = (grouped[targetDayString] || []).find(r => r.giai === 'ĐB');
@@ -204,6 +213,13 @@ class TensorFlowService {
         }
     }
     if (trainingData.length > 0) {
+        // Normalize toàn bộ features (min-max)
+        const min = Math.min(...allFeatures);
+        const max = Math.max(...allFeatures);
+        console.log(`Normalizing features: min=${min}, max=${max}`);
+        trainingData.forEach(d => {
+            d.inputSequence = d.inputSequence.map(seq => seq.map(v => (v - min) / (max - min + 1e-8)));
+        });
         this.inputNodes = trainingData[0].inputSequence[0].length;
         console.log(`✅ Đã chuẩn bị ${trainingData.length} chuỗi dữ liệu huấn luyện hợp lệ với feature size: ${this.inputNodes}`);
     } else {
@@ -261,7 +277,7 @@ class TensorFlowService {
     this.buildModel(this.inputNodes);
     // COMPILE MODEL: Cấu hình quá trình học
     this.model.compile({
-      optimizer: tf.train.adam({learningRate: 0.0005}),
+      optimizer: tf.train.adam({learningRate: 0.0005, clipnorm: 1.0}), // Thêm clipnorm
       loss: 'binaryCrossentropy'
       // TẠM THỜI LOẠI BỎ HOÀN TOÀN 'metrics'.
       // Quá trình học của mô hình dựa trên 'loss', nên vẫn sẽ hoạt động bình thường.
