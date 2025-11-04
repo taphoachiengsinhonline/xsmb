@@ -426,13 +426,45 @@ class TensorFlowService {
     const days = Object.keys(grouped).sort((a, b) => this.dateKey(a).localeCompare(this.dateKey(b)));
     const latestSequenceDays = days.slice(-SEQUENCE_LENGTH);
 
+    console.log(`🔍 Chuẩn bị dữ liệu dự đoán từ ${latestSequenceDays.length} ngày gần nhất`);
+
     const previousDays = [];
     const inputSequence = latestSequenceDays.map(day => {
       const dayResults = grouped[day] || [];
       const prevDays = previousDays.slice();
       previousDays.push(dayResults);
-      return this.featureService.extractAllFeatures(dayResults, prevDays, day);
+      
+      // SỬA: KẾT HỢP CẢ BASIC VÀ ADVANCED FEATURES
+      const basicFeatures = this.featureService.extractAllFeatures(dayResults, prevDays, day);
+      const advancedFeatures = this.advancedFeatureEngineer.extractPremiumFeatures(dayResults, prevDays);
+      
+      let finalFeatureVector = [...basicFeatures, ...Object.values(advancedFeatures).flat()];
+      
+      // DEBUG: Kiểm tra kích thước
+      console.log(`📊 Ngày ${day}: Basic=${basicFeatures.length}, Advanced=${Object.values(advancedFeatures).flat().length}, Total=${finalFeatureVector.length}`);
+      
+      // ĐẢM BẢO ĐÚNG 346 FEATURES
+      const EXPECTED_SIZE = 346;
+      if (finalFeatureVector.length !== EXPECTED_SIZE) {
+        console.warn(`⚠️ Điều chỉnh features: ${finalFeatureVector.length} -> ${EXPECTED_SIZE}`);
+        if (finalFeatureVector.length > EXPECTED_SIZE) {
+          finalFeatureVector = finalFeatureVector.slice(0, EXPECTED_SIZE);
+        } else {
+          finalFeatureVector = [...finalFeatureVector, ...Array(EXPECTED_SIZE - finalFeatureVector.length).fill(0)];
+        }
+      }
+      
+      return finalFeatureVector;
     });
+
+    // KIỂM TRA TỔNG QUÁT
+    const totalValues = inputSequence.flat().length;
+    const expectedValues = SEQUENCE_LENGTH * 346;
+    console.log(`🔢 Tổng số values: ${totalValues}, Expected: ${expectedValues}`);
+    
+    if (totalValues !== expectedValues) {
+      throw new Error(`Lỗi dimension: có ${totalValues} values, cần ${expectedValues} values`);
+    }
 
     const output = await this.predict(inputSequence);
     const prediction = this.decodeOutput(output);
@@ -450,7 +482,7 @@ class TensorFlowService {
       message: `TensorFlow LSTM đã tạo dự đoán cho ngày ${nextDayStr}.`,
       ngayDuDoan: nextDayStr
     };
-  }
+}
 
   decodeOutput(output) {
     const prediction = { pos1: [], pos2: [], pos3: [], pos4: [], pos5: [] };
