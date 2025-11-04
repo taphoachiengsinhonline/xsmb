@@ -270,7 +270,7 @@ class TensorFlowService {
       },
       { upsert: true }
     );
-    console.log(💾 TensorFlow model saved với ${this.inputNodes} input nodes);
+    console.log(`💾 TensorFlow model saved với ${this.inputNodes} input nodes`);
   }
   async loadModel() {
     const modelState = await NNState.findOne({ modelName: NN_MODEL_NAME });
