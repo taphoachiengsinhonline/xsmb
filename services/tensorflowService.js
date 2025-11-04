@@ -8,7 +8,7 @@ const FeatureEngineeringService = require('./featureEngineeringService');
 const { DateTime } = require('luxon');
 
 
-const NN_MODEL_NAME = 'GDB_LSTM_TFJS_PREMIUM_V1'; // Đổi tên model để lưu trạng thái mới
+const NN_MODEL_NAME = 'GDB_MULTIHEAD_TFJS_V1'; // Đổi tên model để lưu trạng thái mới
 const SEQUENCE_LENGTH = 7;
 const OUTPUT_NODES = 50;
 const EPOCHS = 50; // Có thể tăng lên 70-100 với model phức tạp hơn
@@ -23,62 +23,59 @@ class TensorFlowService {
   }
 
   async buildModel(inputNodes) {
-    console.log(`🏗️ Bắt đầu xây dựng kiến trúc Premium Model với ${inputNodes} features...`);
+    console.log(`🏗️ Bắt đầu xây dựng kiến trúc Multi-Head Model với ${inputNodes} features...`);
     this.inputNodes = inputNodes;
 
-    const model = tf.sequential();
+    // --- Input Layer ---
+    const inputLayer = tf.input({shape: [SEQUENCE_LENGTH, inputNodes]});
 
-    // --- TẦNG 1: LỚP LSTM CHÍNH ---
-    // Nhiệm vụ: Xử lý trực tiếp chuỗi 7 ngày x 346 features. Lớp này học các mẫu hình thời gian (temporal patterns) ở mức độ thấp.
-    model.add(tf.layers.lstm({
-      units: 192,                         // Số lượng nơ-ron (bộ nhớ) trong lớp LSTM. 192 là một con số lớn, phù hợp với lượng features đầu vào cao.
-      returnSequences: true,              // Rất QUAN TRỌNG. Đặt là `true` để output của lớp này vẫn là một chuỗi (sequence), làm đầu vào cho lớp LSTM tiếp theo.
-      inputShape: [SEQUENCE_LENGTH, inputNodes], // Định nghĩa hình dạng đầu vào: 7 bước thời gian, mỗi bước có `inputNodes` features.
-      kernelRegularizer: tf.regularizers.l2({l2: 0.001}), // Kỹ thuật chính quy hóa L2: "Phạt" các trọng số (weights) có giá trị quá lớn, buộc mô hình phải học các mẫu hình tổng quát hơn thay vì dựa dẫm vào một vài features. Giúp chống overfitting.
-      recurrentRegularizer: tf.regularizers.l2({l2: 0.001}) // Tương tự L2 nhưng áp dụng cho các trọng số kết nối nội bộ (recurrent connections) của LSTM.
-    }));
+    // --- Shared LSTM Layers (Phần thân chung) ---
+    // Lớp LSTM đầu tiên
+    const lstm1 = tf.layers.lstm({
+        units: 192,
+        returnSequences: true,
+        kernelRegularizer: tf.regularizers.l2({l2: 0.001}),
+        recurrentRegularizer: tf.regularizers.l2({l2: 0.001})
+    }).apply(inputLayer);
+    const batchNorm1 = tf.layers.batchNormalization().apply(lstm1);
+    const dropout1 = tf.layers.dropout({rate: 0.25}).apply(batchNorm1);
 
-    // --- LỚP ỔN ĐỊNH HÓA ---
-    // Nhiệm vụ: Chuẩn hóa output của lớp LSTM trên, giúp quá trình học ở các lớp sau diễn ra nhanh và ổn định hơn.
-    model.add(tf.layers.batchNormalization());
+    // Lớp LSTM thứ hai
+    const lstm2 = tf.layers.lstm({
+        units: 96,
+        kernelRegularizer: tf.regularizers.l2({l2: 0.001}),
+        recurrentRegularizer: tf.regularizers.l2({l2: 0.001})
+    }).apply(dropout1);
+    const batchNorm2 = tf.layers.batchNormalization().apply(lstm2);
+    const sharedOutput = tf.layers.dropout({rate: 0.25}).apply(batchNorm2);
 
-    // --- LỚP LOẠI BỎ (DROPOUT) ---
-    // Nhiệm vụ: Chống overfitting. Trong mỗi lượt training, nó sẽ ngẫu nhiên "tắt" 25% các nơ-ron, buộc các nơ-ron còn lại phải học một cách độc lập và mạnh mẽ hơn.
-    model.add(tf.layers.dropout({rate: 0.25}));
+    // --- Multi-Head Output Layers (5 cái đầu riêng biệt) ---
+    const outputLayers = [];
+    for (let i = 0; i < NUM_POSITIONS; i++) {
+        const headName = `pos${i + 1}`;
+        // Mỗi "đầu" là một lớp Dense riêng
+        const denseHead = tf.layers.dense({
+            units: 48,
+            activation: 'relu',
+            name: `${headName}_dense`
+        }).apply(sharedOutput);
+        
+        // Lớp output cuối cùng cho mỗi "đầu"
+        const outputHead = tf.layers.dense({
+            units: NUM_CLASSES, // 10 output (cho 10 chữ số)
+            activation: 'softmax', // DÙNG SOFTMAX
+            name: headName
+        }).apply(denseHead);
 
-    // --- TẦNG 2: LỚP LSTM THỨ HAI ---
-    // Nhiệm vụ: Nhận chuỗi output từ tầng 1 và học các mẫu hình ở mức cao hơn ("mẫu hình của các mẫu hình").
-    model.add(tf.layers.lstm({
-      units: 96,                          // Số units có thể giảm dần ở các lớp sau vì thông tin đã được trừu tượng hóa.
-      returnSequences: false,             // QUAN TRỌNG. Đặt là `false` vì đây là lớp LSTM cuối cùng. Output của nó sẽ là một vector duy nhất (kích thước 96) đại diện cho toàn bộ chuỗi, sẵn sàng để đưa vào các lớp Dense.
-      kernelRegularizer: tf.regularizers.l2({l2: 0.001}),
-      recurrentRegularizer: tf.regularizers.l2({l2: 0.001})
-    }));
+        outputLayers.push(outputHead);
+    }
 
-    model.add(tf.layers.batchNormalization());
-    model.add(tf.layers.dropout({rate: 0.25}));
-    
-    // --- TẦNG 3: LỚP KẾT NỐI ĐẦY ĐỦ (DENSE) ---
-    // Nhiệm vụ: Hoạt động như một lớp phân loại cuối cùng, kết hợp các features bậc cao đã được học bởi các lớp LSTM để đưa ra quyết định.
-    model.add(tf.layers.dense({
-      units: 48,
-      activation: 'relu',                 // Hàm kích hoạt 'relu' (Rectified Linear Unit) rất phổ biến và hiệu quả, giúp mô hình học các mối quan hệ phi tuyến.
-      kernelRegularizer: tf.regularizers.l2({l2: 0.001})
-    }));
+    // Tạo model với 1 input và 5 output
+    this.model = tf.model({inputs: inputLayer, outputs: outputLayers});
 
-    // --- TẦNG 4: LỚP OUTPUT CUỐI CÙNG ---
-    // Nhiệm vụ: Đưa ra dự đoán cuối cùng.
-    model.add(tf.layers.dense({
-      units: OUTPUT_NODES,                // 50 units (5 vị trí * 10 chữ số).
-      activation: 'sigmoid'               // Hàm kích hoạt 'sigmoid' ép các giá trị output về khoảng [0, 1]. Rất phù hợp cho bài toán phân loại đa nhãn (multi-label classification) này, vì mỗi output đại diện cho "xác suất" một chữ số xuất hiện ở một vị trí.
-    }));
-    
-    // In ra cấu trúc của model để kiểm tra.
-    model.summary();
-
-    this.model = model;
+    this.model.summary();
     return this.model;
-  }
+}
 
   async trainModel(trainingData) {
     const { inputs, targets } = trainingData;
@@ -113,47 +110,7 @@ class TensorFlowService {
     return Array.from(output);
   }
 
-  prepareTarget(gdbString) {
-    // Khởi tạo mảng target với giá trị an toàn là 0.
-    const target = Array(OUTPUT_NODES).fill(0.0);
-
-    // Kiểm tra đầu vào gdbString một cách nghiêm ngặt.
-    if (!gdbString || typeof gdbString !== 'string' || gdbString.length < 5) {
-        console.error(`❌ Lỗi prepareTarget: gdbString không hợp lệ: ${gdbString}. Trả về mảng target toàn số 0.`);
-        return target; // Trả về mảng an toàn
-    }
-
-    try {
-        gdbString.slice(0, 5).split('').forEach((digitChar, index) => {
-            const digit = parseInt(digitChar, 10);
-
-            // Kiểm tra nghiêm ngặt xem digit có phải là một số từ 0-9 không.
-            if (Number.isInteger(digit) && digit >= 0 && digit <= 9) {
-                const targetIndex = index * 10 + digit;
-                
-                // Kiểm tra chỉ số cuối cùng để đảm bảo không ghi ra ngoài mảng
-                if (targetIndex >= 0 && targetIndex < OUTPUT_NODES) {
-                    target[targetIndex] = 1.0;
-                } else {
-                     console.warn(`⚠️ Cảnh báo prepareTarget: targetIndex không hợp lệ: ${targetIndex} cho chuỗi ${gdbString}`);
-                }
-            } else {
-                 console.warn(`⚠️ Cảnh báo prepareTarget: Ký tự không hợp lệ '${digitChar}' trong chuỗi ${gdbString}`);
-            }
-        });
-
-        // Thay vì dùng 0.01 và 0.99 (label smoothing), chúng ta hãy tạm thời dùng 0 và 1.
-        // Đây là cách đơn giản nhất và ít có khả năng gây ra lỗi số học nhất.
-        // Sau khi mô hình chạy ổn định, chúng ta có thể thêm lại label smoothing nếu cần.
-        return target;
-        
-    } catch (error) {
-        console.error(`❌ Lỗi nghiêm trọng trong prepareTarget với chuỗi ${gdbString}:`, error);
-        // Trong trường hợp có lỗi không lường trước, trả về một mảng an toàn.
-        return Array(OUTPUT_NODES).fill(0.0);
-    }
-}
-
+  
   async prepareTrainingData() {
     console.log('📝 Bắt đầu chuẩn bị dữ liệu huấn luyện...');
     const results = await Result.find().sort({ 'ngay': 1 }).lean();
@@ -287,33 +244,35 @@ class TensorFlowService {
   async runHistoricalTraining() {
     console.log('🔔 [TensorFlow Service] Bắt đầu Huấn luyện Lịch sử với kiến trúc Premium...');
     
-    const trainingData = await this.prepareTrainingData(); // Hàm này đã được cập nhật ở Bước 1
-    if (trainingData.length === 0) {
-      throw new Error('Không có dữ liệu training');
-    }
+    const trainingData = await this.prepareTrainingData(); 
+    if (trainingData.length === 0) throw new Error('Không có dữ liệu training');
 
+    // TÁCH INPUTS VÀ TARGETS
     const inputs = trainingData.map(d => d.inputSequence);
-    const targets = trainingData.map(d => d.targetArray);
+    
+    // Tạo 5 mảng target riêng biệt
+    const targets = {};
+    for (let i = 0; i < NUM_POSITIONS; i++) {
+        const headName = `pos${i + 1}`;
+        targets[headName] = trainingData.map(d => d.targets[i]);
+    }
+    
+    await this.buildModel(this.inputNodes); 
 
-    // Xây dựng model mới dựa trên số features thực tế
-    // this.inputNodes đã được cập nhật trong `prepareTrainingData`
-    this.buildModel(this.inputNodes); 
-
-    // COMPILE MODEL: Cấu hình quá trình học
+    // COMPILE VỚI 5 LOSSES VÀ 5 METRICS
     this.model.compile({
-      // ÁP DỤNG GRADIENT CLIPPING
-      optimizer: tf.train.adam({
-        learningRate: 0.00005, 
-        // Thêm clipvalue: giới hạn giá trị tuyệt đối của gradient ở mức 1.0
-        clipvalue: 1.0 
-      }),
-      loss: 'binaryCrossentropy'
+        optimizer: tf.train.adam({
+            learningRate: 0.0001, // Bắt đầu với learning rate thấp hơn nữa cho an toàn
+            clipvalue: 1.0
+        }),
+        loss: 'categoricalCrossentropy', // DÙNG CATEGORICAL_CROSSENTROPY
     });
+    
     console.log('✅ Model đã được compile. Bắt đầu quá trình training...');
 
     // Huấn luyện model
     await this.trainModel({ inputs, targets }); 
-    
+       
     // Lưu model sau khi huấn luyện xong
     await this.saveModel(); 
 
