@@ -147,8 +147,6 @@ class TensorFlowService {
         const allHistoryForSequence = days.slice(0, i + SEQUENCE_LENGTH).map(dayStr => grouped[dayStr] || []);
         const inputSequence = [];
         
-        let sequenceHasInvalidData = false; // Cờ để kiểm tra sequence hiện tại
-
         for(let j = 0; j < SEQUENCE_LENGTH; j++) {
             const currentDayForFeature = grouped[sequenceDaysStrings[j]] || [];
             const dateStr = sequenceDaysStrings[j];
@@ -162,27 +160,31 @@ class TensorFlowService {
             let finalFeatureVector = [...basicFeatures, ...advancedFeatures];
 
             // =================================================================
-            // ĐÂY LÀ "TẤM LÁ CHẮN" MỚI - BƯỚC KIỂM TRA VÀ LÀM SẠCH
+            // "TẤM LÁ CHẮN" PHIÊN BẢN CUỐI CÙNG - DỪNG LẠI KHI CÓ LỖI
             // =================================================================
-            const initialLength = finalFeatureVector.length;
-            finalFeatureVector = finalFeatureVector.map(val => {
-                // Kiểm tra xem giá trị có phải là null, undefined, hoặc NaN không.
-                if (val === null || val === undefined || isNaN(val)) {
-                    // Nếu không hợp lệ, ghi lại cảnh báo và thay thế bằng 0.
-                    // Việc này giúp chương trình không bị sập và ta có thể điều tra sau.
-                    if (!sequenceHasInvalidData) { // Chỉ log 1 lần cho mỗi sequence bị lỗi
-                        console.warn(`
-                            ⚠️ CẢNH BÁO: Phát hiện dữ liệu không hợp lệ trong chuỗi bắt đầu từ ngày ${sequenceDaysStrings[0]}.
-                            Ngày cụ thể có vấn đề: ${dateStr}.
-                            Giá trị không hợp lệ đã được thay thế bằng 0.
-                            Hãy kiểm tra lại logic trong các hàm feature engineering cho ngày này.
-                        `);
-                    }
-                    sequenceHasInvalidData = true;
-                    return 0; // Thay thế giá trị không hợp lệ bằng 0.
+            for(let k = 0; k < finalFeatureVector.length; k++) {
+                const val = finalFeatureVector[k];
+                // !isFinite() sẽ bắt được cả: null, undefined, NaN, Infinity, -Infinity
+                if (!isFinite(val)) {
+                    console.error(`
+                        ============================================================
+                        ❌ LỖI DỮ LIỆU NGHIÊM TRỌNG: DỪNG CHƯƠNG TRÌNH!
+                        ============================================================
+                        - Vị trí lỗi trong Feature Vector: Index ${k}
+                        - Giá trị không hợp lệ: ${val}
+                        - Ngày phát sinh lỗi: ${dateStr}
+                        - Chuỗi đang xử lý bắt đầu từ: ${sequenceDaysStrings[0]}
+                        
+                        HÃY KIỂM TRA LẠI HÀM FEATURE ENGINEERING TẠO RA FEATURE TẠI INDEX NÀY.
+                        
+                        Toàn bộ Feature Vector (346 features):
+                        ${JSON.stringify(finalFeatureVector, null, 2)}
+                        ============================================================
+                    `);
+                    // Dừng chương trình ngay lập tức để gỡ lỗi
+                    throw new Error(`Invalid data detected: ${val} at feature index ${k} for date ${dateStr}`);
                 }
-                return val;
-            });
+            }
             // =================================================================
 
             inputSequence.push(finalFeatureVector);
@@ -192,16 +194,6 @@ class TensorFlowService {
         if (targetGDB?.so && String(targetGDB.so).length >= 5) {
             const targetGDBString = String(targetGDB.so).padStart(5, '0');
             const targetArray = this.prepareTarget(targetGDBString);
-
-            // BƯỚC KIỂM TRA BỔ SUNG CHO MẢNG TARGETS
-            if (targetArray.some(val => val === null || val === undefined || isNaN(val))) {
-                console.error(`
-                    ❌ LỖI NGHIÊM TRỌNG: Mảng target cho ngày ${targetDayString} chứa giá trị không hợp lệ.
-                    Bỏ qua chuỗi này. Vui lòng kiểm tra hàm prepareTarget.
-                `);
-                continue; // Bỏ qua, không thêm chuỗi này vào trainingData
-            }
-
             trainingData.push({ inputSequence, targetArray });
         }
     }
@@ -210,7 +202,6 @@ class TensorFlowService {
         this.inputNodes = trainingData[0].inputSequence[0].length;
         console.log(`✅ Đã chuẩn bị ${trainingData.length} chuỗi dữ liệu huấn luyện hợp lệ với feature size: ${this.inputNodes}`);
     } else {
-        console.error("❌ LỖI NGHIÊM TRỌNG: Không thể tạo được bất kỳ chuỗi dữ liệu huấn luyện nào. Vui lòng kiểm tra lại toàn bộ dữ liệu nguồn và logic `prepareTrainingData`.");
         throw new Error("Không có dữ liệu training hợp lệ.");
     }
 
