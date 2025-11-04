@@ -146,42 +146,43 @@ class TensorFlowService {
             
             let finalFeatureVector = [...basicFeatures, ...advancedFeatures];
 
-            // =================================================================
-            // "TẤM LÁ CHẮN" PHIÊN BẢN CUỐI CÙNG - DỪNG LẠI KHI CÓ LỖI
-            // =================================================================
             for(let k = 0; k < finalFeatureVector.length; k++) {
                 const val = finalFeatureVector[k];
-                // !isFinite() sẽ bắt được cả: null, undefined, NaN, Infinity, -Infinity
                 if (!isFinite(val)) {
-                    console.error(`
-                        ============================================================
-                        ❌ LỖI DỮ LIỆU NGHIÊM TRỌNG: DỪNG CHƯƠNG TRÌNH!
-                        ============================================================
-                        - Vị trí lỗi trong Feature Vector: Index ${k}
-                        - Giá trị không hợp lệ: ${val}
-                        - Ngày phát sinh lỗi: ${dateStr}
-                        - Chuỗi đang xử lý bắt đầu từ: ${sequenceDaysStrings[0]}
-                        
-                        HÃY KIỂM TRA LẠI HÀM FEATURE ENGINEERING TẠO RA FEATURE TẠI INDEX NÀY.
-                        
-                        Toàn bộ Feature Vector (346 features):
-                        ${JSON.stringify(finalFeatureVector, null, 2)}
-                        ============================================================
-                    `);
-                    // Dừng chương trình ngay lập tức để gỡ lỗi
-                    throw new Error(`Invalid data detected: ${val} at feature index ${k} for date ${dateStr}`);
+                    console.error(`Lỗi dữ liệu nghiêm trọng tại feature index ${k} cho ngày ${dateStr}. Giá trị: ${val}`);
+                    throw new Error(`Invalid data detected: ${val}`);
                 }
             }
-            // =================================================================
 
             inputSequence.push(finalFeatureVector);
         }
 
         const targetGDB = (grouped[targetDayString] || []).find(r => r.giai === 'ĐB');
         if (targetGDB?.so && String(targetGDB.so).length >= 5) {
-            const targetGDBString = String(targetGDB.so).padStart(5, '0');
-            const targetArray = this.prepareTarget(targetGDBString);
-            trainingData.push({ inputSequence, targetArray });
+            const gdbString = String(targetGDB.so).padStart(5, '0');
+            
+            // =================================================================
+            // ĐÂY LÀ PHẦN SỬA LỖI - Tạo target trực tiếp tại đây
+            // =================================================================
+            const targets = [];
+            let isValidTarget = true;
+            for(let pos = 0; pos < NUM_POSITIONS; pos++) {
+                const digit = parseInt(gdbString[pos], 10);
+                if (Number.isInteger(digit) && digit >= 0 && digit <= 9) {
+                    const oneHotTarget = Array(NUM_CLASSES).fill(0);
+                    oneHotTarget[digit] = 1;
+                    targets.push(oneHotTarget);
+                } else {
+                    isValidTarget = false;
+                    break;
+                }
+            }
+
+            if (isValidTarget) {
+                 // targets bây giờ là mảng của 5 mảng one-hot
+                 trainingData.push({ inputSequence, targets });
+            }
+            // =================================================================
         }
     }
 
