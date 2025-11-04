@@ -228,8 +228,20 @@ class TensorFlowService {
     await this.buildModel(this.inputNodes); 
 
     this.model.compile({
-        optimizer: tf.train.adam({ learningRate: 0.0001, clipvalue: 1.0 }),
-        loss: 'categoricalCrossentropy',
+        optimizer: tf.train.adam({ 
+            learningRate: 0.0001, 
+            clipvalue: 1.0 
+        }),
+        // SỬA ĐỔI Ở ĐÂY:
+        // Thay vì một chuỗi đơn giản, chúng ta truyền một object
+        // để có thể cấu hình chi tiết cho hàm loss của mỗi output.
+        loss: {
+            'pos1': tf.losses.categoricalCrossentropy({labelSmoothing: 0.1}),
+            'pos2': tf.losses.categoricalCrossentropy({labelSmoothing: 0.1}),
+            'pos3': tf.losses.categoricalCrossentropy({labelSmoothing: 0.1}),
+            'pos4': tf.losses.categoricalCrossentropy({labelSmoothing: 0.1}),
+            'pos5': tf.losses.categoricalCrossentropy({labelSmoothing: 0.1})
+        },
     });
     
     console.log('✅ Model đã được compile. Bắt đầu quá trình training...');
