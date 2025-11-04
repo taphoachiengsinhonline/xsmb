@@ -228,12 +228,16 @@ class TensorFlowService {
 
     this.model.compile({
         optimizer: tf.train.adam({ learningRate: 0.0001, clipvalue: 1.0 }),
+        
+        // SỬA LỖI Ở ĐÂY:
+        // Cú pháp đúng là sử dụng CHUỖI KÝ TỰ 'softmaxCrossentropy'
+        // cho mỗi output trong object loss.
         loss: {
-            'pos1': tf.losses.softmaxCrossentropy,
-            'pos2': tf.losses.softmaxCrossentropy,
-            'pos3': tf.losses.softmaxCrossentropy,
-            'pos4': tf.losses.softmaxCrossentropy,
-            'pos5': tf.losses.softmaxCrossentropy
+            'pos1': 'softmaxCrossentropy',
+            'pos2': 'softmaxCrossentropy',
+            'pos3': 'softmaxCrossentropy',
+            'pos4': 'softmaxCrossentropy',
+            'pos5': 'softmaxCrossentropy'
         },
     });
     
