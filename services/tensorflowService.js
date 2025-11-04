@@ -26,49 +26,50 @@ class TensorFlowService {
 
     const model = tf.sequential();
 
+    // LỚP ĐẦU TIÊN: GIẢM ĐƠN GIẢN HÓA
     model.add(tf.layers.lstm({
-        units: 64,
-        returnSequences: true,
+        units: 32,  // GIẢM XUỐNG 32
+        returnSequences: false, // KHÔNG return sequences để giảm độ phức tạp
         inputShape: [SEQUENCE_LENGTH, inputNodes],
-        kernelRegularizer: tf.regularizers.l2({l2: 0.01}),
-        recurrentRegularizer: tf.regularizers.l2({l2: 0.01})
+        kernelInitializer: 'glorotNormal', // Initializer ổn định hơn
+        recurrentInitializer: 'orthogonal',
+        kernelRegularizer: tf.regularizers.l2({l2: 0.001}), // Giảm regularization
+        recurrentRegularizer: tf.regularizers.l2({l2: 0.001}),
+        // THÊM gradient clipping ở cấp độ layer
+        kernelConstraint: tf.constraints.maxNorm({maxValue: 1}),
+        recurrentConstraint: tf.constraints.maxNorm({maxValue: 1})
     }));
 
     model.add(tf.layers.batchNormalization());
-    model.add(tf.layers.dropout({rate: 0.3}));
-
-    model.add(tf.layers.lstm({
-        units: 32,
-        returnSequences: false,
-        kernelRegularizer: tf.regularizers.l2({l2: 0.01}),
-        recurrentRegularizer: tf.regularizers.l2({l2: 0.01})
-    }));
-
-    model.add(tf.layers.batchNormalization());
-    model.add(tf.layers.dropout({rate: 0.3}));
+    model.add(tf.layers.dropout({rate: 0.2})); // Giảm dropout
     
     model.add(tf.layers.dense({
-        units: 24,
+        units: 16,  // GIẢM XUỐNG 16
         activation: 'relu',
-        kernelRegularizer: tf.regularizers.l2({l2: 0.01})
+        kernelInitializer: 'glorotNormal',
+        kernelRegularizer: tf.regularizers.l2({l2: 0.001})
     }));
 
     model.add(tf.layers.dense({
         units: OUTPUT_NODES,
-        activation: 'sigmoid'
+        activation: 'sigmoid',
+        kernelInitializer: 'glorotNormal'
     }));
     
     model.summary();
 
+    // COMPILE VỚI CÀI ĐẶT AN TOÀN HƠN
+    const optimizer = tf.train.adam(0.0005); // Learning rate nhỏ hơn
+    
     model.compile({
-        optimizer: tf.train.adam(0.001),
-        loss: 'binaryCrossentropy',
-        metrics: []
-    });
+    optimizer: tf.train.adam(0.0005),
+    loss: 'meanSquaredError', // THỬ HÀM LOSS KHÁC
+    metrics: []
+});
 
     this.model = model;
     return this.model;
-  }
+}
 
   async trainModel(trainingData) {
     const { inputs, targets } = trainingData;
@@ -80,9 +81,19 @@ class TensorFlowService {
     const inputTensor = tf.tensor3d(inputs, [inputs.length, SEQUENCE_LENGTH, this.inputNodes]);
     const targetTensor = tf.tensor2d(targets, [targets.length, OUTPUT_NODES]);
 
+    // SỬ DỤNG OPTIMIZER VỚI GRADIENT CLIPPING
+    const optimizer = tf.train.adam(0.0005);
+    
+    // CẬP NHẬT OPTIMIZER CHO MODEL
+    this.model.compile({
+        optimizer: optimizer,
+        loss: 'binaryCrossentropy',
+        metrics: []
+    });
+
     const history = await this.model.fit(inputTensor, targetTensor, {
         epochs: EPOCHS,
-        batchSize: BATCH_SIZE,
+        batchSize: Math.min(BATCH_SIZE, inputs.length), // Đảm bảo batch size không quá lớn
         validationSplit: 0.1,
         callbacks: {
             onEpochEnd: (epoch, logs) => {
@@ -92,11 +103,7 @@ class TensorFlowService {
                     console.log('📊 Debug info:', {
                         epoch,
                         inputShape: inputTensor.shape,
-                        targetShape: targetTensor.shape,
-                        inputMin: inputTensor.min().dataSync()[0],
-                        inputMax: inputTensor.max().dataSync()[0],
-                        targetMin: targetTensor.min().dataSync()[0],
-                        targetMax: targetTensor.max().dataSync()[0]
+                        targetShape: targetTensor.shape
                     });
                 } else {
                     console.log(`Epoch ${epoch + 1}: Loss = ${logs.loss.toFixed(4)}`);
@@ -109,7 +116,7 @@ class TensorFlowService {
     targetTensor.dispose();
 
     return history;
-  }
+}
 
   async predict(inputSequence) {
     const inputTensor = tf.tensor3d([inputSequence], [1, SEQUENCE_LENGTH, this.inputNodes]);
@@ -134,7 +141,27 @@ class TensorFlowService {
   async prepareTrainingData() {
     console.log('📝 Bắt đầu chuẩn bị dữ liệu huấn luyện...');
     const results = await Result.find().sort({ 'ngay': 1 }).lean();
+    // KIỂM TRA TÍNH ỔN ĐỊNH CỦA FEATURES
+const featureStabilityCheck = (features) => {
+    const mean = features.reduce((a, b) => a + b, 0) / features.length;
+    const variance = features.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / features.length;
+    const std = Math.sqrt(variance);
     
+    console.log(`📊 Feature stability - Mean: ${mean.toFixed(4)}, Std: ${std.toFixed(4)}`);
+    
+    // Nếu std quá thấp, có thể features không đa dạng
+    if (std < 0.01) {
+        console.warn('⚠️ Feature std quá thấp, có thể cần đa dạng hóa features');
+    }
+};
+
+if (trainingData.length > 0) {
+    const sampleFeatures = trainingData[0].inputSequence.flat();
+    featureStabilityCheck(sampleFeatures);
+    
+    this.inputNodes = trainingData[0].inputSequence[0].length;
+    console.log(`✅ Đã chuẩn bị ${trainingData.length} chuỗi dữ liệu hợp lệ`);
+}
     console.log(`📊 Tổng số bản ghi trong DB: ${results.length}`);
     console.log('📋 5 bản ghi đầu tiên:', results.slice(0, 5).map(r => ({ ngay: r.ngay, giai: r.giai, so: r.so })));
 
