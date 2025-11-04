@@ -194,16 +194,21 @@ class TensorFlowService {
     
     await this.buildModel(this.inputNodes); 
 
+    // =================================================================
+    // SỬA LỖI DUY NHẤT TẠI ĐÂY
+    // =================================================================
     this.model.compile({
         optimizer: tf.train.adam({ learningRate: 0.0001, clipvalue: 1.0 }),
+        // Cung cấp một giá trị loss duy nhất, đúng như yêu cầu của mô hình Single-Head.
         loss: tf.losses.sigmoidCrossentropy,
     });
+    // =================================================================
     
     console.log('✅ Model đã được compile. Bắt đầu quá trình training...');
     await this.trainModel({ inputs, targets }); 
     await this.saveModel(); 
     return { message: `Huấn luyện Single-Head Model hoàn tất.`, sequences: trainingData.length, epochs: EPOCHS, featureSize: this.inputNodes, modelName: NN_MODEL_NAME };
-  }
+}
 
   async saveModel() {
     if (!this.model) throw new Error('No model to save');
