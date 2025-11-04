@@ -22,30 +22,21 @@ const INFLUENTIAL_PRIZES = ['G1', 'G2a', 'G2b', 'G3a', 'G3b', 'G3c', 'G7a', 'G7b
 const CL_PATTERNS_3_DIGIT = ['CCC','CCL','CLC','CLL','LCC','LCL','LLC','LLL']; // 8 mẫu
 
 class AdvancedFeatureEngineer {
-
-    /**
-     * Hàm chính, điều phối việc trích xuất tất cả các features nâng cao.
-     * @param {Array<Object>} currentDayResults - Mảng các object kết quả cho ngày đang được xử lý.
-     * @param {Array<Array<Object>>} previousDaysResults - Mảng 2 chiều chứa kết quả của các ngày trước đó. [[day_n-1_results], [day_n-2_results], ...].
-     * @returns {Array<number>} Một mảng phẳng (flat array) chứa toàn bộ các features đã được tính toán và chuẩn hóa.
-     */
     extractPremiumFeatures(currentDayResults, previousDaysResults) {
-        // Tạo một bản đồ (Map) để truy cập kết quả của một giải cụ thể nhanh hơn.
         const resultsMap = new Map(currentDayResults.map(r => [r.giai, r]));
 
-        // Gọi từng hàm con để trích xuất từng nhóm feature.
         const prizeCorrelationFeatures = this._extractPrizeCorrelationFeatures(resultsMap);
         const sumFrequencyFeatures = this._extractSumFrequencyFeatures(currentDayResults);
         const chanLePatterns = this._extractChanLePatterns(currentDayResults);
         const gapAnalysis = this._extractGapAnalysis(previousDaysResults);
 
-        // Kết hợp tất cả các mảng feature lại thành một mảng duy nhất.
-        return [
-            ...prizeCorrelationFeatures,
-            ...sumFrequencyFeatures,
-            ...chanLePatterns,
-            ...gapAnalysis,
-        ];
+        // THAY ĐỔI: Trả về một object thay vì một mảng
+        return {
+            prizeCorrelationFeatures,
+            sumFrequencyFeatures,
+            chanLePatterns,
+            gapAnalysis
+        };
     }
 
     // =================================================================
