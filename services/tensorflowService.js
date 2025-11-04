@@ -7,15 +7,23 @@ const FeatureEngineeringService = require('./featureEngineeringService');
 const { DateTime } = require('luxon');
 
 // =================================================================
-// HẰNG SỐ CẤU HÌNH CHO TOÀN BỘ FILE
+// HẰNG SỐ CẤU HÌNH
 // =================================================================
 const NN_MODEL_NAME = 'GDB_MULTIHEAD_TFJS_V1';
 const SEQUENCE_LENGTH = 7;
 const EPOCHS = 50;
 const BATCH_SIZE = 32;
-const NUM_POSITIONS = 5;    // Số lượng "đầu" output (5 vị trí)
-const NUM_CLASSES = 10;     // Số lượng lớp cho mỗi "đầu" (10 chữ số)
+const NUM_POSITIONS = 5;
+const NUM_CLASSES = 10;
+
 // =================================================================
+// HÀM TIỆN ÍCH
+// =================================================================
+const dateKey = (s) => {
+    if (!s || typeof s !== 'string') return '';
+    const parts = s.split('/');
+    return parts.length !== 3 ? s : `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
+};
 
 class TensorFlowService {
   constructor() {
@@ -88,33 +96,26 @@ class TensorFlowService {
 
   async predict(inputSequence) {
     const inputTensor = tf.tensor3d([inputSequence], [1, SEQUENCE_LENGTH, this.inputNodes]);
-    // SỬA LỖI TẠI ĐÂY: model.predict sẽ trả về một mảng các Tensors cho multi-head model
     const predictions = this.model.predict(inputTensor);
-    
     const outputs = [];
     for (const predTensor of predictions) {
         outputs.push(await predTensor.data());
     }
-
-    // Giải phóng bộ nhớ
     inputTensor.dispose();
     predictions.forEach(t => t.dispose());
-    
-    return outputs; // Trả về mảng của các mảng output
+    return outputs;
   }
 
   decodeOutput(outputs) {
     const prediction = {};
     for (let i = 0; i < NUM_POSITIONS; i++) {
         const headName = `pos${i + 1}`;
-        const positionOutput = outputs[i]; // Lấy output của head tương ứng
-
+        const positionOutput = outputs[i];
         const digitsWithValues = Array.from(positionOutput)
             .map((value, index) => ({ digit: String(index), value }))
             .sort((a, b) => b.value - a.value)
-            .slice(0, 5) // Lấy top 5 như cũ
+            .slice(0, 5)
             .map(item => item.digit);
-        
         prediction[headName] = digitsWithValues;
     }
     return prediction;
@@ -133,13 +134,13 @@ class TensorFlowService {
         grouped[r.ngay].push(r);
     });
 
-    const days = Object.keys(grouped).sort((a, b) => this.dateKey(a).localeCompare(dateKey(b)));
+    // SỬA LỖI Ở ĐÂY: Gọi `dateKey` thay vì `this.dateKey`
+    const days = Object.keys(grouped).sort((a, b) => dateKey(a).localeCompare(dateKey(b)));
     const trainingData = [];
 
     for (let i = 0; i < days.length - SEQUENCE_LENGTH; i++) {
         const sequenceDaysStrings = days.slice(i, i + SEQUENCE_LENGTH);
         const targetDayString = days[i + SEQUENCE_LENGTH];
-        
         const allHistoryForSequence = days.slice(0, i + SEQUENCE_LENGTH).map(dayStr => grouped[dayStr] || []);
         const inputSequence = [];
         
@@ -193,12 +194,6 @@ class TensorFlowService {
     return trainingData;
   }
 
-  dateKey(s) {
-    if (!s || typeof s !== 'string') return '';
-    const parts = s.split('/');
-    return parts.length !== 3 ? s : `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
-  }
-
   async saveModel() {
     if (!this.model) throw new Error('No model to save');
     const modelInfo = { modelName: NN_MODEL_NAME, inputNodes: this.inputNodes, savedAt: new Date().toISOString() };
@@ -243,9 +238,7 @@ class TensorFlowService {
     return { message: `Huấn luyện Multi-Head Model hoàn tất.`, sequences: trainingData.length, epochs: EPOCHS, featureSize: this.inputNodes, modelName: NN_MODEL_NAME };
   }
   
-  // SỬA LỖI TẠI ĐÂY: Các hàm runLearning và runNextDayPrediction cũng cần được cập nhật
   async runLearning() {
-    // Tạm thời vô hiệu hóa hàm này vì logic cần được viết lại cẩn thận cho multi-head.
     console.warn("⚠️ Chức năng 'Học hỏi' (runLearning) đang được tạm vô hiệu hóa cho kiến trúc Multi-Head.");
     return { message: 'Chức năng học hỏi chưa được triển khai cho model mới.' };
   }
@@ -262,17 +255,25 @@ class TensorFlowService {
 
     const grouped = {};
     results.forEach(r => { if (!grouped[r.ngay]) grouped[r.ngay] = []; grouped[r.ngay].push(r); });
-    const days = Object.keys(grouped).sort((a, b) => this.dateKey(a).localeCompare(dateKey(b)));
+    
+    // SỬA LỖI Ở ĐÂY: Gọi `dateKey` thay vì `this.dateKey`
+    const days = Object.keys(grouped).sort((a, b) => dateKey(a).localeCompare(dateKey(b)));
     const latestSequenceDays = days.slice(-SEQUENCE_LENGTH);
     console.log(`🔮 Sử dụng dữ liệu từ các ngày: ${latestSequenceDays.join(', ')} để dự đoán.`);
 
+    // Sửa lại logic lấy `allHistoryForSequence` để nó bao gồm tất cả các ngày
     const allHistoryForSequence = days.map(dayStr => grouped[dayStr] || []);
+
     const inputSequence = [];
     for(let j = 0; j < SEQUENCE_LENGTH; j++) {
         const currentDayForFeature = grouped[latestSequenceDays[j]] || [];
         const dateStr = latestSequenceDays[j];
-        const previousDaysForBasicFeatures = allHistoryForSequence.slice(0, allHistoryForSequence.length - SEQUENCE_LENGTH + j);
+        
+        // Sửa lại logic lấy `previousDays` cho đúng
+        const historyIndex = days.indexOf(dateStr);
+        const previousDaysForBasicFeatures = days.slice(0, historyIndex).map(d => grouped[d] || []);
         const previousDaysForAdvancedFeatures = previousDaysForBasicFeatures.slice().reverse();
+
         const basicFeatures = this.featureService.extractAllFeatures(currentDayForFeature, previousDaysForBasicFeatures, dateStr);
         const advancedFeatures = this.advancedFeatureEngineer.extractPremiumFeatures(currentDayForFeature, previousDaysForAdvancedFeatures);
         let finalFeatureVector = [...basicFeatures, ...advancedFeatures];
