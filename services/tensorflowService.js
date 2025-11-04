@@ -10,7 +10,7 @@ const NN_MODEL_NAME = 'GDB_LSTM_TFJS_PREMIUM_V1';
 const SEQUENCE_LENGTH = 7;
 const OUTPUT_NODES = 50;
 const EPOCHS = 100;
-const BATCH_SIZE = 64;
+const BATCH_SIZE = 128;
 
 class TensorFlowService {
   constructor() {
