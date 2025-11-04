@@ -6,18 +6,14 @@ const AdvancedFeatureEngineer = require('./advancedFeatureService');
 const FeatureEngineeringService = require('./featureEngineeringService');
 const { DateTime } = require('luxon');
 
-// =================================================================
-// HẰNG SỐ CẤU HÌNH
-// =================================================================
+// Hằng số cấu hình
 const NN_MODEL_NAME = 'GDB_SINGLEHEAD_STABLE_V1';
 const SEQUENCE_LENGTH = 7;
 const EPOCHS = 50;
 const BATCH_SIZE = 32;
 const OUTPUT_NODES = 50;
 
-// =================================================================
-// HÀM TIỆN ÍCH
-// =================================================================
+// Hàm tiện ích
 const dateKey = (s) => {
     if (!s || typeof s !== 'string') return '';
     const parts = s.split('/');
@@ -252,8 +248,7 @@ class TensorFlowService {
             const actualResult = (grouped[targetDayStr] || []).find(r => r.giai === 'ĐB');
             if (actualResult?.so && String(actualResult.so).length >= 5) {
                 const sequenceDays = days.slice(targetDayIndex - SEQUENCE_LENGTH, targetDayIndex);
-                const allHistoryForSequence = days.slice(0, targetDayIndex).map(dayStr => grouped[dayStr] || []);
-
+                
                 const inputSequence = [];
                 for(let j=0; j < sequenceDays.length; j++) {
                     const dateStr = sequenceDays[j];
@@ -282,7 +277,19 @@ class TensorFlowService {
     if (trainingData.length > 0) {
         const inputs = trainingData.map(d => d.inputSequence);
         const targets = trainingData.map(d => d.targetArray);
-        await this.trainModel({ inputs, targets }); // Dùng lại hàm trainModel
+        
+        // Huấn luyện thêm với số Epoch ít hơn
+        const tempFitConfig = {
+            epochs: 5,
+            batchSize: BATCH_SIZE,
+            // Không có validationSplit khi học thêm
+        };
+        const inputTensor = tf.tensor3d(inputs, [inputs.length, SEQUENCE_LENGTH, this.inputNodes]);
+        const targetTensor = tf.tensor2d(targets, [targets.length, OUTPUT_NODES]);
+        await this.model.fit(inputTensor, targetTensor, tempFitConfig);
+        inputTensor.dispose();
+        targetTensor.dispose();
+
         await this.saveModel();
         console.log(`✅ AI đã học hỏi từ ${trainingData.length} kết quả mới.`);
     }
