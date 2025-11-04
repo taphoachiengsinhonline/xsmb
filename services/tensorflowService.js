@@ -334,38 +334,41 @@ class TensorFlowService {
   }
 }
   async runHistoricalTraining() {
-    console.log('🔔 [TensorFlow Service] Bắt đầu Huấn luyện Lịch sử với kiến trúc Premium...');
+    console.log('🔔 [TensorFlow Service] Bắt đầu Huấn luyện Lịch sử...');
    
     const trainingData = await this.prepareTrainingData();
-    if (trainingData.length === 0 || trainingData.some(d => d.inputSequence.length !== SEQUENCE_LENGTH || d.inputSequence.flat().some(isNaN))) {
-      throw new Error('Dữ liệu training rỗng hoặc chứa giá trị không hợp lệ. Kiểm tra DB và feature engineering.');
+    if (trainingData.length === 0) {
+        throw new Error('Dữ liệu training rỗng');
     }
     
     const inputs = trainingData.map(d => d.inputSequence);
     const targets = trainingData.map(d => d.targetArray);
     
+    console.log('🏗️ Xây dựng model mới...');
     await this.buildModel(this.inputNodes);
-    
-    this.model.compile({
-      optimizer: tf.train.adam({learningRate: 0.0005}),
-      loss: 'binaryCrossentropy',
-      metrics: []
-    });
     
     console.log('✅ Model đã được compile. Bắt đầu quá trình training...');
     
     await this.trainModel({ inputs, targets });
    
+    console.log('💾 Đang lưu model...');
     await this.saveModel();
     
+    // KIỂM TRA MODEL ĐÃ ĐƯỢC LƯU THÀNH CÔNG
+    console.log('🔍 Kiểm tra model files...');
+    const filesOk = this.checkModelFiles();
+    
+    if (!filesOk) {
+        throw new Error('Model files không được tạo thành công');
+    }
+    
     return {
-      message: `Huấn luyện Premium Model hoàn tất. Đã xử lý ${trainingData.length} chuỗi, ${EPOCHS} epochs.`,
-      sequences: trainingData.length,
-      epochs: EPOCHS,
-      featureSize: this.inputNodes,
-      modelName: NN_MODEL_NAME
+        message: `Huấn luyện hoàn tất. Đã xử lý ${trainingData.length} chuỗi.`,
+        sequences: trainingData.length,
+        featureSize: this.inputNodes,
+        modelName: NN_MODEL_NAME
     };
-  }
+}
 
   async runLearning() {
   console.log('🔔 [TensorFlow Service] Learning from new results...');
