@@ -114,15 +114,45 @@ class TensorFlowService {
   }
 
   prepareTarget(gdbString) {
-    const target = Array(OUTPUT_NODES).fill(0.01);
-    gdbString.split('').forEach((digit, index) => {
-      const d = parseInt(digit);
-      if (!isNaN(d) && index < 5) {
-        target[index * 10 + d] = 0.99;
-      }
-    });
-    return target;
-  }
+    // Khởi tạo mảng target với giá trị an toàn là 0.
+    const target = Array(OUTPUT_NODES).fill(0.0);
+
+    // Kiểm tra đầu vào gdbString một cách nghiêm ngặt.
+    if (!gdbString || typeof gdbString !== 'string' || gdbString.length < 5) {
+        console.error(`❌ Lỗi prepareTarget: gdbString không hợp lệ: ${gdbString}. Trả về mảng target toàn số 0.`);
+        return target; // Trả về mảng an toàn
+    }
+
+    try {
+        gdbString.slice(0, 5).split('').forEach((digitChar, index) => {
+            const digit = parseInt(digitChar, 10);
+
+            // Kiểm tra nghiêm ngặt xem digit có phải là một số từ 0-9 không.
+            if (Number.isInteger(digit) && digit >= 0 && digit <= 9) {
+                const targetIndex = index * 10 + digit;
+                
+                // Kiểm tra chỉ số cuối cùng để đảm bảo không ghi ra ngoài mảng
+                if (targetIndex >= 0 && targetIndex < OUTPUT_NODES) {
+                    target[targetIndex] = 1.0;
+                } else {
+                     console.warn(`⚠️ Cảnh báo prepareTarget: targetIndex không hợp lệ: ${targetIndex} cho chuỗi ${gdbString}`);
+                }
+            } else {
+                 console.warn(`⚠️ Cảnh báo prepareTarget: Ký tự không hợp lệ '${digitChar}' trong chuỗi ${gdbString}`);
+            }
+        });
+
+        // Thay vì dùng 0.01 và 0.99 (label smoothing), chúng ta hãy tạm thời dùng 0 và 1.
+        // Đây là cách đơn giản nhất và ít có khả năng gây ra lỗi số học nhất.
+        // Sau khi mô hình chạy ổn định, chúng ta có thể thêm lại label smoothing nếu cần.
+        return target;
+        
+    } catch (error) {
+        console.error(`❌ Lỗi nghiêm trọng trong prepareTarget với chuỗi ${gdbString}:`, error);
+        // Trong trường hợp có lỗi không lường trước, trả về một mảng an toàn.
+        return Array(OUTPUT_NODES).fill(0.0);
+    }
+}
 
   async prepareTrainingData() {
     console.log('📝 Bắt đầu chuẩn bị dữ liệu huấn luyện...');
