@@ -82,7 +82,9 @@ class TensorFlowService {
 
   async trainModel(trainingData) {
     const { inputs, targets } = trainingData;
-
+    if (inputs.length === 0) {
+    throw new Error('Inputs rỗng - Không thể huấn luyện với data empty.');
+}
     const inputTensor = tf.tensor3d(inputs, [inputs.length, SEQUENCE_LENGTH, this.inputNodes]);
     const targetTensor = tf.tensor2d(targets, [targets.length, OUTPUT_NODES]);
 
@@ -171,7 +173,10 @@ class TensorFlowService {
             const initialLength = finalFeatureVector.length;
             if (finalFeatureVector.some(isNaN)) {
               console.error('NaN detected in features for day:', dateStr);
-            finalFeatureVector = finalFeatureVector.map(v => isNaN(v) ? 0 : v); // Thay toàn bộ
+            finalFeatureVector = finalFeatureVector.map(val => isNaN(val) || val === null ? 0 : val); // Thay null/NaN
+if (finalFeatureVector.length !== EXPECTED_FEATURE_SIZE) { // Ví dụ: 346
+    console.warn(`Feature vector sai size cho ngày ${dateStr}: ${finalFeatureVector.length} thay vì 346`);
+}
             }
             
             // =================================================================
@@ -255,12 +260,13 @@ class TensorFlowService {
   // CẬP NHẬT HÀM runHistoricalTraining ĐỂ SỬ DỤNG MODEL MỚI
   // =================================================================
   async runHistoricalTraining() {
+    
     console.log('🔔 [TensorFlow Service] Bắt đầu Huấn luyện Lịch sử với kiến trúc Premium...');
     
     const trainingData = await this.prepareTrainingData(); // Hàm này đã được cập nhật ở Bước 1
-    if (trainingData.length === 0) {
-      throw new Error('Không có dữ liệu training');
-    }
+    if (trainingData.length === 0 || trainingData.some(d => d.inputSequence.length !== SEQUENCE_LENGTH || d.inputSequence.flat().some(isNaN))) {
+    throw new Error('Dữ liệu training rỗng hoặc chứa giá trị không hợp lệ. Kiểm tra DB và feature engineering.');
+}
 
     const inputs = trainingData.map(d => d.inputSequence);
     const targets = trainingData.map(d => d.targetArray);
