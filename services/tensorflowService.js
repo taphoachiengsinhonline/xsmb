@@ -8,11 +8,12 @@ const FeatureEngineeringService = require('./featureEngineeringService');
 const { DateTime } = require('luxon');
 
 
-const NN_MODEL_NAME = 'GDB_MULTIHEAD_TFJS_V1'; // Đổi tên model để lưu trạng thái mới
+const NN_MODEL_NAME = 'GDB_MULTIHEAD_TFJS_V1';
 const SEQUENCE_LENGTH = 7;
-const OUTPUT_NODES = 50;
-const EPOCHS = 50; // Có thể tăng lên 70-100 với model phức tạp hơn
+const EPOCHS = 50;
 const BATCH_SIZE = 32;
+const NUM_POSITIONS = 5;    // Số lượng "đầu" output (5 vị trí)
+const NUM_CLASSES = 10;     // Số lượng lớp cho mỗi "đầu" (10 chữ số)
 
 class TensorFlowService {
   constructor() {
