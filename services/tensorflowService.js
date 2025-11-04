@@ -123,7 +123,7 @@ class TensorFlowService {
                 ...basicFeatures, 
                 ...advancedFeatures.prizeCorrelationFeatures,
                 ...advancedFeatures.sumFrequencyFeatures,
-                // ...advancedFeatures.chanLePatterns,
+                ...advancedFeatures.chanLePatterns,
                 // ...advancedFeatures.gapAnalysis
             ];
 
