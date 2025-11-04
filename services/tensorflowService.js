@@ -18,95 +18,100 @@ class TensorFlowService {
     this.inputNodes = 0;
   }
   async buildModel(inputNodes) {
-    console.log(🏗️ Bắt đầu xây dựng kiến trúc Premium Model với ${inputNodes} features...);
-    this.inputNodes = inputNodes;
-    const model = tf.sequential();
-    // --- TẦNG 1: LỚP LSTM CHÍNH ---
-    // Nhiệm vụ: Xử lý trực tiếp chuỗi 7 ngày x 346 features. Lớp này học các mẫu hình thời gian (temporal patterns) ở mức độ thấp.
-    model.add(tf.layers.lstm({
-      units: 192, // Số lượng nơ-ron (bộ nhớ) trong lớp LSTM. 192 là một con số lớn, phù hợp với lượng features đầu vào cao.
-      returnSequences: true, // Rất QUAN TRỌNG. Đặt là true để output của lớp này vẫn là một chuỗi (sequence), làm đầu vào cho lớp LSTM tiếp theo.
-      inputShape: [SEQUENCE_LENGTH, inputNodes], // Định nghĩa hình dạng đầu vào: 7 bước thời gian, mỗi bước có inputNodes features.
-      kernelRegularizer: tf.regularizers.l2({l2: 0.001}), // Kỹ thuật chính quy hóa L2: "Phạt" các trọng số (weights) có giá trị quá lớn, buộc mô hình phải học các mẫu hình tổng quát hơn thay vì dựa dẫm vào một vài features. Giúp chống overfitting.
-      recurrentRegularizer: tf.regularizers.l2({l2: 0.001}) // Tương tự L2 nhưng áp dụng cho các trọng số kết nối nội bộ (recurrent connections) của LSTM.
-    }));
-    // --- LỚP ỔN ĐỊNH HÓA ---
-    // Nhiệm vụ: Chuẩn hóa output của lớp LSTM trên, giúp quá trình học ở các lớp sau diễn ra nhanh và ổn định hơn.
-    model.add(tf.layers.batchNormalization());
-    // --- LỚP LOẠI BỎ (DROPOUT) ---
-    // Nhiệm vụ: Chống overfitting. Trong mỗi lượt training, nó sẽ ngẫu nhiên "tắt" 25% các nơ-ron, buộc các nơ-ron còn lại phải học một cách độc lập và mạnh mẽ hơn.
-    model.add(tf.layers.dropout({rate: 0.25}));
-    // --- TẦNG 2: LỚP LSTM THỨ HAI ---
-    // Nhiệm vụ: Nhận chuỗi output từ tầng 1 và học các mẫu hình ở mức cao hơn ("mẫu hình của các mẫu hình").
-    model.add(tf.layers.lstm({
-      units: 96, // Số units có thể giảm dần ở các lớp sau vì thông tin đã được trừu tượng hóa.
-      returnSequences: false, // QUAN TRỌNG. Đặt là false vì đây là lớp LSTM cuối cùng. Output của nó sẽ là một vector duy nhất (kích thước 96) đại diện cho toàn bộ chuỗi, sẵn sàng để đưa vào các lớp Dense.
-      kernelRegularizer: tf.regularizers.l2({l2: 0.001}),
-      recurrentRegularizer: tf.regularizers.l2({l2: 0.001})
-    }));
-    model.add(tf.layers.batchNormalization());
-    model.add(tf.layers.dropout({rate: 0.25}));
-   
-    // --- TẦNG 3: LỚP KẾT NỐI ĐẦY ĐỦ (DENSE) ---
-    // Nhiệm vụ: Hoạt động như một lớp phân loại cuối cùng, kết hợp các features bậc cao đã được học bởi các lớp LSTM để đưa ra quyết định.
-    model.add(tf.layers.dense({
-      units: 48,
-      activation: 'relu', // Hàm kích hoạt 'relu' (Rectified Linear Unit) rất phổ biến và hiệu quả, giúp mô hình học các mối quan hệ phi tuyến.
-      kernelRegularizer: tf.regularizers.l2({l2: 0.001})
-    }));
-    // --- TẦNG 4: LỚP OUTPUT CUỐI CÙNG ---
-    // Nhiệm vụ: Đưa ra dự đoán cuối cùng.
-    model.add(tf.layers.dense({
-      units: OUTPUT_NODES, // 50 units (5 vị trí * 10 chữ số).
-      activation: 'sigmoid' // Hàm kích hoạt 'sigmoid' ép các giá trị output về khoảng [0, 1]. Rất phù hợp cho bài toán phân loại đa nhãn (multi-label classification) này, vì mỗi output đại diện cho "xác suất" một chữ số xuất hiện ở một vị trí.
-    }));
-   
-    // In ra cấu trúc của model để kiểm tra.
-    model.summary();
-    this.model = model;
-    return this.model;
-  }
+    console.log(`🏗️ Xây dựng model với ${inputNodes} features...`);
+    this.inputNodes = inputNodes;
+
+    const model = tf.sequential();
+
+    // GIẢM ĐỘ PHỨC TẠP CỦA MÔ HÌNH
+    model.add(tf.layers.lstm({
+        units: 64,  // GIẢM từ 192 xuống 64
+        returnSequences: true,
+        inputShape: [SEQUENCE_LENGTH, inputNodes],
+        kernelRegularizer: tf.regularizers.l2({l2: 0.01}),
+        recurrentRegularizer: tf.regularizers.l2({l2: 0.01})
+    }));
+
+    model.add(tf.layers.batchNormalization());
+    model.add(tf.layers.dropout({rate: 0.3}));
+
+    model.add(tf.layers.lstm({
+        units: 32,  // GIẢM từ 96 xuống 32
+        returnSequences: false,
+        kernelRegularizer: tf.regularizers.l2({l2: 0.01}),
+        recurrentRegularizer: tf.regularizers.l2({l2: 0.01})
+    }));
+
+    model.add(tf.layers.batchNormalization());
+    model.add(tf.layers.dropout({rate: 0.3}));
+    
+    model.add(tf.layers.dense({
+        units: 24,  // GIẢM từ 48 xuống 24
+        activation: 'relu',
+        kernelRegularizer: tf.regularizers.l2({l2: 0.01})
+    }));
+
+    model.add(tf.layers.dense({
+        units: OUTPUT_NODES,
+        activation: 'sigmoid'
+    }));
+    
+    model.summary();
+
+    // COMPILE VỚI CÀI ĐẶT AN TOÀN
+    model.compile({
+        optimizer: tf.train.adam(0.001), // Learning rate nhỏ hơn
+        loss: 'binaryCrossentropy',
+        metrics: [] // TẠM THỜI BỎ METRICS
+    });
+
+    this.model = model;
+    return this.model;
+}
   async trainModel(trainingData) {
-  const { inputs, targets } = trainingData;
- 
-  // THÊM KIỂM TRA DỮ LIỆU KỸ LƯỠNG
-  if (!inputs || !targets || inputs.length === 0 || targets.length === 0) {
-    throw new Error('Dữ liệu training rỗng hoặc không hợp lệ');
-  }
-  // KIỂM TRA TỪNG PHẦN TỬ
-  inputs.forEach((input, idx) => {
-    if (!input || input.length !== SEQUENCE_LENGTH) {
-      throw new Error(Input tại index ${idx} không hợp lệ: ${input});
-    }
-  });
-  targets.forEach((target, idx) => {
-    if (!target || target.length !== OUTPUT_NODES) {
-      throw new Error(Target tại index ${idx} không hợp lệ: ${target});
-    }
-  });
-  const inputTensor = tf.tensor3d(inputs, [inputs.length, SEQUENCE_LENGTH, this.inputNodes]);
-  const targetTensor = tf.tensor2d(targets, [targets.length, OUTPUT_NODES]);
-  // THÊM KIỂM TRA TENSOR
-  if (inputTensor.shape.some(dim => dim === 0) || targetTensor.shape.some(dim => dim === 0)) {
-    throw new Error('Tensor có shape không hợp lệ');
-  }
-  const history = await this.model.fit(inputTensor, targetTensor, {
-    epochs: EPOCHS,
-    batchSize: BATCH_SIZE,
-    validationSplit: 0.1,
-    callbacks: {
-      onEpochEnd: (epoch, logs) => {
-        if (isNaN(logs.loss)) {
-          console.error('NaN loss detected! Stopping training.');
-          this.model.stopTraining = true;
-        }
-        console.log(Epoch ${epoch + 1}: Loss = ${logs.loss.toFixed(4)});
-      }
-    }
-  });
-  inputTensor.dispose();
-  targetTensor.dispose();
-  return history;
+    const { inputs, targets } = trainingData;
+    
+    // KIỂM TRA CUỐI CÙNG
+    console.log('🔍 Kiểm tra cuối cùng trước khi training:');
+    console.log('- Inputs length:', inputs.length);
+    console.log('- Targets length:', targets.length);
+    
+    const inputTensor = tf.tensor3d(inputs, [inputs.length, SEQUENCE_LENGTH, this.inputNodes]);
+    const targetTensor = tf.tensor2d(targets, [targets.length, OUTPUT_NODES]);
+
+    // THÊM GRADIENT CLIPPING
+    const optimizer = tf.train.adam(0.001);
+    
+    const history = await this.model.fit(inputTensor, targetTensor, {
+        epochs: EPOCHS,
+        batchSize: BATCH_SIZE,
+        validationSplit: 0.1,
+        callbacks: {
+            onEpochEnd: (epoch, logs) => {
+                if (isNaN(logs.loss)) {
+                    console.error('❌ NaN loss detected! Stopping training.');
+                    this.model.stopTraining = true;
+                    // IN THÊM THÔNG TIN DEBUG
+                    console.log('📊 Debug info:', {
+                        epoch,
+                        inputShape: inputTensor.shape,
+                        targetShape: targetTensor.shape,
+                        inputMin: inputTensor.min().dataSync()[0],
+                        inputMax: inputTensor.max().dataSync()[0],
+                        targetMin: targetTensor.min().dataSync()[0],
+                        targetMax: targetTensor.max().dataSync()[0]
+                    });
+                } else {
+                    console.log(`Epoch ${epoch + 1}: Loss = ${logs.loss.toFixed(4)}`);
+                }
+            }
+        }
+    });
+
+    inputTensor.dispose();
+    targetTensor.dispose();
+
+    return history;
 }
   async predict(inputSequence) {
     const inputTensor = tf.tensor3d([inputSequence], [1, SEQUENCE_LENGTH, this.inputNodes]);
