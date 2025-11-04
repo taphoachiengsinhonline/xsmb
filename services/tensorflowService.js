@@ -4,6 +4,7 @@ const NNPrediction = require('../models/NNPrediction');
 const NNState = require('../models/NNState');
 const AdvancedFeatureEngineer = require('./advancedFeatureService');
 const FeatureEngineeringService = require('./featureEngineeringService');
+const AdvancedTraining = require('./advancedTrainingService');
 const { DateTime } = require('luxon');
 
 const NN_MODEL_NAME = 'GDB_LSTM_TFJS_PREMIUM_V1';
@@ -17,8 +18,78 @@ class TensorFlowService {
     this.model = null;
     this.featureService = new FeatureEngineeringService();
     this.advancedFeatureEngineer = new AdvancedFeatureEngineer();
+    this.advancedTrainer = new AdvancedTraining();
     this.inputNodes = 0;
   }
+  async runAdvancedTraining() {
+        console.log('🚀 Bắt đầu Advanced Training...');
+        
+        const trainingData = await this.prepareTrainingData();
+        
+        // Sử dụng ensemble learning + data augmentation
+        const result = await this.advancedTrainer.trainWithAdvancedStrategies(
+            trainingData, 
+            ['ensemble', 'augmentation']
+        );
+        
+        if (result.type === 'ensemble') {
+            this.ensembleModels = result.models;
+            console.log(`✅ Đã train ${result.models.length} models cho ensemble`);
+        } else {
+            this.model = result.model;
+            await this.saveModel();
+        }
+        
+        return {
+            message: 'Advanced training hoàn tất',
+            strategy: 'ensemble + augmentation',
+            modelsCount: result.models?.length || 1
+        };
+    }
+
+    async advancedPredict(inputSequence) {
+        if (this.ensembleModels && this.ensembleModels.length > 0) {
+            return await this.advancedTrainer.ensemblePredict(inputSequence);
+        } else {
+            return await this.predict(inputSequence);
+        }
+    }
+}
+  
+  async runAdvancedTraining() {
+        console.log('🚀 Bắt đầu Advanced Training...');
+        
+        const trainingData = await this.prepareTrainingData();
+        
+        // Sử dụng ensemble learning + data augmentation
+        const result = await this.advancedTrainer.trainWithAdvancedStrategies(
+            trainingData, 
+            ['ensemble', 'augmentation']
+        );
+        
+        if (result.type === 'ensemble') {
+            this.ensembleModels = result.models;
+            console.log(`✅ Đã train ${result.models.length} models cho ensemble`);
+        } else {
+            this.model = result.model;
+            await this.saveModel();
+        }
+        
+        return {
+            message: 'Advanced training hoàn tất',
+            strategy: 'ensemble + augmentation',
+            modelsCount: result.models?.length || 1
+        };
+    }
+
+    async advancedPredict(inputSequence) {
+        if (this.ensembleModels && this.ensembleModels.length > 0) {
+            return await this.advancedTrainer.ensemblePredict(inputSequence);
+        } else {
+            return await this.predict(inputSequence);
+        }
+    }
+}
 
   async buildModel(inputNodes) {
     console.log(`🏗️ Xây dựng model với ${inputNodes} features...`);
