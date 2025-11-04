@@ -141,27 +141,7 @@ class TensorFlowService {
   async prepareTrainingData() {
     console.log('📝 Bắt đầu chuẩn bị dữ liệu huấn luyện...');
     const results = await Result.find().sort({ 'ngay': 1 }).lean();
-    // KIỂM TRA TÍNH ỔN ĐỊNH CỦA FEATURES
-const featureStabilityCheck = (features) => {
-    const mean = features.reduce((a, b) => a + b, 0) / features.length;
-    const variance = features.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / features.length;
-    const std = Math.sqrt(variance);
     
-    console.log(`📊 Feature stability - Mean: ${mean.toFixed(4)}, Std: ${std.toFixed(4)}`);
-    
-    // Nếu std quá thấp, có thể features không đa dạng
-    if (std < 0.01) {
-        console.warn('⚠️ Feature std quá thấp, có thể cần đa dạng hóa features');
-    }
-};
-
-if (trainingData.length > 0) {
-    const sampleFeatures = trainingData[0].inputSequence.flat();
-    featureStabilityCheck(sampleFeatures);
-    
-    this.inputNodes = trainingData[0].inputSequence[0].length;
-    console.log(`✅ Đã chuẩn bị ${trainingData.length} chuỗi dữ liệu hợp lệ`);
-}
     console.log(`📊 Tổng số bản ghi trong DB: ${results.length}`);
     console.log('📋 5 bản ghi đầu tiên:', results.slice(0, 5).map(r => ({ ngay: r.ngay, giai: r.giai, so: r.so })));
 
@@ -176,7 +156,7 @@ if (trainingData.length > 0) {
     });
 
     const days = Object.keys(grouped).sort((a, b) => this.dateKey(a).localeCompare(this.dateKey(b)));
-    const trainingData = [];
+    const trainingData = []; // BIẾN trainingData ĐÃ ĐƯỢC KHAI BÁO Ở ĐÂY
 
     console.log(`📅 Tổng số ngày có dữ liệu: ${days.length}`);
     console.log('📅 5 ngày đầu:', days.slice(0, 5));
@@ -244,73 +224,33 @@ if (trainingData.length > 0) {
       }
     }
 
-    // DEBUG CHI TIẾT
-if (trainingData.length > 0) {
-  console.log('🔍 DEBUG - Kiểm tra dữ liệu training:');
-  console.log(`- Số chuỗi: ${trainingData.length}`);
-  console.log(`- Kích thước input sequence: ${trainingData[0].inputSequence.length}`);
-  console.log(`- Kích thước feature vector: ${trainingData[0].inputSequence[0].length}`);
-  
-  // THAY THẾ flatMap BẰNG VÒNG LẶP THÔNG THƯỜNG ĐỂ TRÁNH TRÀN STACK
-  let allFeatures = [];
-  let allTargets = [];
-  
-  // Sử dụng vòng lặp thay vì flatMap để tránh tràn stack
-  for (let i = 0; i < trainingData.length; i++) {
-    const data = trainingData[i];
-    
-    // Xử lý features
-    for (let j = 0; j < data.inputSequence.length; j++) {
-      allFeatures = allFeatures.concat(data.inputSequence[j]);
+    // DEBUG ĐƠN GIẢN - ĐẢM BẢO KHÔNG CÓ LỖI SCOPE
+    if (trainingData.length > 0) {
+      console.log('🔍 DEBUG - Kiểm tra dữ liệu training:');
+      console.log(`- Số chuỗi: ${trainingData.length}`);
+      console.log(`- Kích thước input sequence: ${trainingData[0].inputSequence.length}`);
+      console.log(`- Kích thước feature vector: ${trainingData[0].inputSequence[0].length}`);
+      
+      // Kiểm tra mẫu đơn giản
+      const sampleFeatures = trainingData[0].inputSequence.flat();
+      const sampleTargets = trainingData[0].targetArray;
+      
+      console.log(`- Sample features - Min: ${Math.min(...sampleFeatures)}, Max: ${Math.max(...sampleFeatures)}`);
+      console.log(`- Sample targets - Min: ${Math.min(...sampleTargets)}, Max: ${Math.max(...sampleTargets)}`);
+      
+      const nanSampleFeatures = sampleFeatures.filter(v => isNaN(v)).length;
+      const nanSampleTargets = sampleTargets.filter(v => isNaN(v)).length;
+      console.log(`- NaN trong sample features: ${nanSampleFeatures}`);
+      console.log(`- NaN trong sample targets: ${nanSampleTargets}`);
+      
+      this.inputNodes = trainingData[0].inputSequence[0].length;
+      console.log(`✅ Đã chuẩn bị ${trainingData.length} chuỗi dữ liệu hợp lệ`);
+    } else {
+      throw new Error("❌ Không có dữ liệu training hợp lệ sau khi kiểm tra.");
     }
-    
-    // Xử lý targets
-    allTargets = allTargets.concat(data.targetArray);
-  }
-  
-  // Kiểm tra min/max an toàn hơn
-  let featuresMin = Infinity, featuresMax = -Infinity;
-  let targetsMin = Infinity, targetsMax = -Infinity;
-  
-  for (let i = 0; i < allFeatures.length; i++) {
-    const val = allFeatures[i];
-    if (val < featuresMin) featuresMin = val;
-    if (val > featuresMax) featuresMax = val;
-  }
-  
-  for (let i = 0; i < allTargets.length; i++) {
-    const val = allTargets[i];
-    if (val < targetsMin) targetsMin = val;
-    if (val > targetsMax) targetsMax = val;
-  }
-  
-  console.log(`- Features - Min: ${featuresMin}, Max: ${featuresMax}`);
-  console.log(`- Targets - Min: ${targetsMin}, Max: ${targetsMax}`);
-  
-  // Kiểm tra NaN an toàn hơn
-  let nanFeaturesCount = 0;
-  let nanTargetsCount = 0;
-  
-  for (let i = 0; i < allFeatures.length; i++) {
-    if (isNaN(allFeatures[i])) nanFeaturesCount++;
-  }
-  
-  for (let i = 0; i < allTargets.length; i++) {
-    if (isNaN(allTargets[i])) nanTargetsCount++;
-  }
-  
-  console.log(`- NaN trong features: ${nanFeaturesCount}`);
-  console.log(`- NaN trong targets: ${nanTargetsCount}`);
-  
-  this.inputNodes = trainingData[0].inputSequence[0].length;
-  console.log(`✅ Đã chuẩn bị ${trainingData.length} chuỗi dữ liệu hợp lệ`);
-} else {
-  throw new Error("❌ Không có dữ liệu training hợp lệ sau khi kiểm tra.");
-}
 
     return trainingData;
-  }
-
+}
   dateKey(s) {
     if (!s || typeof s !== 'string') return '';
     const parts = s.split('/');
