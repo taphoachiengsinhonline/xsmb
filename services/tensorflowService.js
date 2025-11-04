@@ -9,7 +9,7 @@ const { DateTime } = require('luxon');
 const NN_MODEL_NAME = 'GDB_LSTM_TFJS_PREMIUM_V1';
 const SEQUENCE_LENGTH = 7;
 const OUTPUT_NODES = 50;
-const EPOCHS = 50;
+const EPOCHS = 70;
 const BATCH_SIZE = 32;
 
 class TensorFlowService {
