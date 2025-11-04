@@ -92,7 +92,8 @@ class TensorFlowService {
       validationSplit: 0.1,
       callbacks: {
         onEpochEnd: (epoch, logs) => {
-          console.log(`Epoch ${epoch + 1}: Loss = ${logs.loss.toFixed(4)}, Accuracy = ${logs.acc.toFixed(4)}`);
+          // Chỉ in ra loss để đảm bảo không có lỗi nào khác xảy ra.
+          console.log(`Epoch ${epoch + 1}: Loss = ${logs.loss.toFixed(4)}`);
         }
       }
     });
@@ -279,12 +280,12 @@ class TensorFlowService {
 
     // COMPILE MODEL: Cấu hình quá trình học
     this.model.compile({
-optimizer: tf.train.adam({learningRate: 0.0005}),
-loss: 'binaryCrossentropy',
-// GIẢI PHÁP: Sử dụng 'binaryAccuracy' thay vì precision/recall.
-// 'binaryAccuracy' được thiết kế để hoạt động tốt với loss 'binaryCrossentropy' và output sigmoid.
-metrics: [tf.metrics.binaryAccuracy()]
-});
+      optimizer: tf.train.adam({learningRate: 0.0005}),
+      loss: 'binaryCrossentropy'
+      // TẠM THỜI LOẠI BỎ HOÀN TOÀN 'metrics'.
+      // Quá trình học của mô hình dựa trên 'loss', nên vẫn sẽ hoạt động bình thường.
+      // Chúng ta sẽ chỉ mất đi phần hiển thị accuracy/precision trong log của mỗi epoch.
+    });
     console.log('✅ Model đã được compile. Bắt đầu quá trình training...');
 
     // Huấn luyện model
