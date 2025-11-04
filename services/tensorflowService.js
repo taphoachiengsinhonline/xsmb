@@ -277,7 +277,7 @@ class TensorFlowService {
     if (modelState && modelState.modelArtifacts) {
       this.model = await tf.loadLayersModel('file://./models/tfjs_model/model.json');
       this.inputNodes = modelState.state.inputNodes;
-      console.log(✅ TensorFlow model loaded với ${this.inputNodes} input nodes);
+      console.log(`✅ TensorFlow model loaded với ${this.inputNodes} input nodes`);
       return true;
     }
     return false;
