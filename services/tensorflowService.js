@@ -6,9 +6,6 @@ const AdvancedFeatureEngineer = require('./advancedFeatureService');
 const FeatureEngineeringService = require('./featureEngineeringService');
 const { DateTime } = require('luxon');
 
-// =================================================================
-// HẰNG SỐ CẤU HÌNH
-// =================================================================
 const NN_MODEL_NAME = 'GDB_MULTIHEAD_TFJS_V1';
 const SEQUENCE_LENGTH = 7;
 const EPOCHS = 50;
@@ -16,9 +13,6 @@ const BATCH_SIZE = 32;
 const NUM_POSITIONS = 5;
 const NUM_CLASSES = 10;
 
-// =================================================================
-// HÀM TIỆN ÍCH
-// =================================================================
 const dateKey = (s) => {
     if (!s || typeof s !== 'string') return '';
     const parts = s.split('/');
@@ -59,7 +53,10 @@ class TensorFlowService {
     for (let i = 0; i < NUM_POSITIONS; i++) {
         const headName = `pos${i + 1}`;
         const denseHead = tf.layers.dense({ units: 48, activation: 'relu', name: `${headName}_dense` }).apply(sharedOutput);
-        const outputHead = tf.layers.dense({ units: NUM_CLASSES, activation: 'softmax', name: headName }).apply(denseHead);
+        
+        // QUAN TRỌNG: Khi dùng softmaxCrossentropy, lớp cuối cùng nên có activation là 'linear' (hoặc không có).
+        // Phép tính softmax sẽ được tích hợp sẵn trong hàm loss.
+        const outputHead = tf.layers.dense({ units: NUM_CLASSES, activation: 'linear', name: headName }).apply(denseHead);
         outputLayers.push(outputHead);
     }
 
@@ -93,39 +90,12 @@ class TensorFlowService {
     Object.values(targetTensors).forEach(t => t.dispose());
     return history;
   }
-
-  async predict(inputSequence) {
-    const inputTensor = tf.tensor3d([inputSequence], [1, SEQUENCE_LENGTH, this.inputNodes]);
-    const predictions = this.model.predict(inputTensor);
-    const outputs = [];
-    for (const predTensor of predictions) {
-        outputs.push(await predTensor.data());
-    }
-    inputTensor.dispose();
-    predictions.forEach(t => t.dispose());
-    return outputs;
-  }
-
-  decodeOutput(outputs) {
-    const prediction = {};
-    for (let i = 0; i < NUM_POSITIONS; i++) {
-        const headName = `pos${i + 1}`;
-        const positionOutput = outputs[i];
-        const digitsWithValues = Array.from(positionOutput)
-            .map((value, index) => ({ digit: String(index), value }))
-            .sort((a, b) => b.value - a.value)
-            .slice(0, 5)
-            .map(item => item.digit);
-        prediction[headName] = digitsWithValues;
-    }
-    return prediction;
-  }
   
   async prepareTrainingData() {
     console.log('📝 Bắt đầu chuẩn bị dữ liệu huấn luyện...');
     const results = await Result.find().sort({ 'ngay': 1 }).lean();
     if (results.length < SEQUENCE_LENGTH + 1) {
-        throw new Error(`Không đủ dữ liệu. Cần ít nhất ${SEQUENCE_LENGTH + 1} ngày.`);
+        throw new Error(`Không đủ dữ liệu.`);
     }
 
     const grouped = {};
@@ -134,7 +104,6 @@ class TensorFlowService {
         grouped[r.ngay].push(r);
     });
 
-    // SỬA LỖI Ở ĐÂY: Gọi `dateKey` thay vì `this.dateKey`
     const days = Object.keys(grouped).sort((a, b) => dateKey(a).localeCompare(dateKey(b)));
     const trainingData = [];
 
@@ -156,8 +125,7 @@ class TensorFlowService {
             for(let k = 0; k < finalFeatureVector.length; k++) {
                 const val = finalFeatureVector[k];
                 if (!isFinite(val)) {
-                    console.error(`Lỗi dữ liệu nghiêm trọng tại feature index ${k} cho ngày ${dateStr}. Giá trị: ${val}`);
-                    throw new Error(`Invalid data detected: ${val}`);
+                    throw new Error(`Invalid data detected: ${val} at feature index ${k} for date ${dateStr}`);
                 }
             }
             inputSequence.push(finalFeatureVector);
@@ -185,34 +153,12 @@ class TensorFlowService {
         }
     }
 
-    if (trainingData.length > 0) {
-        this.inputNodes = trainingData[0].inputSequence[0].length;
-        console.log(`✅ Đã chuẩn bị ${trainingData.length} chuỗi dữ liệu huấn luyện hợp lệ với feature size: ${this.inputNodes}`);
-    } else {
-        throw new Error("Không có dữ liệu training hợp lệ.");
-    }
+    if (trainingData.length === 0) throw new Error("Không có dữ liệu training hợp lệ.");
+    this.inputNodes = trainingData[0].inputSequence[0].length;
+    console.log(`✅ Đã chuẩn bị ${trainingData.length} chuỗi dữ liệu huấn luyện hợp lệ với feature size: ${this.inputNodes}`);
     return trainingData;
   }
-
-  async saveModel() {
-    if (!this.model) throw new Error('No model to save');
-    const modelInfo = { modelName: NN_MODEL_NAME, inputNodes: this.inputNodes, savedAt: new Date().toISOString() };
-    const saveResult = await this.model.save('file://./models/tfjs_model');
-    await NNState.findOneAndUpdate({ modelName: NN_MODEL_NAME }, { state: modelInfo, modelArtifacts: saveResult }, { upsert: true });
-    console.log(`💾 TensorFlow model saved với ${this.inputNodes} input nodes`);
-  }
-
-  async loadModel() {
-    const modelState = await NNState.findOne({ modelName: NN_MODEL_NAME });
-    if (modelState && modelState.modelArtifacts) {
-        this.model = await tf.loadLayersModel('file://./models/tfjs_model/model.json');
-        this.inputNodes = modelState.state.inputNodes;
-        console.log(`✅ TensorFlow model loaded với ${this.inputNodes} input nodes`);
-        return true;
-    }
-    return false;
-  }
-
+  
   async runHistoricalTraining() {
     console.log('🔔 [TensorFlow Service] Bắt đầu Huấn luyện Lịch sử với kiến trúc Multi-Head...');
     const trainingData = await this.prepareTrainingData(); 
@@ -228,27 +174,17 @@ class TensorFlowService {
     await this.buildModel(this.inputNodes); 
 
     this.model.compile({
-        optimizer: tf.train.adam({ 
-            learningRate: 0.0001, 
-            clipvalue: 1.0 
-        }),
-        // SỬA ĐỔI Ở ĐÂY:
-        // Thay vì một chuỗi đơn giản, chúng ta truyền một object
-        // để có thể cấu hình chi tiết cho hàm loss của mỗi output.
-        loss: {
-            'pos1': tf.losses.categoricalCrossentropy({labelSmoothing: 0.1}),
-            'pos2': tf.losses.categoricalCrossentropy({labelSmoothing: 0.1}),
-            'pos3': tf.losses.categoricalCrossentropy({labelSmoothing: 0.1}),
-            'pos4': tf.losses.categoricalCrossentropy({labelSmoothing: 0.1}),
-            'pos5': tf.losses.categoricalCrossentropy({labelSmoothing: 0.1})
-        },
+        optimizer: tf.train.adam({ learningRate: 0.0001, clipvalue: 1.0 }),
+        // SỬ DỤNG HÀM LOSS ỔN ĐỊNH NHẤT
+        loss: tf.losses.softmaxCrossentropy,
     });
     
     console.log('✅ Model đã được compile. Bắt đầu quá trình training...');
     await this.trainModel({ inputs, targets }); 
     await this.saveModel(); 
-    return { message: `Huấn luyện Multi-Head Model hoàn tất.`, sequences: trainingData.length, epochs: EPOCHS, featureSize: this.inputNodes, modelName: NN_MODEL_NAME };
+    return { message: `Huấn luyện Multi-Head Model hoàn tất.`, /*...*/ };
   }
+
   
   async runLearning() {
     console.warn("⚠️ Chức năng 'Học hỏi' (runLearning) đang được tạm vô hiệu hóa cho kiến trúc Multi-Head.");
