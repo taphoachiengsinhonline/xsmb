@@ -133,7 +133,7 @@ class TensorFlowService {
     let allFeatures = []; // Để normalize sau
     for (let i = 0; i < days.length - SEQUENCE_LENGTH; i++) {
       const sequenceDaysStrings = days.slice(i, i + SEQUENCE_LENGTH);
-      const targetDayString = days[i + SEQUENCE_LENGTH);
+      const targetDayString = days(i + SEQUENCE_LENGTH);
       const allHistoryForSequence = days.slice(0, i + SEQUENCE_LENGTH).map(dayStr => grouped[dayStr] || []);
       const inputSequence = [];
       let sequenceHasInvalidData = false;
