@@ -124,7 +124,7 @@ class TensorFlowService {
                 ...advancedFeatures.prizeCorrelationFeatures,
                 ...advancedFeatures.sumFrequencyFeatures,
                 ...advancedFeatures.chanLePatterns,
-                // ...advancedFeatures.gapAnalysis
+                ...advancedFeatures.gapAnalysis
             ];
 
             for(let k = 0; k < finalFeatureVector.length; k++) {
