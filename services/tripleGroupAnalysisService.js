@@ -431,7 +431,173 @@ class TripleGroupAnalysisService {
         } catch (error) {
             console.error('❌ Lỗi cập nhật kết quả thực:', error);
         }
+     }
+    async learnFromOwnHistory() {
+        console.log('🧠 Triple Group đang học từ lịch sử của chính nó...');
+        
+        try {
+            // Lấy tất cả dự đoán chưa có kết quả thực tế
+            const predictionsWithoutResults = await TripleGroupPrediction.find({
+                $or: [
+                    { 'actualResult': { $exists: false } },
+                    { 'actualResult': null }
+                ]
+            }).lean();
+
+            console.log(`📝 Tìm thấy ${predictionsWithoutResults.length} dự đoán chưa có kết quả`);
+
+            let updatedCount = 0;
+
+            for (const prediction of predictionsWithoutResults) {
+                const actualResult = await Result.findOne({
+                    ngay: prediction.ngayDuDoan,
+                    giai: 'ĐB'
+                }).lean();
+
+                if (actualResult?.so) {
+                    const gdbStr = String(actualResult.so).padStart(5, '0');
+                    const lastThree = gdbStr.slice(-3);
+                    
+                    if (lastThree.length === 3) {
+                        const isCorrect = 
+                            prediction.topTram.includes(lastThree[0]) &&
+                            prediction.topChuc.includes(lastThree[1]) &&
+                            prediction.topDonVi.includes(lastThree[2]);
+
+                        await TripleGroupPrediction.updateOne(
+                            { _id: prediction._id },
+                            {
+                                actualResult: {
+                                    tram: lastThree[0],
+                                    chuc: lastThree[1],
+                                    donvi: lastThree[2],
+                                    isCorrect: isCorrect
+                                }
+                            }
+                        );
+                        updatedCount++;
+                    }
+                }
+            }
+
+            console.log(`✅ Đã cập nhật ${updatedCount} kết quả thực tế`);
+            return { updated: updatedCount, total: predictionsWithoutResults.length };
+        } catch (error) {
+            console.error('❌ Lỗi trong learnFromOwnHistory:', error);
+            throw error;
+        }
     }
+
+    /**
+     * PHƯƠNG PHÁP MỚI: Tạo dự đoán với học hỏi từ lịch sử
+     */
+    async generatePredictionWithLearning() {
+        console.log('🚀 Tạo dự đoán Triple Group với học hỏi...');
+        
+        try {
+            // Bước 1: Cập nhật kết quả thực tế cho các dự đoán cũ
+            await this.learnFromOwnHistory();
+            
+            // Bước 2: Phân tích lịch sử để tìm pattern hiệu quả
+            const historicalAnalysis = await this.analyzeHistoricalPerformance();
+            
+            // Bước 3: Tạo dự đoán mới với kiến thức đã học
+            const prediction = await this.generateSmartPrediction(historicalAnalysis);
+            
+            // Bước 4: Lưu dự đoán
+            await this.savePrediction(prediction);
+            
+            return prediction;
+        } catch (error) {
+            console.error('❌ Lỗi trong generatePredictionWithLearning:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Phân tích hiệu suất lịch sử
+     */
+    async analyzeHistoricalPerformance() {
+        const predictionsWithResults = await TripleGroupPrediction.find({
+            'actualResult': { $exists: true }
+        }).lean();
+
+        const analysis = {
+            total: predictionsWithResults.length,
+            correct: predictionsWithResults.filter(p => p.actualResult.isCorrect).length,
+            patternEffectiveness: {},
+            confidenceAccuracy: {}
+        };
+
+        // Phân tích hiệu quả của các pattern
+        predictionsWithResults.forEach(pred => {
+            const patterns = pred.analysisData?.highWinPatterns || [];
+            patterns.forEach(pattern => {
+                const patternKey = pattern.pattern;
+                if (!analysis.patternEffectiveness[patternKey]) {
+                    analysis.patternEffectiveness[patternKey] = { total: 0, correct: 0 };
+                }
+                analysis.patternEffectiveness[patternKey].total++;
+                if (pred.actualResult.isCorrect) {
+                    analysis.patternEffectiveness[patternKey].correct++;
+                }
+            });
+
+            // Phân tích độ chính xác theo confidence
+            const confidenceLevel = Math.floor(pred.confidence / 10) * 10;
+            if (!analysis.confidenceAccuracy[confidenceLevel]) {
+                analysis.confidenceAccuracy[confidenceLevel] = { total: 0, correct: 0 };
+            }
+            analysis.confidenceAccuracy[confidenceLevel].total++;
+            if (pred.actualResult.isCorrect) {
+                analysis.confidenceAccuracy[confidenceLevel].correct++;
+            }
+        });
+
+        // Tính tỷ lệ thành công
+        analysis.successRate = analysis.total > 0 ? (analysis.correct / analysis.total) * 100 : 0;
+        
+        console.log(`📊 Phân tích hiệu suất: ${analysis.correct}/${analysis.total} (${analysis.successRate.toFixed(1)}%)`);
+        
+        return analysis;
+    }
+
+    /**
+     * Tạo dự đoán thông minh dựa trên phân tích
+     */
+    async generateSmartPrediction(historicalAnalysis) {
+        // Lấy dữ liệu cơ bản
+        const basicPrediction = await this.generateTripleGroupPrediction();
+        
+        // Điều chỉnh dựa trên hiệu suất lịch sử
+        const adjustedPrediction = this.adjustPredictionBasedOnHistory(basicPrediction, historicalAnalysis);
+        
+        return adjustedPrediction;
+    }
+
+    /**
+     * Điều chỉnh dự đoán dựa trên lịch sử
+     */
+    adjustPredictionBasedOnHistory(prediction, historicalAnalysis) {
+        // Nếu có dữ liệu lịch sử, điều chỉnh confidence
+        if (historicalAnalysis.total > 0) {
+            const successRate = historicalAnalysis.successRate;
+            
+            // Điều chỉnh confidence dựa trên hiệu suất thực tế
+            let adjustedConfidence = prediction.confidence;
+            
+            if (successRate > 60) {
+                adjustedConfidence = Math.min(95, prediction.confidence + 10);
+            } else if (successRate < 40) {
+                adjustedConfidence = Math.max(30, prediction.confidence - 10);
+            }
+            
+            prediction.confidence = Math.round(adjustedConfidence);
+        }
+
+        return prediction;
+    }
+
 }
 
 
