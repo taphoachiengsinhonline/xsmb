@@ -5,6 +5,7 @@ const Prediction = require('../models/Prediction');
 const { DateTime } = require('luxon');
 const crawlService = require('../services/crawlService');
 const groupExclusionService = require('../services/groupExclusionService');
+const { getLatestTwoDaysResults } = require('../services/xsService');
 
 const METHOD_GOC = 'PHUONG_PHAP_GOC';
 const METHOD_DEEP_30_DAY = 'DEEP_30_DAY';
@@ -259,5 +260,6 @@ exports.runGroupExclusionAnalysis = async (req, res) => {
         res.status(500).json({ message: 'Lỗi server khi đang phân tích', error: error.message });
     }
 };
+
 
 
