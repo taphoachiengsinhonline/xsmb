@@ -597,6 +597,189 @@ class TripleGroupAnalysisService {
 
         return prediction;
     }
+    async generateHistoricalPredictions() {
+        console.log('🕐 Bắt đầu tạo dự đoán cho toàn bộ lịch sử...');
+        
+        const allResults = await Result.find().sort({ ngay: 1 }).lean();
+        if (allResults.length === 0) {
+            throw new Error('Không có dữ liệu kết quả');
+        }
+
+        // Nhóm kết quả theo ngày
+        const grouped = {};
+        allResults.forEach(r => {
+            if (!grouped[r.ngay]) grouped[r.ngay] = [];
+            grouped[r.ngay].push(r);
+        });
+
+        const dates = Object.keys(grouped).sort((a, b) => this.dateKey(a).localeCompare(this.dateKey(b)));
+        
+        // Chúng ta sẽ tạo dự đoán cho mỗi ngày, bắt đầu từ ngày thứ SEQUENCE_LENGTH + 1
+        const startIndex = 7; // SEQUENCE_LENGTH = 7
+        let createdCount = 0;
+
+        for (let i = startIndex; i < dates.length; i++) {
+            const currentDate = dates[i];
+            
+            // Kiểm tra xem đã có dự đoán cho ngày này chưa
+            const existingPrediction = await TripleGroupPrediction.findOne({ ngayDuDoan: currentDate });
+            if (existingPrediction) {
+                console.log(`⚠️ Đã có dự đoán cho ngày ${currentDate}, bỏ qua`);
+                continue;
+            }
+
+            // Lấy dữ liệu 7 ngày trước đó
+            const sequenceStart = i - 7;
+            const sequenceEnd = i;
+            const sequenceDates = dates.slice(sequenceStart, sequenceEnd);
+
+            // Kiểm tra xem có đủ 7 ngày không
+            if (sequenceDates.length < 7) {
+                console.log(`⚠️ Không đủ 7 ngày cho chuỗi ngày ${currentDate}, bỏ qua`);
+                continue;
+            }
+
+            // Tạo dự đoán
+            try {
+                const prediction = await this.generatePredictionForDate(sequenceDates, currentDate);
+                await this.savePrediction(prediction);
+                createdCount++;
+                console.log(`✅ Đã tạo dự đoán cho ${currentDate} (${createdCount}/${dates.length - startIndex})`);
+            } catch (error) {
+                console.error(`❌ Lỗi khi tạo dự đoán cho ${currentDate}:`, error.message);
+            }
+        }
+
+        console.log(`🎉 Hoàn thành tạo dự đoán lịch sử! Đã tạo ${createdCount} dự đoán.`);
+        return { created: createdCount, total: dates.length - startIndex };
+    }
+
+    /**
+     * Tạo dự đoán cho một ngày cụ thể trong lịch sử
+     */
+    async generatePredictionForDate(sequenceDates, targetDate) {
+        const allResults = await Result.find({ ngay: { $in: [...sequenceDates, targetDate] } }).lean();
+        
+        // Nhóm kết quả theo ngày
+        const grouped = {};
+        allResults.forEach(r => {
+            if (!grouped[r.ngay]) grouped[r.ngay] = [];
+            grouped[r.ngay].push(r);
+        });
+
+        // Chuẩn bị dữ liệu training từ các ngày trước đó
+        const previousDays = [];
+        const inputSequence = sequenceDates.map(day => {
+            const dayResults = grouped[day] || [];
+            const prevDays = previousDays.slice();
+            previousDays.push(dayResults);
+            
+            // Sử dụng feature engineering (giống như trong TensorFlowService)
+            const basicFeatures = this.featureService.extractAllFeatures(dayResults, prevDays, day);
+            const advancedFeatures = this.advancedFeatureEngineer.extractPremiumFeatures(dayResults, previousDays);
+            
+            let finalFeatureVector = [...basicFeatures, ...Object.values(advancedFeatures).flat()];
+            
+            // Đảm bảo đúng 346 features
+            const EXPECTED_SIZE = 346;
+            if (finalFeatureVector.length !== EXPECTED_SIZE) {
+                if (finalFeatureVector.length > EXPECTED_SIZE) {
+                    finalFeatureVector = finalFeatureVector.slice(0, EXPECTED_SIZE);
+                } else {
+                    finalFeatureVector = [...finalFeatureVector, ...Array(EXPECTED_SIZE - finalFeatureVector.length).fill(0)];
+                }
+            }
+            
+            return finalFeatureVector;
+        });
+
+        // Áp dụng phương pháp Triple Group
+        const filteredNumbers = await this.applyTripleGroupFilter(targetDate);
+        const prediction = this.convertToPositionPrediction(filteredNumbers.filteredNumbers);
+
+        // Lấy kết quả thực tế nếu có
+        let actualResult = null;
+        const actualGDB = (grouped[targetDate] || []).find(r => r.giai === 'ĐB');
+        if (actualGDB?.so) {
+            const gdbStr = String(actualGDB.so).padStart(5, '0');
+            const lastThree = gdbStr.slice(-3);
+            if (lastThree.length === 3) {
+                const isCorrect = 
+                    prediction.topTram.includes(lastThree[0]) &&
+                    prediction.topChuc.includes(lastThree[1]) &&
+                    prediction.topDonVi.includes(lastThree[2]);
+                
+                actualResult = {
+                    tram: lastThree[0],
+                    chuc: lastThree[1],
+                    donvi: lastThree[2],
+                    isCorrect: isCorrect
+                };
+            }
+        }
+
+        return {
+            ...prediction,
+            method: 'TRIPLE_GROUP_ANALYSIS',
+            analysis: {
+                filteredNumbers: filteredNumbers.filteredNumbers,
+                groupsAnalyzed: filteredNumbers.filteredGroupsCount,
+                patternsUsed: filteredNumbers.highWinPatterns.length,
+                confidence: this.calculateConfidence(filteredNumbers)
+            },
+            ngayDuDoan: targetDate,
+            ngayPhanTich: sequenceDates[sequenceDates.length - 1], // Ngày cuối cùng trong chuỗi
+            actualResult: actualResult,
+            createdAt: new Date()
+        };
+    }
+
+    /**
+     * Lấy tất cả dự đoán với phân trang và lọc
+     */
+    async getAllPredictions(page = 1, limit = 20, dateFilter = null) {
+        const skip = (page - 1) * limit;
+        
+        let query = {};
+        if (dateFilter) {
+            query.ngayDuDoan = dateFilter;
+        }
+
+        const predictions = await TripleGroupPrediction.find(query)
+            .sort({ ngayDuDoan: -1 })
+            .skip(skip)
+            .limit(limit)
+            .lean();
+
+        const total = await TripleGroupPrediction.countDocuments(query);
+
+        return {
+            predictions: predictions,
+            pagination: {
+                page: page,
+                limit: limit,
+                total: total,
+                pages: Math.ceil(total / limit)
+            }
+        };
+    }
+
+    /**
+     * Lấy danh sách các ngày có dự đoán
+     */
+    async getAvailableDates() {
+        const predictions = await TripleGroupPrediction.find({})
+            .sort({ ngayDuDoan: -1 })
+            .select('ngayDuDoan')
+            .lean();
+
+        const dates = [...new Set(predictions.map(p => p.ngayDuDoan))].sort((a, b) => 
+            new Date(b.split('/').reverse().join('-')) - new Date(a.split('/').reverse().join('-'))
+        );
+
+        return dates;
+    }
+}
 
 }
 
