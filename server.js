@@ -3,6 +3,7 @@ const mongoose = require('mongoose');
 const cors = require('cors'); // Thêm dòng này
 const xsRoutes = require('./routes/xsRoutes');
 const nnRoutes = require('./routes/nnRoutes');
+const tripleGroupRoutes = require('./routes/tripleGroupRoutes');
 const app = express();
 
 app.use(cors()); // Thêm dòng này
@@ -11,6 +12,7 @@ app.use(express.json());
 // Mount route
 app.use('/api/xs', xsRoutes);
 app.use('/api/nn', nnRoutes);
+app.use('/api/triple-group', tripleGroupRoutes);
 
 // BỎ TÙY CHỌN CŨ KHI KẾT NỐI
 mongoose.connect(process.env.MONGO_URI)
@@ -19,5 +21,6 @@ mongoose.connect(process.env.MONGO_URI)
   
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+
 
 
