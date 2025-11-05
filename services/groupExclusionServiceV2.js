@@ -1,3 +1,4 @@
+const positionalFilterService = require('./positionalPatternFilterService');
 /**
  * @file groupExclusionServiceV2.js
  * @description Phiên bản nâng cao của phương pháp lọc loại trừ nhóm,
@@ -131,35 +132,46 @@ const filterByRepeatingPatterns = (potentialNumbers, latestResults) => {
 // =================================================================
 
 const analyzeAndFilter = (latestResults, previousResults) => {
-    // === Giai đoạn 1: Lọc ban đầu ===
+    // === Giai đoạn 1: Lọc ban đầu (dựa trên GĐB hôm trước) ===
     const losingPatterns = findLosingPatterns(latestResults, previousResults);
     const initialExcludedSet = applyInitialFilter(latestResults, losingPatterns);
     const allPossibleNumbers = Array.from({ length: 1000 }, (_, i) => String(i).padStart(3, '0'));
     const potentialNumbers_Step1 = allPossibleNumbers.filter(num => !initialExcludedSet.has(num));
 
-    // === Giai đoạn 2: Lọc theo mẫu C/L tồn tại ===
+    // === Giai đoạn 2: Lọc Dương (dựa trên mẫu C/L tồn tại) ===
     const potentialNumbers_Step2 = filterByPatternExistence(potentialNumbers_Step1, latestResults);
     
-    // === Giai đoạn 3: Lọc theo nhóm C/L trùng lặp ===
-    const potentialNumbers_Final = filterByRepeatingPatterns(potentialNumbers_Step2, latestResults);
+    // === Giai đoạn 3: Lọc Âm (dựa trên nhóm C/L trùng lặp) ===
+    const potentialNumbers_Step3 = filterByRepeatingPatterns(potentialNumbers_Step2, latestResults);
+    
+    // === BƯỚC 4 [LOGIC MỚI]: Lọc theo Tần Suất Mẫu Vị Trí ===
+    const { filteredNumbers: potentialNumbers_Final, patternCounts } = 
+        positionalFilterService.filterByPositionalPatternFrequency(potentialNumbers_Step3, latestResults);
 
+    // Trả về kết quả chi tiết của tất cả các bước
     return {
         initialTotal: allPossibleNumbers.length,
         step1_afterInitialFilter: {
             count: potentialNumbers_Step1.length,
-            excludedCount: initialExcludedSet.size
+            excludedCount: initialExcludedSet.size,
         },
         step2_afterPatternExistenceFilter: {
             count: potentialNumbers_Step2.length,
-            excludedCount: potentialNumbers_Step1.length - potentialNumbers_Step2.length
+            excludedCount: potentialNumbers_Step1.length - potentialNumbers_Step2.length,
         },
-        step3_finalResult: {
+        step3_afterRepeatingPatternFilter: {
+            count: potentialNumbers_Step3.length,
+            excludedCount: potentialNumbers_Step2.length - potentialNumbers_Step3.length,
+        },
+        step4_finalResult: {
             count: potentialNumbers_Final.length,
-            excludedCount: potentialNumbers_Step2.length - potentialNumbers_Final.length,
-            potentialNumbers: potentialNumbers_Final
+            excludedCount: potentialNumbers_Step3.length - potentialNumbers_Final.length,
+            potentialNumbers: potentialNumbers_Final,
         },
         analysisDetails: {
-            losingPatterns: Array.from(losingPatterns)
+            losingPatterns: Array.from(losingPatterns),
+            // Chuyển Map thành Object để dễ gửi qua JSON
+            positionalPatternCounts: Object.fromEntries(patternCounts), 
         }
     };
 };
