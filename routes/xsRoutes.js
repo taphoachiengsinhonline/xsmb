@@ -25,6 +25,8 @@ router.get('/prediction-by-date', xsController.getPredictionByDate);
 router.post('/update-weights', xsController.updatePredictionWeights);
 
 router.post('/analyze-group-exclusion', xsController.runGroupExclusionAnalysis);
+router.post('/analyze-group-exclusion-v2', xsController.runGroupExclusionAnalysisV2);
 
 module.exports = router;
+
 
