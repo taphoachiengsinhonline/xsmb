@@ -26,7 +26,9 @@ router.post('/update-weights', xsController.updatePredictionWeights);
 
 router.post('/analyze-group-exclusion', xsController.runGroupExclusionAnalysis);
 router.post('/analyze-group-exclusion-v2', xsController.runGroupExclusionAnalysisV2);
+router.post('/triple-group-prediction', xsController.generateTripleGroupPrediction);
 
 module.exports = router;
+
 
 
