@@ -5,6 +5,7 @@ const Prediction = require('../models/Prediction');
 const { DateTime } = require('luxon');
 const crawlService = require('../services/crawlService');
 const groupExclusionService = require('../services/groupExclusionService');
+const groupExclusionServiceV2 = require('../services/groupExclusionServiceV2'); // Import service V2 MỚI
 
 async function getLatestTwoDaysResults() {
     // 1. Lấy tất cả các ngày duy nhất có trong CSDL
@@ -298,6 +299,27 @@ exports.runGroupExclusionAnalysis = async (req, res) => {
         res.status(500).json({ message: 'Lỗi server khi đang phân tích', error: error.message });
     }
 };
+
+exports.runGroupExclusionAnalysisV2 = async (req, res) => {
+    try {
+        console.log('🔬 [API V2] Starting Enhanced Group Exclusion Analysis...');
+        
+        const { latestResults, prevResults } = await getLatestTwoDaysResults();
+
+        // Gọi service V2
+        const analysisResult = groupExclusionServiceV2.analyzeAndFilter(latestResults, prevResults);
+
+        res.status(200).json({
+            message: 'Phân tích nâng cao V2 hoàn tất.',
+            data: analysisResult // Trả về toàn bộ object chi tiết
+        });
+
+    } catch (error) {
+        console.error('Error during V2 group exclusion analysis:', error);
+        res.status(500).json({ message: 'Lỗi server khi đang phân tích V2', error: error.message });
+    }
+};
+
 
 
 
