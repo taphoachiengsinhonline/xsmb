@@ -6,6 +6,9 @@ const { DateTime } = require('luxon');
 const crawlService = require('../services/crawlService');
 const groupExclusionService = require('../services/groupExclusionService');
 const groupExclusionServiceV2 = require('../services/groupExclusionServiceV2'); // Import service V2 MỚI
+const TripleGroupAnalysisService = require('../services/tripleGroupAnalysisService');
+
+const tripleGroupService = new TripleGroupAnalysisService();
 
 async function getLatestTwoDaysResults() {
     // 1. Lấy tất cả các ngày duy nhất có trong CSDL
@@ -320,6 +323,25 @@ exports.runGroupExclusionAnalysisV2 = async (req, res) => {
     }
 };
 
+exports.generateTripleGroupPrediction = async (req, res) => {
+    try {
+        console.log('🎯 Bắt đầu tạo dự đoán bằng phương pháp Nhóm 3 Giải...');
+        
+        const prediction = await tripleGroupService.generateTripleGroupPrediction();
+        
+        res.json({
+            success: true,
+            message: 'Dự đoán từ phương pháp Nhóm 3 Giải đã được tạo',
+            prediction: prediction
+        });
+    } catch (error) {
+        console.error('❌ Lỗi trong generateTripleGroupPrediction:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Lỗi khi tạo dự đoán Nhóm 3 Giải: ' + error.message
+        });
+    }
+};
 
 
 
