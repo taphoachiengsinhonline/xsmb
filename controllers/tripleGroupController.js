@@ -183,3 +183,44 @@ exports.calculateAccuracyStats = async () => {
         byConfidence: confidenceStats
     };
 };
+
+exports.generatePredictionWithLearning = async (req, res) => {
+    try {
+        console.log('🎯 Tạo dự đoán Triple Group với học hỏi...');
+        
+        const prediction = await tripleGroupService.generatePredictionWithLearning();
+        
+        res.json({
+            success: true,
+            message: 'Dự đoán Triple Group đã được tạo với học hỏi từ lịch sử',
+            prediction: prediction,
+            learning: {
+                learnedFromHistory: true,
+                historicalDataUsed: true
+            }
+        });
+    } catch (error) {
+        console.error('❌ Lỗi generatePredictionWithLearning:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Lỗi khi tạo dự đoán với học hỏi: ' + error.message
+        });
+    }
+};
+
+exports.getLearningStats = async (req, res) => {
+    try {
+        const stats = await tripleGroupService.analyzeHistoricalPerformance();
+        
+        res.json({
+            success: true,
+            stats: stats
+        });
+    } catch (error) {
+        console.error('❌ Lỗi getLearningStats:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Lỗi khi lấy thống kê học tập'
+        });
+    }
+};
