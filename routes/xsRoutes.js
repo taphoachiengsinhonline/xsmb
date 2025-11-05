@@ -24,4 +24,7 @@ router.get('/prediction-by-date', xsController.getPredictionByDate);
 // Route cũ không còn dùng nữa
 router.post('/update-weights', xsController.updatePredictionWeights);
 
+router.post('/analyze-group-exclusion', xsController.runGroupExclusionAnalysis);
+
 module.exports = router;
+
