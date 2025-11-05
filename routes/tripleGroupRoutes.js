@@ -25,4 +25,7 @@ router.get('/accuracy-stats', async (req, res) => {
     }
 });
 
+router.post('/generate-with-learning', tripleGroupController.generatePredictionWithLearning);
+router.get('/learning-stats', tripleGroupController.getLearningStats);
+
 module.exports = router;
