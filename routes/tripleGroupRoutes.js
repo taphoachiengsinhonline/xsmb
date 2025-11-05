@@ -27,5 +27,20 @@ router.get('/accuracy-stats', async (req, res) => {
 
 router.post('/generate-with-learning', tripleGroupController.generatePredictionWithLearning);
 router.get('/learning-stats', tripleGroupController.getLearningStats);
+router.post('/learn-from-history', async (req, res) => {
+    try {
+        const result = await tripleGroupService.learnFromOwnHistory();
+        res.json({
+            success: true,
+            message: `Đã học từ ${result.updated} dự đoán`,
+            ...result
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+});
 
 module.exports = router;
