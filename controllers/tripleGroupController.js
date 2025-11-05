@@ -224,3 +224,63 @@ exports.getLearningStats = async (req, res) => {
         });
     }
 };
+// controllers/tripleGroupController.js
+exports.generateHistoricalPredictions = async (req, res) => {
+    try {
+        console.log('🚀 Bắt đầu tạo dự đoán lịch sử...');
+        
+        const result = await tripleGroupService.generateHistoricalPredictions();
+        
+        res.json({
+            success: true,
+            message: `Đã tạo ${result.created} dự đoán lịch sử`,
+            ...result
+        });
+    } catch (error) {
+        console.error('❌ Lỗi generateHistoricalPredictions:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Lỗi khi tạo dự đoán lịch sử: ' + error.message
+        });
+    }
+};
+
+exports.getPredictionsWithFilter = async (req, res) => {
+    try {
+        const { page = 1, limit = 20, date = null } = req.query;
+        
+        const result = await tripleGroupService.getAllPredictions(
+            parseInt(page), 
+            parseInt(limit), 
+            date
+        );
+
+        res.json({
+            success: true,
+            ...result
+        });
+    } catch (error) {
+        console.error('❌ Lỗi getPredictionsWithFilter:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Lỗi khi lấy dữ liệu dự đoán'
+        });
+    }
+};
+
+exports.getAvailableDates = async (req, res) => {
+    try {
+        const dates = await tripleGroupService.getAvailableDates();
+        
+        res.json({
+            success: true,
+            dates: dates
+        });
+    } catch (error) {
+        console.error('❌ Lỗi getAvailableDates:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Lỗi khi lấy danh sách ngày'
+        });
+    }
+};
