@@ -418,6 +418,103 @@ class TripleGroupAnalysisService {
         const parts = s.split('/');
         return parts.length !== 3 ? s : `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
     }
+    async generatePredictionWithLearning(targetDate = null) {
+        console.log('🧠 Dịch vụ: Tạo dự đoán VỚI HỌC HỎI (gọi hàm chính)...');
+        // Logic này đảm bảo endpoint '/generate-with-learning' hoạt động ngay lập tức.
+        // Trong tương lai, bạn có thể thêm các bước học hỏi (vd: cập nhật trọng số) tại đây
+        // trước khi gọi hàm generateTripleGroupPrediction.
+        return this.generateTripleGroupPrediction(targetDate);
+    }
+
+    // =================================================================
+    // HÀM MỚI 2: analyzeHistoricalPerformance (ĐỂ SỬA LỖI)
+    // =================================================================
+    /**
+     * Phân tích hiệu suất của các dự đoán trong quá khứ để cung cấp "thống kê học tập".
+     * Hàm này tính toán độ hiệu quả của từng con số (0-9) ở mỗi vị trí (Trăm, Chục, Đơn vị).
+     * @returns {Promise<object>} - Đối tượng chứa thống kê chi tiết.
+     */
+    async analyzeHistoricalPerformance() {
+        console.log('📈 Dịch vụ: Phân tích hiệu suất lịch sử để lấy thống kê học tập...');
+        
+        const predictionsWithResults = await TripleGroupPrediction.find({ 
+            'actualResult': { $exists: true, $ne: null } 
+        }).lean();
+
+        if (predictionsWithResults.length < 10) {
+            return {
+                message: 'Không đủ dữ liệu (cần ít nhất 10 dự đoán có kết quả) để phân tích.',
+                totalAnalyzed: predictionsWithResults.length,
+                performance: {}
+            };
+        }
+
+        const performance = {
+            tram: this.initializePositionStats(),
+            chuc: this.initializePositionStats(),
+            donvi: this.initializePositionStats()
+        };
+
+        for (const pred of predictionsWithResults) {
+            const actual = pred.actualResult;
+            
+            this.updatePositionStats(performance.tram, pred.topTram || [], actual.tram);
+            this.updatePositionStats(performance.chuc, pred.topChuc || [], actual.chuc);
+            this.updatePositionStats(performance.donvi, pred.topDonVi || [], actual.donvi);
+        }
+
+        // Tính toán tỷ lệ cuối cùng
+        this.calculateFinalAccuracy(performance.tram);
+        this.calculateFinalAccuracy(performance.chuc);
+        this.calculateFinalAccuracy(performance.donvi);
+
+        return {
+            totalAnalyzed: predictionsWithResults.length,
+            performance: performance
+        };
+    }
+
+    /**
+     * Helper: Khởi tạo đối tượng thống kê cho một vị trí.
+     */
+    initializePositionStats() {
+        const stats = {};
+        for (let i = 0; i < 10; i++) {
+            stats[i.toString()] = { totalAppearances: 0, correctPicks: 0, accuracy: 0 };
+        }
+        return stats;
+    }
+
+    /**
+     * Helper: Cập nhật thống kê cho một vị trí dựa trên một dự đoán.
+     * @param {object} positionStats - Đối tượng thống kê của vị trí (Trăm, Chục, hoặc Đơn vị).
+     * @param {Array<string>} predictedDigits - Dàn số dự đoán cho vị trí đó.
+     * @param {string} actualDigit - Con số thực tế đã về.
+     */
+    updatePositionStats(positionStats, predictedDigits, actualDigit) {
+        for (const digit of predictedDigits) {
+            if (positionStats[digit]) {
+                positionStats[digit].totalAppearances++;
+                if (digit === actualDigit) {
+                    positionStats[digit].correctPicks++;
+                }
+            }
+        }
+    }
+
+    /**
+     * Helper: Tính toán tỷ lệ chính xác cuối cùng cho các con số.
+     */
+    calculateFinalAccuracy(positionStats) {
+        for (let i = 0; i < 10; i++) {
+            const digit = i.toString();
+            if (positionStats[digit].totalAppearances > 0) {
+                positionStats[digit].accuracy = 
+                    (positionStats[digit].correctPicks / positionStats[digit].totalAppearances) * 100;
+            }
+        }
+    }
+
 }
 
 module.exports = TripleGroupAnalysisService;
