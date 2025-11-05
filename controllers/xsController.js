@@ -4,6 +4,7 @@ const Result = require('../models/Result');
 const Prediction = require('../models/Prediction');
 const { DateTime } = require('luxon');
 const crawlService = require('../services/crawlService');
+const groupExclusionService = require('../services/groupExclusionService');
 
 const METHOD_GOC = 'PHUONG_PHAP_GOC';
 const METHOD_DEEP_30_DAY = 'DEEP_30_DAY';
@@ -226,3 +227,37 @@ exports.getPredictionByDate=async(req,res)=>{try{const{date}=req.query; if(!date
 exports.getLatestPredictionDate=async(req,res)=>{try{const latestPrediction=await Prediction.findOne().sort({ngayDuDoan:-1}).collation({locale:'vi',numericOrdering:true}).lean(); if(!latestPrediction)return res.status(404).json({message:'Không tìm thấy bản ghi dự đoán nào.'}); res.json({latestDate:latestPrediction.ngayDuDoan});}catch(err){res.status(500).json({message:'Lỗi server',error:err.toString()});}};
 exports.getAllPredictions=async(req,res)=>{try{const predictions=await Prediction.find({}).lean(); res.json(predictions);}catch(err){res.status(500).json({message:'Lỗi server',error:err.toString()});}};
 exports.updatePredictionWeights=(req,res)=>res.status(404).json({message:'API đã lỗi thời, sử dụng /update-trust-scores'});
+
+exports.runGroupExclusionAnalysis = async (req, res) => {
+    try {
+        console.log('🔬 [API] Starting Group Exclusion Analysis...');
+        
+        // Lấy dữ liệu 2 ngày gần nhất để phân tích
+        // latestResults là kết quả ngày T, prevResults là kết quả ngày T-1
+        const { latestResults, prevResults } = await getLatestTwoDaysResults();
+
+        if (!latestResults.length || !prevResults.length) {
+            return res.status(404).json({ message: 'Không đủ dữ liệu (cần ít nhất 2 ngày) để phân tích.' });
+        }
+
+        // Gọi service để thực hiện logic
+        const analysisResult = groupExclusionService.analyzeAndFilter(latestResults, prevResults);
+
+        // Trả về kết quả cho client
+        res.status(200).json({
+            message: 'Phân tích loại trừ nhóm hoàn tất.',
+            data: {
+                potentialNumbersCount: analysisResult.potentialNumbers.length,
+                excludedNumbersCount: analysisResult.excludedNumbers.length,
+                potentialNumbers: analysisResult.potentialNumbers,
+                details: analysisResult.analysisDetails
+            }
+        });
+
+    } catch (error) {
+        console.error('Error during group exclusion analysis:', error);
+        res.status(500).json({ message: 'Lỗi server khi đang phân tích', error: error.message });
+    }
+};
+
+
