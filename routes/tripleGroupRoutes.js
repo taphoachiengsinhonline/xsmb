@@ -43,4 +43,8 @@ router.post('/learn-from-history', async (req, res) => {
     }
 });
 
+router.post('/generate-historical', tripleGroupController.generateHistoricalPredictions);
+router.get('/predictions-filtered', tripleGroupController.getPredictionsWithFilter);
+router.get('/available-dates', tripleGroupController.getAvailableDates);
+
 module.exports = router;
