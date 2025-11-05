@@ -5,7 +5,45 @@ const Prediction = require('../models/Prediction');
 const { DateTime } = require('luxon');
 const crawlService = require('../services/crawlService');
 const groupExclusionService = require('../services/groupExclusionService');
-const { getLatestTwoDaysResults } = require('../services/xsService');
+
+async function getLatestTwoDaysResults() {
+    // 1. Lấy tất cả các ngày duy nhất có trong CSDL
+    const allDates = await Result.distinct('ngay');
+
+    // 2. Chuyển đổi và sắp xếp ngày tháng một cách chính xác
+    // Vì format "dd/MM/yyyy" không thể sắp xếp chuỗi đúng được
+    const sortedDates = allDates.sort((a, b) => {
+        const [dayA, monthA, yearA] = a.split('/').map(Number);
+        const [dayB, monthB, yearB] = b.split('/').map(Number);
+        const dateA = new Date(yearA, monthA - 1, dayA);
+        const dateB = new Date(yearB, monthB - 1, dayB);
+        return dateB - dateA; // Sắp xếp giảm dần (ngày mới nhất trước)
+    });
+
+    // 3. Kiểm tra xem có đủ dữ liệu không
+    if (sortedDates.length < 2) {
+        throw new Error('Không đủ dữ liệu để phân tích (yêu cầu ít nhất 2 ngày).');
+    }
+
+    // 4. Lấy ra 2 ngày gần nhất
+    const latestDateStr = sortedDates[0];
+    const prevDateStr = sortedDates[1];
+
+    console.log(`Analyzing with latest date: ${latestDateStr} and previous date: ${prevDateStr}`);
+
+    // 5. Lấy toàn bộ kết quả của 2 ngày đó
+    const [latestResults, prevResults] = await Promise.all([
+        Result.find({ ngay: latestDateStr }).lean(),
+        Result.find({ ngay: prevDateStr }).lean()
+    ]);
+
+    // 6. Trả về kết quả
+    return {
+        latestResults,
+        prevResults
+    };
+}
+
 
 const METHOD_GOC = 'PHUONG_PHAP_GOC';
 const METHOD_DEEP_30_DAY = 'DEEP_30_DAY';
@@ -233,12 +271,12 @@ exports.runGroupExclusionAnalysis = async (req, res) => {
     try {
         console.log('🔬 [API] Starting Group Exclusion Analysis...');
         
-        // Lấy dữ liệu 2 ngày gần nhất để phân tích
-        // latestResults là kết quả ngày T, prevResults là kết quả ngày T-1
+        // Bây giờ hàm này đã tồn tại và có thể gọi được
         const { latestResults, prevResults } = await getLatestTwoDaysResults();
 
         if (!latestResults.length || !prevResults.length) {
-            return res.status(404).json({ message: 'Không đủ dữ liệu (cần ít nhất 2 ngày) để phân tích.' });
+            // Trường hợp này thực tế đã được xử lý trong getLatestTwoDaysResults
+            return res.status(404).json({ message: 'Không đủ dữ liệu để phân tích.' });
         }
 
         // Gọi service để thực hiện logic
@@ -260,6 +298,7 @@ exports.runGroupExclusionAnalysis = async (req, res) => {
         res.status(500).json({ message: 'Lỗi server khi đang phân tích', error: error.message });
     }
 };
+
 
 
 
