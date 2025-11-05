@@ -230,6 +230,33 @@ class AdvancedFeatureEngineer {
         // Kết quả: 3 vị trí * 10 chữ số = 30 features.
         return features;
     }
+
+    _extractTripleGroupFeatures(previousDaysResults) {
+    try {
+        const tripleGroupService = new TripleGroupAnalysisService();
+        const analysis = tripleGroupService.analyzeTripleGroupPatterns();
+        
+        const features = [];
+        
+        // Thêm features từ phân tích nhóm
+        if (analysis.patternStats && analysis.patternStats.length > 0) {
+            // Tỷ lệ thắng trung bình của các pattern
+            const avgWinRate = analysis.patternStats.reduce((sum, stat) => sum + stat.winRate, 0) / analysis.patternStats.length;
+            features.push(avgWinRate / 100);
+            
+            // Số lượng pattern có tỷ lệ thắng > 60%
+            const highWinPatterns = analysis.patternStats.filter(stat => stat.winRate > 60).length;
+            features.push(highWinPatterns / 20); // Chuẩn hóa
+        } else {
+            features.push(0, 0);
+        }
+        
+        return features;
+    } catch (error) {
+        console.warn('⚠️ Lỗi trong triple group features, sử dụng giá trị mặc định');
+        return [0, 0];
+    }
+    }
 }
 
 module.exports = AdvancedFeatureEngineer;
