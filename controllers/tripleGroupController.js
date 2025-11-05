@@ -410,11 +410,19 @@ exports.getAvailableDates = async (req, res) => {
         console.log('📅 [Controller] Lấy danh sách ngày có dự đoán...');
         
         const predictions = await TripleGroupPrediction.find({})
-            .sort({ ngayDuDoan: -1 })
+            .sort({ ngayDuDoan: -1 }) // Sắp xếp sơ bộ nếu có thể
             .select('ngayDuDoan')
             .lean();
 
-        const dates = [...new Set(predictions.map(p => p.ngayDuDoan))].sort((a, b) => {
+        // Lấy tất cả các ngày, sau đó lọc bỏ các giá trị null/undefined
+        const allDates = predictions.map(p => p.ngayDuDoan);
+        const validDates = allDates.filter(date => date); // Lọc bỏ các giá trị "falsy" (null, undefined, '')
+
+        const uniqueDates = [...new Set(validDates)];
+
+        // Sắp xếp các ngày hợp lệ một cách chính xác
+        const sortedDates = uniqueDates.sort((a, b) => {
+            // Logic chuyển đổi ngày tháng của bạn đã đúng
             const dateA = new Date(a.split('/').reverse().join('-'));
             const dateB = new Date(b.split('/').reverse().join('-'));
             return dateB - dateA;
@@ -422,8 +430,8 @@ exports.getAvailableDates = async (req, res) => {
 
         res.json({
             success: true,
-            dates: dates,
-            total: dates.length,
+            dates: sortedDates,
+            total: sortedDates.length,
             timestamp: new Date().toISOString()
         });
     } catch (error) {
