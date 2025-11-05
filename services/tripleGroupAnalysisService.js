@@ -433,6 +433,6 @@ class TripleGroupAnalysisService {
         }
     }
 }
-}
+
 
 module.exports = TripleGroupAnalysisService;
