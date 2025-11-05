@@ -5,188 +5,37 @@ const Result = require('../models/Result');
 
 const tripleGroupService = new TripleGroupAnalysisService();
 
+/**
+ * Tạo dự đoán mới cho ngày tiếp theo
+ */
 exports.generatePrediction = async (req, res) => {
     try {
-        console.log('🎯 Bắt đầu tạo dự đoán Triple Group...');
+        console.log('🎯 [Controller] Bắt đầu tạo dự đoán Triple Group...');
         
         const prediction = await tripleGroupService.generateTripleGroupPrediction();
         
-        // Lưu dự đoán vào database
-        await tripleGroupService.savePrediction(prediction);
-        
         res.json({
             success: true,
-            message: 'Dự đoán Triple Group đã được tạo và lưu',
-            prediction: prediction
+            message: 'Dự đoán Triple Group đã được tạo thành công',
+            prediction: prediction,
+            timestamp: new Date().toISOString()
         });
     } catch (error) {
-        console.error('❌ Lỗi generatePrediction:', error);
+        console.error('❌ [Controller] Lỗi generatePrediction:', error);
         res.status(500).json({
             success: false,
-            message: 'Lỗi khi tạo dự đoán: ' + error.message
+            message: 'Lỗi khi tạo dự đoán: ' + error.message,
+            timestamp: new Date().toISOString()
         });
     }
 };
 
-exports.getPredictions = async (req, res) => {
-    try {
-        const { limit = 50, page = 1 } = req.query;
-        const skip = (page - 1) * limit;
-
-        const predictions = await TripleGroupPrediction.find()
-            .sort({ ngayDuDoan: -1 })
-            .limit(parseInt(limit))
-            .skip(skip)
-            .lean();
-
-        const total = await TripleGroupPrediction.countDocuments();
-
-        // Tính thống kê độ chính xác
-        const stats = await this.calculateAccuracyStats();
-
-        res.json({
-            success: true,
-            predictions: predictions,
-            pagination: {
-                page: parseInt(page),
-                limit: parseInt(limit),
-                total: total,
-                pages: Math.ceil(total / limit)
-            },
-            stats: stats
-        });
-    } catch (error) {
-        console.error('❌ Lỗi getPredictions:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Lỗi khi lấy dữ liệu dự đoán'
-        });
-    }
-};
-
-exports.getPredictionByDate = async (req, res) => {
-    try {
-        const { date } = req.query;
-        if (!date) {
-            return res.status(400).json({
-                success: false,
-                message: 'Thiếu tham số date'
-            });
-        }
-
-        const prediction = await TripleGroupPrediction.findOne({ ngayDuDoan: date }).lean();
-        
-        if (!prediction) {
-            return res.status(404).json({
-                success: false,
-                message: 'Không tìm thấy dự đoán cho ngày này'
-            });
-        }
-
-        res.json({
-            success: true,
-            prediction: prediction
-        });
-    } catch (error) {
-        console.error('❌ Lỗi getPredictionByDate:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Lỗi khi lấy dự đoán'
-        });
-    }
-};
-
-exports.updateAllActualResults = async (req, res) => {
-    try {
-        console.log('🔄 Cập nhật kết quả thực tế cho tất cả dự đoán...');
-        
-        const allResults = await Result.find().lean();
-        const predictions = await TripleGroupPrediction.find({ 
-            'actualResult': { $exists: false } 
-        }).lean();
-
-        let updatedCount = 0;
-
-        for (const prediction of predictions) {
-            const result = allResults.find(r => r.ngay === prediction.ngayDuDoan && r.giai === 'ĐB');
-            if (result?.so) {
-                const gdbStr = String(result.so).padStart(5, '0');
-                const lastThree = gdbStr.slice(-3);
-                
-                if (lastThree.length === 3) {
-                    await tripleGroupService.updateActualResult(prediction.ngayDuDoan, lastThree);
-                    updatedCount++;
-                }
-            }
-        }
-
-        res.json({
-            success: true,
-            message: `Đã cập nhật ${updatedCount} kết quả thực tế`
-        });
-    } catch (error) {
-        console.error('❌ Lỗi updateAllActualResults:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Lỗi khi cập nhật kết quả'
-        });
-    }
-};
-
-exports.calculateAccuracyStats = async () => {
-    const predictionsWithResults = await TripleGroupPrediction.find({
-        'actualResult': { $exists: true }
-    }).lean();
-
-    const total = predictionsWithResults.length;
-    const correct = predictionsWithResults.filter(p => p.actualResult.isCorrect).length;
-    const accuracy = total > 0 ? (correct / total) * 100 : 0;
-
-    // Thống kê theo tháng
-    const monthlyStats = {};
-    predictionsWithResults.forEach(pred => {
-        const [day, month, year] = pred.ngayDuDoan.split('/');
-        const monthYear = `${month}/${year}`;
-        
-        if (!monthlyStats[monthYear]) {
-            monthlyStats[monthYear] = { total: 0, correct: 0 };
-        }
-        
-        monthlyStats[monthYear].total++;
-        if (pred.actualResult.isCorrect) {
-            monthlyStats[monthYear].correct++;
-        }
-    });
-
-    // Tính độ chính xác theo confidence level
-    const confidenceStats = {};
-    predictionsWithResults.forEach(pred => {
-        const confidenceLevel = Math.floor(pred.confidence / 10) * 10; // Nhóm theo 10%
-        
-        if (!confidenceStats[confidenceLevel]) {
-            confidenceStats[confidenceLevel] = { total: 0, correct: 0 };
-        }
-        
-        confidenceStats[confidenceLevel].total++;
-        if (pred.actualResult.isCorrect) {
-            confidenceStats[confidenceLevel].correct++;
-        }
-    });
-
-    return {
-        overall: {
-            total: total,
-            correct: correct,
-            accuracy: Math.round(accuracy * 100) / 100
-        },
-        monthly: monthlyStats,
-        byConfidence: confidenceStats
-    };
-};
-
+/**
+ * Tạo dự đoán với học hỏi từ lịch sử
+ */
 exports.generatePredictionWithLearning = async (req, res) => {
     try {
-        console.log('🎯 Tạo dự đoán Triple Group với học hỏi...');
+        console.log('🧠 [Controller] Tạo dự đoán với học hỏi...');
         
         const prediction = await tripleGroupService.generatePredictionWithLearning();
         
@@ -197,90 +46,539 @@ exports.generatePredictionWithLearning = async (req, res) => {
             learning: {
                 learnedFromHistory: true,
                 historicalDataUsed: true
-            }
+            },
+            timestamp: new Date().toISOString()
         });
     } catch (error) {
-        console.error('❌ Lỗi generatePredictionWithLearning:', error);
+        console.error('❌ [Controller] Lỗi generatePredictionWithLearning:', error);
         res.status(500).json({
             success: false,
-            message: 'Lỗi khi tạo dự đoán với học hỏi: ' + error.message
+            message: 'Lỗi khi tạo dự đoán với học hỏi: ' + error.message,
+            timestamp: new Date().toISOString()
         });
     }
 };
 
-exports.getLearningStats = async (req, res) => {
-    try {
-        const stats = await tripleGroupService.analyzeHistoricalPerformance();
-        
-        res.json({
-            success: true,
-            stats: stats
-        });
-    } catch (error) {
-        console.error('❌ Lỗi getLearningStats:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Lỗi khi lấy thống kê học tập'
-        });
-    }
-};
-// controllers/tripleGroupController.js
+/**
+ * Tạo dự đoán cho toàn bộ lịch sử
+ */
 exports.generateHistoricalPredictions = async (req, res) => {
     try {
-        console.log('🚀 Bắt đầu tạo dự đoán lịch sử...');
+        console.log('🕐 [Controller] Bắt đầu tạo dự đoán lịch sử...');
         
         const result = await tripleGroupService.generateHistoricalPredictions();
         
         res.json({
             success: true,
-            message: `Đã tạo ${result.created} dự đoán lịch sử`,
-            ...result
+            message: `Đã tạo ${result.created} dự đoán lịch sử thành công`,
+            created: result.created,
+            total: result.total,
+            timestamp: new Date().toISOString()
         });
     } catch (error) {
-        console.error('❌ Lỗi generateHistoricalPredictions:', error);
+        console.error('❌ [Controller] Lỗi generateHistoricalPredictions:', error);
         res.status(500).json({
             success: false,
-            message: 'Lỗi khi tạo dự đoán lịch sử: ' + error.message
+            message: 'Lỗi khi tạo dự đoán lịch sử: ' + error.message,
+            timestamp: new Date().toISOString()
         });
     }
 };
 
-exports.getPredictionsWithFilter = async (req, res) => {
+/**
+ * Lấy danh sách dự đoán với phân trang và lọc
+ */
+exports.getPredictions = async (req, res) => {
     try {
         const { page = 1, limit = 20, date = null } = req.query;
+        const pageNum = parseInt(page);
+        const limitNum = parseInt(limit);
         
-        const result = await tripleGroupService.getAllPredictions(
-            parseInt(page), 
-            parseInt(limit), 
-            date
-        );
+        console.log(`📋 [Controller] Lấy dự đoán - trang ${pageNum}, limit ${limitNum}, date: ${date || 'all'}`);
+        
+        const skip = (pageNum - 1) * limitNum;
+        
+        let query = {};
+        if (date) {
+            query.ngayDuDoan = date;
+        }
+
+        const predictions = await TripleGroupPrediction.find(query)
+            .sort({ ngayDuDoan: -1 })
+            .skip(skip)
+            .limit(limitNum)
+            .lean();
+
+        const total = await TripleGroupPrediction.countDocuments(query);
+        const totalPages = Math.ceil(total / limitNum);
+
+        // Tính thống kê nhanh
+        const predictionsWithResults = predictions.filter(p => p.actualResult);
+        const correctPredictions = predictionsWithResults.filter(p => p.actualResult.isCorrect);
+        const accuracy = predictionsWithResults.length > 0 
+            ? (correctPredictions.length / predictionsWithResults.length * 100).toFixed(1)
+            : 0;
 
         res.json({
             success: true,
-            ...result
+            predictions: predictions,
+            pagination: {
+                page: pageNum,
+                limit: limitNum,
+                total: total,
+                pages: totalPages,
+                hasNext: pageNum < totalPages,
+                hasPrev: pageNum > 1
+            },
+            stats: {
+                totalPredictions: total,
+                withResults: predictionsWithResults.length,
+                correct: correctPredictions.length,
+                accuracy: parseFloat(accuracy)
+            },
+            timestamp: new Date().toISOString()
         });
     } catch (error) {
-        console.error('❌ Lỗi getPredictionsWithFilter:', error);
+        console.error('❌ [Controller] Lỗi getPredictions:', error);
         res.status(500).json({
             success: false,
-            message: 'Lỗi khi lấy dữ liệu dự đoán'
+            message: 'Lỗi khi lấy dữ liệu dự đoán: ' + error.message,
+            timestamp: new Date().toISOString()
         });
     }
 };
 
+/**
+ * Lấy dự đoán theo ngày cụ thể
+ */
+exports.getPredictionByDate = async (req, res) => {
+    try {
+        const { date } = req.query;
+        
+        if (!date) {
+            return res.status(400).json({
+                success: false,
+                message: 'Thiếu tham số date (định dạng: dd/mm/yyyy)',
+                timestamp: new Date().toISOString()
+            });
+        }
+
+        console.log(`📅 [Controller] Lấy dự đoán cho ngày: ${date}`);
+        
+        const prediction = await TripleGroupPrediction.findOne({ ngayDuDoan: date }).lean();
+        
+        if (!prediction) {
+            return res.status(404).json({
+                success: false,
+                message: `Không tìm thấy dự đoán cho ngày ${date}`,
+                timestamp: new Date().toISOString()
+            });
+        }
+
+        res.json({
+            success: true,
+            prediction: prediction,
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        console.error('❌ [Controller] Lỗi getPredictionByDate:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Lỗi khi lấy dự đoán theo ngày: ' + error.message,
+            timestamp: new Date().toISOString()
+        });
+    }
+};
+
+/**
+ * Cập nhật kết quả thực tế cho tất cả dự đoán
+ */
+exports.updateActualResults = async (req, res) => {
+    try {
+        console.log('🔄 [Controller] Cập nhật kết quả thực tế cho tất cả dự đoán...');
+        
+        const allResults = await Result.find().lean();
+        const predictions = await TripleGroupPrediction.find({ 
+            $or: [
+                { 'actualResult': { $exists: false } },
+                { 'actualResult': null }
+            ]
+        }).lean();
+
+        console.log(`📝 [Controller] Tìm thấy ${predictions.length} dự đoán cần cập nhật`);
+
+        let updatedCount = 0;
+        let errorCount = 0;
+
+        for (const prediction of predictions) {
+            try {
+                const result = allResults.find(r => r.ngay === prediction.ngayDuDoan && r.giai === 'ĐB');
+                
+                if (result?.so) {
+                    const gdbStr = String(result.so).padStart(5, '0');
+                    const lastThree = gdbStr.slice(-3);
+                    
+                    if (lastThree.length === 3) {
+                        const isCorrect = 
+                            Array.isArray(prediction.topTram) && prediction.topTram.includes(lastThree[0]) &&
+                            Array.isArray(prediction.topChuc) && prediction.topChuc.includes(lastThree[1]) &&
+                            Array.isArray(prediction.topDonVi) && prediction.topDonVi.includes(lastThree[2]);
+
+                        await TripleGroupPrediction.updateOne(
+                            { _id: prediction._id },
+                            {
+                                actualResult: {
+                                    tram: lastThree[0],
+                                    chuc: lastThree[1],
+                                    donvi: lastThree[2],
+                                    isCorrect: isCorrect,
+                                    updatedAt: new Date()
+                                }
+                            }
+                        );
+                        updatedCount++;
+                        
+                        if (updatedCount % 10 === 0) {
+                            console.log(`📊 [Controller] Đã cập nhật ${updatedCount} dự đoán...`);
+                        }
+                    }
+                }
+            } catch (error) {
+                console.error(`❌ [Controller] Lỗi cập nhật cho ${prediction.ngayDuDoan}:`, error.message);
+                errorCount++;
+            }
+        }
+
+        console.log(`✅ [Controller] Hoàn thành cập nhật: ${updatedCount} thành công, ${errorCount} lỗi`);
+
+        res.json({
+            success: true,
+            message: `Đã cập nhật ${updatedCount} kết quả thực tế`,
+            stats: {
+                updated: updatedCount,
+                errors: errorCount,
+                totalProcessed: predictions.length
+            },
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        console.error('❌ [Controller] Lỗi updateActualResults:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Lỗi khi cập nhật kết quả thực tế: ' + error.message,
+            timestamp: new Date().toISOString()
+        });
+    }
+};
+
+/**
+ * Học từ lịch sử dự đoán
+ */
+exports.learnFromHistory = async (req, res) => {
+    try {
+        console.log('🧠 [Controller] Bắt đầu học từ lịch sử...');
+        
+        const result = await tripleGroupService.learnFromOwnHistory();
+        
+        res.json({
+            success: true,
+            message: `Đã học từ ${result.updated} dự đoán trong lịch sử`,
+            learned: result.updated,
+            total: result.total,
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        console.error('❌ [Controller] Lỗi learnFromHistory:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Lỗi khi học từ lịch sử: ' + error.message,
+            timestamp: new Date().toISOString()
+        });
+    }
+};
+
+/**
+ * Lấy thống kê độ chính xác
+ */
+exports.getAccuracyStats = async (req, res) => {
+    try {
+        console.log('📊 [Controller] Lấy thống kê độ chính xác...');
+        
+        const predictionsWithResults = await TripleGroupPrediction.find({
+            'actualResult': { $exists: true }
+        }).lean();
+
+        const total = predictionsWithResults.length;
+        const correct = predictionsWithResults.filter(p => p.actualResult.isCorrect).length;
+        const accuracy = total > 0 ? (correct / total) * 100 : 0;
+
+        // Thống kê theo tháng
+        const monthlyStats = {};
+        predictionsWithResults.forEach(pred => {
+            const [day, month, year] = pred.ngayDuDoan.split('/');
+            const monthYear = `${month}/${year}`;
+            
+            if (!monthlyStats[monthYear]) {
+                monthlyStats[monthYear] = { total: 0, correct: 0 };
+            }
+            
+            monthlyStats[monthYear].total++;
+            if (pred.actualResult.isCorrect) {
+                monthlyStats[monthYear].correct++;
+            }
+        });
+
+        // Tính độ chính xác theo từng tháng
+        Object.keys(monthlyStats).forEach(month => {
+            const stats = monthlyStats[month];
+            stats.accuracy = stats.total > 0 ? (stats.correct / stats.total) * 100 : 0;
+        });
+
+        // Thống kê theo độ tin cậy
+        const confidenceStats = {};
+        predictionsWithResults.forEach(pred => {
+            const confidenceLevel = Math.floor((pred.confidence || 50) / 10) * 10;
+            
+            if (!confidenceStats[confidenceLevel]) {
+                confidenceStats[confidenceLevel] = { total: 0, correct: 0 };
+            }
+            
+            confidenceStats[confidenceLevel].total++;
+            if (pred.actualResult.isCorrect) {
+                confidenceStats[confidenceLevel].correct++;
+            }
+        });
+
+        // Tính độ chính xác theo confidence
+        Object.keys(confidenceStats).forEach(level => {
+            const stats = confidenceStats[level];
+            stats.accuracy = stats.total > 0 ? (stats.correct / stats.total) * 100 : 0;
+        });
+
+        res.json({
+            success: true,
+            stats: {
+                overall: {
+                    total: total,
+                    correct: correct,
+                    accuracy: Math.round(accuracy * 100) / 100
+                },
+                monthly: monthlyStats,
+                byConfidence: confidenceStats
+            },
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        console.error('❌ [Controller] Lỗi getAccuracyStats:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Lỗi khi lấy thống kê độ chính xác: ' + error.message,
+            timestamp: new Date().toISOString()
+        });
+    }
+};
+
+/**
+ * Lấy thống kê học tập
+ */
+exports.getLearningStats = async (req, res) => {
+    try {
+        console.log('📈 [Controller] Lấy thống kê học tập...');
+        
+        const stats = await tripleGroupService.analyzeHistoricalPerformance();
+        
+        res.json({
+            success: true,
+            stats: stats,
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        console.error('❌ [Controller] Lỗi getLearningStats:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Lỗi khi lấy thống kê học tập: ' + error.message,
+            timestamp: new Date().toISOString()
+        });
+    }
+};
+
+/**
+ * Lấy danh sách các ngày có dự đoán
+ */
 exports.getAvailableDates = async (req, res) => {
     try {
-        const dates = await tripleGroupService.getAvailableDates();
+        console.log('📅 [Controller] Lấy danh sách ngày có dự đoán...');
         
+        const predictions = await TripleGroupPrediction.find({})
+            .sort({ ngayDuDoan: -1 })
+            .select('ngayDuDoan')
+            .lean();
+
+        const dates = [...new Set(predictions.map(p => p.ngayDuDoan))].sort((a, b) => {
+            const dateA = new Date(a.split('/').reverse().join('-'));
+            const dateB = new Date(b.split('/').reverse().join('-'));
+            return dateB - dateA;
+        });
+
         res.json({
             success: true,
-            dates: dates
+            dates: dates,
+            total: dates.length,
+            timestamp: new Date().toISOString()
         });
     } catch (error) {
-        console.error('❌ Lỗi getAvailableDates:', error);
+        console.error('❌ [Controller] Lỗi getAvailableDates:', error);
         res.status(500).json({
             success: false,
-            message: 'Lỗi khi lấy danh sách ngày'
+            message: 'Lỗi khi lấy danh sách ngày: ' + error.message,
+            timestamp: new Date().toISOString()
         });
     }
 };
+
+/**
+ * Xóa dự đoán theo ngày (chức năng admin)
+ */
+exports.deletePrediction = async (req, res) => {
+    try {
+        const { date } = req.body;
+        
+        if (!date) {
+            return res.status(400).json({
+                success: false,
+                message: 'Thiếu tham số date',
+                timestamp: new Date().toISOString()
+            });
+        }
+
+        console.log(`🗑️ [Controller] Xóa dự đoán cho ngày: ${date}`);
+        
+        const result = await TripleGroupPrediction.deleteOne({ ngayDuDoan: date });
+        
+        if (result.deletedCount === 0) {
+            return res.status(404).json({
+                success: false,
+                message: `Không tìm thấy dự đoán cho ngày ${date} để xóa`,
+                timestamp: new Date().toISOString()
+            });
+        }
+
+        res.json({
+            success: true,
+            message: `Đã xóa dự đoán cho ngày ${date}`,
+            deletedCount: result.deletedCount,
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        console.error('❌ [Controller] Lỗi deletePrediction:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Lỗi khi xóa dự đoán: ' + error.message,
+            timestamp: new Date().toISOString()
+        });
+    }
+};
+
+/**
+ * Xóa tất cả dự đoán (chức năng admin - reset)
+ */
+exports.deleteAllPredictions = async (req, res) => {
+    try {
+        console.log('⚠️ [Controller] XÓA TẤT CẢ dự đoán...');
+        
+        const result = await TripleGroupPrediction.deleteMany({});
+        
+        console.log(`✅ [Controller] Đã xóa ${result.deletedCount} dự đoán`);
+
+        res.json({
+            success: true,
+            message: `Đã xóa toàn bộ ${result.deletedCount} dự đoán`,
+            deletedCount: result.deletedCount,
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        console.error('❌ [Controller] Lỗi deleteAllPredictions:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Lỗi khi xóa tất cả dự đoán: ' + error.message,
+            timestamp: new Date().toISOString()
+        });
+    }
+};
+
+/**
+ * Lấy thông tin hệ thống
+ */
+exports.getSystemInfo = async (req, res) => {
+    try {
+        console.log('ℹ️ [Controller] Lấy thông tin hệ thống...');
+        
+        const totalPredictions = await TripleGroupPrediction.countDocuments();
+        const predictionsWithResults = await TripleGroupPrediction.countDocuments({ 
+            'actualResult': { $exists: true } 
+        });
+        const correctPredictions = await TripleGroupPrediction.countDocuments({ 
+            'actualResult.isCorrect': true 
+        });
+        
+        const latestPrediction = await TripleGroupPrediction.findOne()
+            .sort({ createdAt: -1 })
+            .select('ngayDuDoan createdAt')
+            .lean();
+
+        const accuracy = predictionsWithResults > 0 
+            ? (correctPredictions / predictionsWithResults * 100).toFixed(2)
+            : 0;
+
+        res.json({
+            success: true,
+            systemInfo: {
+                totalPredictions: totalPredictions,
+                predictionsWithResults: predictionsWithResults,
+                correctPredictions: correctPredictions,
+                overallAccuracy: parseFloat(accuracy),
+                latestPrediction: latestPrediction,
+                service: 'Triple Group Analysis',
+                version: '1.0.0',
+                lastUpdated: new Date().toISOString()
+            },
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        console.error('❌ [Controller] Lỗi getSystemInfo:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Lỗi khi lấy thông tin hệ thống: ' + error.message,
+            timestamp: new Date().toISOString()
+        });
+    }
+};
+
+/**
+ * Health check endpoint
+ */
+exports.healthCheck = async (req, res) => {
+    try {
+        // Kiểm tra kết nối database
+        const dbStatus = await TripleGroupPrediction.findOne().limit(1);
+        
+        res.json({
+            success: true,
+            status: 'healthy',
+            service: 'Triple Group Controller',
+            database: dbStatus ? 'connected' : 'no_data',
+            timestamp: new Date().toISOString(),
+            uptime: process.uptime()
+        });
+    } catch (error) {
+        console.error('❌ [Controller] Lỗi healthCheck:', error);
+        res.status(500).json({
+            success: false,
+            status: 'unhealthy',
+            message: 'Lỗi health check: ' + error.message,
+            timestamp: new Date().toISOString()
+        });
+    }
+};
+
+module.exports = exports;
