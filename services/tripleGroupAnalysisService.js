@@ -1,5 +1,6 @@
 // services/tripleGroupAnalysisService.js
 const Result = require('../models/Result');
+const TripleGroupPrediction = require('../models/TripleGroupPrediction');
 const { DateTime } = require('luxon');
 
 class TripleGroupAnalysisService {
@@ -371,6 +372,67 @@ class TripleGroupAnalysisService {
         const date = DateTime.fromFormat(dateStr, 'dd/MM/yyyy');
         return date.plus({ days: 1 }).toFormat('dd/MM/yyyy');
     }
+    async savePrediction(predictionData) {
+        try {
+            const predictionRecord = {
+                ngayDuDoan: predictionData.targetDate,
+                ngayPhanTich: predictionData.analysisDate,
+                topTram: predictionData.topTram || [],
+                topChuc: predictionData.topChuc || [],
+                topDonVi: predictionData.topDonVi || [],
+                filteredNumbers: predictionData.filteredNumbers || [],
+                analysisData: {
+                    totalGroups: predictionData.totalGroups,
+                    winningGroups: predictionData.winningGroups,
+                    successRate: predictionData.successRate,
+                    highWinPatterns: predictionData.highWinPatterns,
+                    filteredGroupsCount: predictionData.filteredGroupsCount
+                },
+                confidence: predictionData.confidence
+            };
+
+            await TripleGroupPrediction.findOneAndUpdate(
+                { ngayDuDoan: predictionData.targetDate },
+                predictionRecord,
+                { upsert: true, new: true }
+            );
+
+            console.log(`💾 Đã lưu dự đoán Triple Group cho ngày ${predictionData.targetDate}`);
+        } catch (error) {
+            console.error('❌ Lỗi khi lưu dự đoán:', error);
+        }
+    }
+
+    async updateActualResult(targetDate, actualGDB) {
+        try {
+            if (!actualGDB || actualGDB.length !== 3) return;
+
+            const prediction = await TripleGroupPrediction.findOne({ ngayDuDoan: targetDate });
+            if (!prediction) return;
+
+            const isCorrect = 
+                prediction.topTram.includes(actualGDB[0]) &&
+                prediction.topChuc.includes(actualGDB[1]) && 
+                prediction.topDonVi.includes(actualGDB[2]);
+
+            await TripleGroupPrediction.updateOne(
+                { ngayDuDoan: targetDate },
+                {
+                    actualResult: {
+                        tram: actualGDB[0],
+                        chuc: actualGDB[1],
+                        donvi: actualGDB[2],
+                        isCorrect: isCorrect
+                    }
+                }
+            );
+
+            console.log(`✅ Đã cập nhật kết quả thực cho ${targetDate}: ${isCorrect ? 'ĐÚNG' : 'SAI'}`);
+        } catch (error) {
+            console.error('❌ Lỗi cập nhật kết quả thực:', error);
+        }
+    }
+}
 }
 
 module.exports = TripleGroupAnalysisService;
