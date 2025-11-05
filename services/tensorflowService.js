@@ -20,76 +20,42 @@ class TensorFlowService {
     this.advancedFeatureEngineer = new AdvancedFeatureEngineer();
     this.advancedTrainer = new AdvancedTraining();
     this.inputNodes = 0;
+    this.ensembleModels = [];
   }
-  async runAdvancedTraining() {
-        console.log('🚀 Bắt đầu Advanced Training...');
-        
-        const trainingData = await this.prepareTrainingData();
-        
-        // Sử dụng ensemble learning + data augmentation
-        const result = await this.advancedTrainer.trainWithAdvancedStrategies(
-            trainingData, 
-            ['ensemble', 'augmentation']
-        );
-        
-        if (result.type === 'ensemble') {
-            this.ensembleModels = result.models;
-            console.log(`✅ Đã train ${result.models.length} models cho ensemble`);
-        } else {
-            this.model = result.model;
-            await this.saveModel();
-        }
-        
-        return {
-            message: 'Advanced training hoàn tất',
-            strategy: 'ensemble + augmentation',
-            modelsCount: result.models?.length || 1
-        };
-    }
 
-    async advancedPredict(inputSequence) {
-        if (this.ensembleModels && this.ensembleModels.length > 0) {
-            return await this.advancedTrainer.ensemblePredict(inputSequence);
-        } else {
-            return await this.predict(inputSequence);
-        }
-    }
-}
-  
   async runAdvancedTraining() {
-        console.log('🚀 Bắt đầu Advanced Training...');
-        
-        const trainingData = await this.prepareTrainingData();
-        
-        // Sử dụng ensemble learning + data augmentation
-        const result = await this.advancedTrainer.trainWithAdvancedStrategies(
-            trainingData, 
-            ['ensemble', 'augmentation']
-        );
-        
-        if (result.type === 'ensemble') {
-            this.ensembleModels = result.models;
-            console.log(`✅ Đã train ${result.models.length} models cho ensemble`);
-        } else {
-            this.model = result.model;
-            await this.saveModel();
-        }
-        
-        return {
-            message: 'Advanced training hoàn tất',
-            strategy: 'ensemble + augmentation',
-            modelsCount: result.models?.length || 1
-        };
+    console.log('🚀 Bắt đầu Advanced Training...');
+    
+    const trainingData = await this.prepareTrainingData();
+    
+    // Sử dụng ensemble learning + data augmentation
+    const result = await this.advancedTrainer.trainWithAdvancedStrategies(
+      trainingData, 
+      ['ensemble', 'augmentation']
+    );
+    
+    if (result.type === 'ensemble') {
+      this.ensembleModels = result.models;
+      console.log(`✅ Đã train ${result.models.length} models cho ensemble`);
+    } else {
+      this.model = result.model;
+      await this.saveModel();
     }
+    
+    return {
+      message: 'Advanced training hoàn tất',
+      strategy: 'ensemble + augmentation',
+      modelsCount: result.models?.length || 1
+    };
+  }
 
-    async advancedPredict(inputSequence) {
-        if (this.ensembleModels && this.ensembleModels.length > 0) {
-            return await this.advancedTrainer.ensemblePredict(inputSequence);
-        } else {
-            return await this.predict(inputSequence);
-        }
+  async advancedPredict(inputSequence) {
+    if (this.ensembleModels && this.ensembleModels.length > 0) {
+      return await this.advancedTrainer.ensemblePredict(inputSequence);
+    } else {
+      return await this.predict(inputSequence);
     }
-}
+  }
 
   async buildModel(inputNodes) {
     console.log(`🏗️ Xây dựng model với ${inputNodes} features...`);
@@ -99,32 +65,32 @@ class TensorFlowService {
 
     // LỚP ĐẦU TIÊN: GIẢM ĐƠN GIẢN HÓA
     model.add(tf.layers.lstm({
-        units: 32,  // GIẢM XUỐNG 32
-        returnSequences: false, // KHÔNG return sequences để giảm độ phức tạp
-        inputShape: [SEQUENCE_LENGTH, inputNodes],
-        kernelInitializer: 'glorotNormal', // Initializer ổn định hơn
-        recurrentInitializer: 'orthogonal',
-        kernelRegularizer: tf.regularizers.l2({l2: 0.001}), // Giảm regularization
-        recurrentRegularizer: tf.regularizers.l2({l2: 0.001}),
-        // THÊM gradient clipping ở cấp độ layer
-        kernelConstraint: tf.constraints.maxNorm({maxValue: 1}),
-        recurrentConstraint: tf.constraints.maxNorm({maxValue: 1})
+      units: 32,  // GIẢM XUỐNG 32
+      returnSequences: false, // KHÔNG return sequences để giảm độ phức tạp
+      inputShape: [SEQUENCE_LENGTH, inputNodes],
+      kernelInitializer: 'glorotNormal', // Initializer ổn định hơn
+      recurrentInitializer: 'orthogonal',
+      kernelRegularizer: tf.regularizers.l2({l2: 0.001}), // Giảm regularization
+      recurrentRegularizer: tf.regularizers.l2({l2: 0.001}),
+      // THÊM gradient clipping ở cấp độ layer
+      kernelConstraint: tf.constraints.maxNorm({maxValue: 1}),
+      recurrentConstraint: tf.constraints.maxNorm({maxValue: 1})
     }));
 
     model.add(tf.layers.batchNormalization());
     model.add(tf.layers.dropout({rate: 0.2})); // Giảm dropout
     
     model.add(tf.layers.dense({
-        units: 16,  // GIẢM XUỐNG 16
-        activation: 'relu',
-        kernelInitializer: 'glorotNormal',
-        kernelRegularizer: tf.regularizers.l2({l2: 0.001})
+      units: 16,  // GIẢM XUỐNG 16
+      activation: 'relu',
+      kernelInitializer: 'glorotNormal',
+      kernelRegularizer: tf.regularizers.l2({l2: 0.001})
     }));
 
     model.add(tf.layers.dense({
-        units: OUTPUT_NODES,
-        activation: 'sigmoid',
-        kernelInitializer: 'glorotNormal'
+      units: OUTPUT_NODES,
+      activation: 'sigmoid',
+      kernelInitializer: 'glorotNormal'
     }));
     
     model.summary();
@@ -133,14 +99,14 @@ class TensorFlowService {
     const optimizer = tf.train.adam(0.0005); // Learning rate nhỏ hơn
     
     model.compile({
-    optimizer: tf.train.adam(0.0005),
-    loss: 'meanSquaredError', // THỬ HÀM LOSS KHÁC
-    metrics: []
-});
+      optimizer: tf.train.adam(0.0005),
+      loss: 'meanSquaredError', // THỬ HÀM LOSS KHÁC
+      metrics: []
+    });
 
     this.model = model;
     return this.model;
-}
+  }
 
   async trainModel(trainingData) {
     const { inputs, targets } = trainingData;
@@ -157,37 +123,37 @@ class TensorFlowService {
     
     // CẬP NHẬT OPTIMIZER CHO MODEL
     this.model.compile({
-        optimizer: optimizer,
-        loss: 'binaryCrossentropy',
-        metrics: []
+      optimizer: optimizer,
+      loss: 'binaryCrossentropy',
+      metrics: []
     });
 
     const history = await this.model.fit(inputTensor, targetTensor, {
-        epochs: EPOCHS,
-        batchSize: Math.min(BATCH_SIZE, inputs.length), // Đảm bảo batch size không quá lớn
-        validationSplit: 0.1,
-        callbacks: {
-            onEpochEnd: (epoch, logs) => {
-                if (isNaN(logs.loss)) {
-                    console.error('❌ NaN loss detected! Stopping training.');
-                    this.model.stopTraining = true;
-                    console.log('📊 Debug info:', {
-                        epoch,
-                        inputShape: inputTensor.shape,
-                        targetShape: targetTensor.shape
-                    });
-                } else {
-                    console.log(`Epoch ${epoch + 1}: Loss = ${logs.loss.toFixed(4)}`);
-                }
-            }
+      epochs: EPOCHS,
+      batchSize: Math.min(BATCH_SIZE, inputs.length), // Đảm bảo batch size không quá lớn
+      validationSplit: 0.1,
+      callbacks: {
+        onEpochEnd: (epoch, logs) => {
+          if (isNaN(logs.loss)) {
+            console.error('❌ NaN loss detected! Stopping training.');
+            this.model.stopTraining = true;
+            console.log('📊 Debug info:', {
+              epoch,
+              inputShape: inputTensor.shape,
+              targetShape: targetTensor.shape
+            });
+          } else {
+            console.log(`Epoch ${epoch + 1}: Loss = ${logs.loss.toFixed(4)}`);
+          }
         }
+      }
     });
 
     inputTensor.dispose();
     targetTensor.dispose();
 
     return history;
-}
+  }
 
   async predict(inputSequence) {
     const inputTensor = tf.tensor3d([inputSequence], [1, SEQUENCE_LENGTH, this.inputNodes]);
@@ -321,7 +287,8 @@ class TensorFlowService {
     }
 
     return trainingData;
-}
+  }
+
   dateKey(s) {
     if (!s || typeof s !== 'string') return '';
     const parts = s.split('/');
@@ -329,61 +296,62 @@ class TensorFlowService {
   }
 
   async saveModel() {
-  if (!this.model) {
-    throw new Error('No model to save');
-  }
+    if (!this.model) {
+      throw new Error('No model to save');
+    }
 
-  const modelInfo = {
-    modelName: NN_MODEL_NAME,
-    inputNodes: this.inputNodes,
-    savedAt: new Date().toISOString()
-  };
+    const modelInfo = {
+      modelName: NN_MODEL_NAME,
+      inputNodes: this.inputNodes,
+      savedAt: new Date().toISOString()
+    };
 
-  try {
-    // Lưu model ra file
-    const saveResult = await this.model.save('file://./models/tfjs_model');
-    console.log('💾 Model đã được lưu ra file');
-    
-    // Lưu thông tin vào database
-    await NNState.findOneAndUpdate(
-      { modelName: NN_MODEL_NAME },
-      { 
-        state: modelInfo,
-        modelArtifacts: saveResult 
-      },
-      { upsert: true, new: true }
-    );
-    
-    console.log(`💾 TensorFlow model saved với ${this.inputNodes} input nodes`);
-  } catch (error) {
-    console.error('❌ Lỗi khi save model:', error);
-    throw error;
+    try {
+      // Lưu model ra file
+      const saveResult = await this.model.save('file://./models/tfjs_model');
+      console.log('💾 Model đã được lưu ra file');
+      
+      // Lưu thông tin vào database
+      await NNState.findOneAndUpdate(
+        { modelName: NN_MODEL_NAME },
+        { 
+          state: modelInfo,
+          modelArtifacts: saveResult 
+        },
+        { upsert: true, new: true }
+      );
+      
+      console.log(`💾 TensorFlow model saved với ${this.inputNodes} input nodes`);
+    } catch (error) {
+      console.error('❌ Lỗi khi save model:', error);
+      throw error;
+    }
   }
-}
 
   async loadModel() {
-  console.log('🔍 [LoadModel] Đang tìm model trong database...');
-  const modelState = await NNState.findOne({ modelName: NN_MODEL_NAME });
-  
-  if (modelState && modelState.modelArtifacts) {
-    console.log('✅ [LoadModel] Đã tìm thấy model state trong database');
-    try {
-      this.model = await tf.loadLayersModel('file://./models/tfjs_model/model.json');
-      this.inputNodes = modelState.state.inputNodes;
-      console.log(`✅ TensorFlow model loaded với ${this.inputNodes} input nodes`);
-      return true;
-    } catch (error) {
-      console.error('❌ [LoadModel] Lỗi khi load model từ file:', error.message);
+    console.log('🔍 [LoadModel] Đang tìm model trong database...');
+    const modelState = await NNState.findOne({ modelName: NN_MODEL_NAME });
+    
+    if (modelState && modelState.modelArtifacts) {
+      console.log('✅ [LoadModel] Đã tìm thấy model state trong database');
+      try {
+        this.model = await tf.loadLayersModel('file://./models/tfjs_model/model.json');
+        this.inputNodes = modelState.state.inputNodes;
+        console.log(`✅ TensorFlow model loaded với ${this.inputNodes} input nodes`);
+        return true;
+      } catch (error) {
+        console.error('❌ [LoadModel] Lỗi khi load model từ file:', error.message);
+        return false;
+      }
+    } else {
+      console.log('❌ [LoadModel] Không tìm thấy model trong database:', {
+        modelStateExists: !!modelState,
+        hasArtifacts: !!(modelState && modelState.modelArtifacts)
+      });
       return false;
     }
-  } else {
-    console.log('❌ [LoadModel] Không tìm thấy model trong database:', {
-      modelStateExists: !!modelState,
-      hasArtifacts: !!(modelState && modelState.modelArtifacts)
-    });
-    return false;
   }
-}
+
   async runHistoricalTraining() {
     console.log('🔔 [TensorFlow Service] Bắt đầu Huấn luyện Lịch sử với kiến trúc Premium...');
    
@@ -419,121 +387,121 @@ class TensorFlowService {
   }
 
   async runLearning() {
-  console.log('🔔 [TensorFlow Service] Learning from new results...');
-  
-  if (!this.model) {
-    const modelLoaded = await this.loadModel();
-    if (!modelLoaded) {
-      throw new Error('Model chưa được huấn luyện. Hãy chạy huấn luyện lịch sử trước.');
-    }
-  }
-
-  // Lấy các dự đoán chưa được học
-  const predictionsToLearn = await NNPrediction.find({ danhDauDaSo: false }).lean();
-  if (predictionsToLearn.length === 0) {
-    return { message: 'Không có dự đoán mới nào để học.' };
-  }
-
-  const results = await Result.find().sort({ 'ngay': 1 }).lean();
-  const grouped = {};
-  results.forEach(r => {
-    if (!grouped[r.ngay]) grouped[r.ngay] = [];
-    grouped[r.ngay].push(r);
-  });
-
-  const days = Object.keys(grouped).sort((a, b) => this.dateKey(a).localeCompare(this.dateKey(b)));
-  
-  let learnedCount = 0;
-  const trainingData = [];
-
-  for (const pred of predictionsToLearn) {
-    const targetDayStr = pred.ngayDuDoan;
-    const targetDayIndex = days.indexOf(targetDayStr);
-
-    if (targetDayIndex >= SEQUENCE_LENGTH) {
-      const actualResult = (grouped[targetDayStr] || []).find(r => r.giai === 'ĐB');
-      
-      if (actualResult?.so && String(actualResult.so).length >= 5) {
-        // Lấy chuỗi input - SỬA TƯƠNG TỰ NHƯ TRONG runNextDayPrediction
-        const sequenceDays = days.slice(targetDayIndex - SEQUENCE_LENGTH, targetDayIndex);
-        const previousDays = [];
-        const inputSequence = sequenceDays.map(day => {
-          const dayResults = grouped[day] || [];
-          const prevDays = previousDays.slice();
-          previousDays.push(dayResults);
-          
-          // SỬA: KẾT HỢP CẢ BASIC VÀ ADVANCED FEATURES
-          const basicFeatures = this.featureService.extractAllFeatures(dayResults, prevDays, day);
-          const advancedFeatures = this.advancedFeatureEngineer.extractPremiumFeatures(dayResults, prevDays);
-          
-          let finalFeatureVector = [...basicFeatures, ...Object.values(advancedFeatures).flat()];
-          
-          // DEBUG: Kiểm tra kích thước
-          console.log(`📊 [Learning] Ngày ${day}: Basic=${basicFeatures.length}, Advanced=${Object.values(advancedFeatures).flat().length}, Total=${finalFeatureVector.length}`);
-          
-          // ĐẢM BẢO ĐÚNG 346 FEATURES
-          const EXPECTED_SIZE = 346;
-          if (finalFeatureVector.length !== EXPECTED_SIZE) {
-            console.warn(`⚠️ Điều chỉnh features: ${finalFeatureVector.length} -> ${EXPECTED_SIZE}`);
-            if (finalFeatureVector.length > EXPECTED_SIZE) {
-              finalFeatureVector = finalFeatureVector.slice(0, EXPECTED_SIZE);
-            } else {
-              finalFeatureVector = [...finalFeatureVector, ...Array(EXPECTED_SIZE - finalFeatureVector.length).fill(0)];
-            }
-          }
-          
-          return finalFeatureVector;
-        });
-
-        // KIỂM TRA TỔNG QUÁT
-        const totalValues = inputSequence.flat().length;
-        const expectedValues = SEQUENCE_LENGTH * 346;
-        console.log(`🔢 [Learning] Tổng số values: ${totalValues}, Expected: ${expectedValues}`);
-        
-        if (totalValues !== expectedValues) {
-          console.error(`❌ [Learning] Lỗi dimension: có ${totalValues} values, cần ${expectedValues} values`);
-          continue; // Bỏ qua chuỗi này thay vì crash
-        }
-
-        // Lấy target
-        const targetGDBString = String(actualResult.so).padStart(5, '0');
-        const targetArray = this.prepareTarget(targetGDBString);
-        
-        trainingData.push({ inputSequence, targetArray });
-        learnedCount++;
+    console.log('🔔 [TensorFlow Service] Learning from new results...');
+    
+    if (!this.model) {
+      const modelLoaded = await this.loadModel();
+      if (!modelLoaded) {
+        throw new Error('Model chưa được huấn luyện. Hãy chạy huấn luyện lịch sử trước.');
       }
     }
-    // Đánh dấu đã học
-    await NNPrediction.updateOne({ _id: pred._id }, { danhDauDaSo: true });
-  }
 
-  if (trainingData.length > 0) {
-    console.log(`🎯 [Learning] Bắt đầu học từ ${trainingData.length} chuỗi dữ liệu mới`);
-    
-    const inputs = trainingData.map(d => d.inputSequence);
-    const targets = trainingData.map(d => d.targetArray);
+    // Lấy các dự đoán chưa được học
+    const predictionsToLearn = await NNPrediction.find({ danhDauDaSo: false }).lean();
+    if (predictionsToLearn.length === 0) {
+      return { message: 'Không có dự đoán mới nào để học.' };
+    }
 
-    // Huấn luyện thêm với dữ liệu mới
-    const inputTensor = tf.tensor3d(inputs, [inputs.length, SEQUENCE_LENGTH, this.inputNodes]);
-    const targetTensor = tf.tensor2d(targets, [targets.length, OUTPUT_NODES]);
-
-    await this.model.fit(inputTensor, targetTensor, {
-      epochs: 3, // Số epoch ít hơn để học nhanh
-      batchSize: Math.min(BATCH_SIZE, inputs.length),
-      validationSplit: 0.1
+    const results = await Result.find().sort({ 'ngay': 1 }).lean();
+    const grouped = {};
+    results.forEach(r => {
+      if (!grouped[r.ngay]) grouped[r.ngay] = [];
+      grouped[r.ngay].push(r);
     });
 
-    inputTensor.dispose();
-    targetTensor.dispose();
+    const days = Object.keys(grouped).sort((a, b) => this.dateKey(a).localeCompare(this.dateKey(b)));
+    
+    let learnedCount = 0;
+    const trainingData = [];
 
-    await this.saveModel();
-    console.log(`✅ [Learning] Đã học xong từ ${learnedCount} kết quả mới`);
-  } else {
-    console.log('ℹ️ [Learning] Không có dữ liệu training hợp lệ để học');
+    for (const pred of predictionsToLearn) {
+      const targetDayStr = pred.ngayDuDoan;
+      const targetDayIndex = days.indexOf(targetDayStr);
+
+      if (targetDayIndex >= SEQUENCE_LENGTH) {
+        const actualResult = (grouped[targetDayStr] || []).find(r => r.giai === 'ĐB');
+        
+        if (actualResult?.so && String(actualResult.so).length >= 5) {
+          // Lấy chuỗi input - SỬA TƯƠNG TỰ NHƯ TRONG runNextDayPrediction
+          const sequenceDays = days.slice(targetDayIndex - SEQUENCE_LENGTH, targetDayIndex);
+          const previousDays = [];
+          const inputSequence = sequenceDays.map(day => {
+            const dayResults = grouped[day] || [];
+            const prevDays = previousDays.slice();
+            previousDays.push(dayResults);
+            
+            // SỬA: KẾT HỢP CẢ BASIC VÀ ADVANCED FEATURES
+            const basicFeatures = this.featureService.extractAllFeatures(dayResults, prevDays, day);
+            const advancedFeatures = this.advancedFeatureEngineer.extractPremiumFeatures(dayResults, prevDays);
+            
+            let finalFeatureVector = [...basicFeatures, ...Object.values(advancedFeatures).flat()];
+            
+            // DEBUG: Kiểm tra kích thước
+            console.log(`📊 [Learning] Ngày ${day}: Basic=${basicFeatures.length}, Advanced=${Object.values(advancedFeatures).flat().length}, Total=${finalFeatureVector.length}`);
+            
+            // ĐẢM BẢO ĐÚNG 346 FEATURES
+            const EXPECTED_SIZE = 346;
+            if (finalFeatureVector.length !== EXPECTED_SIZE) {
+              console.warn(`⚠️ Điều chỉnh features: ${finalFeatureVector.length} -> ${EXPECTED_SIZE}`);
+              if (finalFeatureVector.length > EXPECTED_SIZE) {
+                finalFeatureVector = finalFeatureVector.slice(0, EXPECTED_SIZE);
+              } else {
+                finalFeatureVector = [...finalFeatureVector, ...Array(EXPECTED_SIZE - finalFeatureVector.length).fill(0)];
+              }
+            }
+            
+            return finalFeatureVector;
+          });
+
+          // KIỂM TRA TỔNG QUÁT
+          const totalValues = inputSequence.flat().length;
+          const expectedValues = SEQUENCE_LENGTH * 346;
+          console.log(`🔢 [Learning] Tổng số values: ${totalValues}, Expected: ${expectedValues}`);
+          
+          if (totalValues !== expectedValues) {
+            console.error(`❌ [Learning] Lỗi dimension: có ${totalValues} values, cần ${expectedValues} values`);
+            continue; // Bỏ qua chuỗi này thay vì crash
+          }
+
+          // Lấy target
+          const targetGDBString = String(actualResult.so).padStart(5, '0');
+          const targetArray = this.prepareTarget(targetGDBString);
+          
+          trainingData.push({ inputSequence, targetArray });
+          learnedCount++;
+        }
+      }
+      // Đánh dấu đã học
+      await NNPrediction.updateOne({ _id: pred._id }, { danhDauDaSo: true });
+    }
+
+    if (trainingData.length > 0) {
+      console.log(`🎯 [Learning] Bắt đầu học từ ${trainingData.length} chuỗi dữ liệu mới`);
+      
+      const inputs = trainingData.map(d => d.inputSequence);
+      const targets = trainingData.map(d => d.targetArray);
+
+      // Huấn luyện thêm với dữ liệu mới
+      const inputTensor = tf.tensor3d(inputs, [inputs.length, SEQUENCE_LENGTH, this.inputNodes]);
+      const targetTensor = tf.tensor2d(targets, [targets.length, OUTPUT_NODES]);
+
+      await this.model.fit(inputTensor, targetTensor, {
+        epochs: 3, // Số epoch ít hơn để học nhanh
+        batchSize: Math.min(BATCH_SIZE, inputs.length),
+        validationSplit: 0.1
+      });
+
+      inputTensor.dispose();
+      targetTensor.dispose();
+
+      await this.saveModel();
+      console.log(`✅ [Learning] Đã học xong từ ${learnedCount} kết quả mới`);
+    } else {
+      console.log('ℹ️ [Learning] Không có dữ liệu training hợp lệ để học');
+    }
+    
+    return { message: `TensorFlow LSTM đã học xong. Đã xử lý ${learnedCount} kết quả mới.` };
   }
-  
-  return { message: `TensorFlow LSTM đã học xong. Đã xử lý ${learnedCount} kết quả mới.` };
-}
 
   async runNextDayPrediction() {
     console.log('🔔 [TensorFlow Service] Generating next day prediction...');
@@ -615,7 +583,7 @@ class TensorFlowService {
       message: `TensorFlow LSTM đã tạo dự đoán cho ngày ${nextDayStr}.`,
       ngayDuDoan: nextDayStr
     };
-}
+  }
 
   decodeOutput(output) {
     const prediction = { pos1: [], pos2: [], pos3: [], pos4: [], pos5: [] };
