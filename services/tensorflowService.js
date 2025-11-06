@@ -8,12 +8,20 @@ const AdvancedTraining = require('./advancedTrainingService');
 const { Storage } = require('@google-cloud/storage');
 const { DateTime } = require('luxon');
 
+// =================================================================
+// SỬA LỖI DUY NHẤT TẠI ĐÂY:
+// Di chuyển việc khai báo và đọc biến môi trường lên ĐẦU TIÊN
+// để chúng có thể được truy cập bởi các hàm và biến khác.
+// =================================================================
+const gcsCredentialsJSON = process.env.GCS_CREDENTIALS;
+const bucketName = process.env.GCS_BUCKET_NAME;
+
 let storage;
 let bucket;
 
-if (gcsCredentials && bucketName) {
+if (gcsCredentialsJSON && bucketName) {
     try {
-        const credentials = JSON.parse(gcsCredentials);
+        const credentials = JSON.parse(gcsCredentialsJSON);
         storage = new Storage({ credentials, projectId: credentials.project_id });
         bucket = storage.bucket(bucketName);
         console.log(`✅ [GCS] Đã khởi tạo Google Cloud Storage thành công cho bucket: ${bucketName}`);
@@ -24,6 +32,10 @@ if (gcsCredentials && bucketName) {
 } else {
     console.warn("⚠️ [GCS] Cảnh báo: GCS_CREDENTIALS hoặc GCS_BUCKET_NAME chưa được thiết lập.");
 }
+// =================================================================
+// KẾT THÚC PHẦN SỬA LỖI
+// =================================================================
+
 const NN_MODEL_NAME = 'GDB_LSTM_TFJS_PREMIUM_V1';
 const SEQUENCE_LENGTH = 7;
 const OUTPUT_NODES = 50;
@@ -46,10 +58,8 @@ const getGcsIoHandler = (modelPath) => {
         save: async (modelArtifacts) => {
             console.log(`...[GCS IO] Bắt đầu upload model lên: ${modelPath}`);
             
-            // Chuyển trọng số từ ArrayBuffer sang Buffer của Node.js
             const weightsBuffer = Buffer.from(modelArtifacts.weightData);
 
-            // Upload 2 file song song
             await Promise.all([
                 bucket.file(modelJsonPath).save(JSON.stringify(modelArtifacts.modelTopology)),
                 bucket.file(weightsBinPath).save(weightsBuffer)
@@ -65,7 +75,6 @@ const getGcsIoHandler = (modelPath) => {
         load: async () => {
             console.log(`...[GCS IO] Bắt đầu download model từ: ${modelPath}`);
 
-            // Download 2 file song song
             const [modelJsonFile, weightsBinFile] = await Promise.all([
                 bucket.file(modelJsonPath).download(),
                 bucket.file(weightsBinPath).download()
@@ -336,7 +345,6 @@ class TensorFlowService {
       console.log(`- Kích thước input sequence: ${trainingData[0].inputSequence.length}`);
       console.log(`- Kích thước feature vector: ${trainingData[0].inputSequence[0].length}`);
       
-      // Kiểm tra mẫu đơn giản
       const sampleFeatures = trainingData[0].inputSequence.flat();
       const sampleTargets = trainingData[0].targetArray;
       
@@ -368,28 +376,24 @@ class TensorFlowService {
 
         console.log(`💾 [SaveModel] Chuẩn bị lưu model lên GCS...`);
         
-        // 1. Xác định đường dẫn lưu trên GCS
         const modelGcsPath = `models/${NN_MODEL_NAME}`;
         
-        // 2. Tạo handler tùy chỉnh
         const ioHandler = getGcsIoHandler(modelGcsPath);
 
-        // 3. Dùng save handler để lưu model
         const saveResult = await this.model.save(ioHandler);
 
-        // 4. Lưu thông tin metadata vào MongoDB
         const modelInfo = {
             modelName: NN_MODEL_NAME,
             inputNodes: this.inputNodes,
             savedAt: new Date().toISOString(),
-            gcsPath: `gs://${bucketName}/${modelGcsPath}` // Lưu đường dẫn thư mục model
+            gcsPath: `gs://${bucketName}/${modelGcsPath}`
         };
 
         await NNState.findOneAndUpdate(
             { modelName: NN_MODEL_NAME },
             { 
                 state: modelInfo,
-                modelArtifacts: saveResult // Lưu thông tin trả về từ lệnh save
+                modelArtifacts: saveResult
             },
             { upsert: true, new: true }
         );
@@ -403,14 +407,11 @@ class TensorFlowService {
         const modelState = await NNState.findOne({ modelName: NN_MODEL_NAME }).lean();
         
         if (modelState && modelState.state && modelState.state.gcsPath) {
-            // Lấy đường dẫn thư mục model từ DB và loại bỏ phần tiền tố "gs://<bucket-name>/"
             const modelGcsPath = modelState.state.gcsPath.replace(`gs://${bucketName}/`, '');
 
             try {
-                // 1. Tạo handler tùy chỉnh để tải
                 const ioHandler = getGcsIoHandler(modelGcsPath);
                 
-                // 2. Dùng tf.loadLayersModel với handler
                 this.model = await tf.loadLayersModel(ioHandler);
                 this.inputNodes = modelState.state.inputNodes;
                 
@@ -471,7 +472,6 @@ class TensorFlowService {
       }
     }
 
-    // Lấy các dự đoán chưa được học
     const predictionsToLearn = await NNPrediction.find({ danhDauDaSo: false }).lean();
     if (predictionsToLearn.length === 0) {
       return { message: 'Không có dự đoán mới nào để học.' };
@@ -497,7 +497,6 @@ class TensorFlowService {
         const actualResult = (grouped[targetDayStr] || []).find(r => r.giai === 'ĐB');
         
         if (actualResult?.so && String(actualResult.so).length >= 5) {
-          // Lấy chuỗi input - SỬA TƯƠNG TỰ NHƯ TRONG runNextDayPrediction
           const sequenceDays = days.slice(targetDayIndex - SEQUENCE_LENGTH, targetDayIndex);
           const previousDays = [];
           const inputSequence = sequenceDays.map(day => {
@@ -505,16 +504,13 @@ class TensorFlowService {
             const prevDays = previousDays.slice();
             previousDays.push(dayResults);
             
-            // SỬA: KẾT HỢP CẢ BASIC VÀ ADVANCED FEATURES
             const basicFeatures = this.featureService.extractAllFeatures(dayResults, prevDays, day);
             const advancedFeatures = this.advancedFeatureEngineer.extractPremiumFeatures(dayResults, prevDays);
             
             let finalFeatureVector = [...basicFeatures, ...Object.values(advancedFeatures).flat()];
             
-            // DEBUG: Kiểm tra kích thước
             console.log(`📊 [Learning] Ngày ${day}: Basic=${basicFeatures.length}, Advanced=${Object.values(advancedFeatures).flat().length}, Total=${finalFeatureVector.length}`);
             
-            // ĐẢM BẢO ĐÚNG 346 FEATURES
             const EXPECTED_SIZE = 346;
             if (finalFeatureVector.length !== EXPECTED_SIZE) {
               console.warn(`⚠️ Điều chỉnh features: ${finalFeatureVector.length} -> ${EXPECTED_SIZE}`);
@@ -528,17 +524,15 @@ class TensorFlowService {
             return finalFeatureVector;
           });
 
-          // KIỂM TRA TỔNG QUÁT
           const totalValues = inputSequence.flat().length;
           const expectedValues = SEQUENCE_LENGTH * 346;
           console.log(`🔢 [Learning] Tổng số values: ${totalValues}, Expected: ${expectedValues}`);
           
           if (totalValues !== expectedValues) {
             console.error(`❌ [Learning] Lỗi dimension: có ${totalValues} values, cần ${expectedValues} values`);
-            continue; // Bỏ qua chuỗi này thay vì crash
+            continue;
           }
 
-          // Lấy target
           const targetGDBString = String(actualResult.so).padStart(5, '0');
           const targetArray = this.prepareTarget(targetGDBString);
           
@@ -546,7 +540,6 @@ class TensorFlowService {
           learnedCount++;
         }
       }
-      // Đánh dấu đã học
       await NNPrediction.updateOne({ _id: pred._id }, { danhDauDaSo: true });
     }
 
@@ -556,12 +549,11 @@ class TensorFlowService {
       const inputs = trainingData.map(d => d.inputSequence);
       const targets = trainingData.map(d => d.targetArray);
 
-      // Huấn luyện thêm với dữ liệu mới
       const inputTensor = tf.tensor3d(inputs, [inputs.length, SEQUENCE_LENGTH, this.inputNodes]);
       const targetTensor = tf.tensor2d(targets, [targets.length, OUTPUT_NODES]);
 
       await this.model.fit(inputTensor, targetTensor, {
-        epochs: 3, // Số epoch ít hơn để học nhanh
+        epochs: 3,
         batchSize: Math.min(BATCH_SIZE, inputs.length),
         validationSplit: 0.1
       });
@@ -610,16 +602,13 @@ class TensorFlowService {
       const prevDays = previousDays.slice();
       previousDays.push(dayResults);
       
-      // SỬA: KẾT HỢP CẢ BASIC VÀ ADVANCED FEATURES
       const basicFeatures = this.featureService.extractAllFeatures(dayResults, prevDays, day);
       const advancedFeatures = this.advancedFeatureEngineer.extractPremiumFeatures(dayResults, prevDays);
       
       let finalFeatureVector = [...basicFeatures, ...Object.values(advancedFeatures).flat()];
       
-      // DEBUG: Kiểm tra kích thước
       console.log(`📊 Ngày ${day}: Basic=${basicFeatures.length}, Advanced=${Object.values(advancedFeatures).flat().length}, Total=${finalFeatureVector.length}`);
       
-      // ĐẢM BẢO ĐÚNG 346 FEATURES
       const EXPECTED_SIZE = 346;
       if (finalFeatureVector.length !== EXPECTED_SIZE) {
         console.warn(`⚠️ Điều chỉnh features: ${finalFeatureVector.length} -> ${EXPECTED_SIZE}`);
@@ -633,7 +622,6 @@ class TensorFlowService {
       return finalFeatureVector;
     });
 
-    // KIỂM TRA TỔNG QUÁT
     const totalValues = inputSequence.flat().length;
     const expectedValues = SEQUENCE_LENGTH * 346;
     console.log(`🔢 Tổng số values: ${totalValues}, Expected: ${expectedValues}`);
