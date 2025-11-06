@@ -8,37 +8,78 @@ const AdvancedTraining = require('./advancedTrainingService');
 const { Storage } = require('@google-cloud/storage');
 const { DateTime } = require('luxon');
 
-const gcsCredentials = process.env.GCS_CREDENTIALS;
-const bucketName = process.env.GCS_BUCKET_NAME;
-
 let storage;
+let bucket;
 
 if (gcsCredentials && bucketName) {
     try {
-        // Parse chuỗi JSON từ biến môi trường
         const credentials = JSON.parse(gcsCredentials);
-        
-        // Khởi tạo Storage với credentials đã được parse
-        storage = new Storage({
-            credentials,
-            projectId: credentials.project_id,
-        });
-        
+        storage = new Storage({ credentials, projectId: credentials.project_id });
+        bucket = storage.bucket(bucketName);
         console.log(`✅ [GCS] Đã khởi tạo Google Cloud Storage thành công cho bucket: ${bucketName}`);
     } catch (error) {
-        console.error("❌ [GCS] LỖI NGHIÊM TRỌNG: Không thể parse GCS_CREDENTIALS. Vui lòng kiểm tra biến môi trường trên Railway.", error);
-        // Thoát hoặc xử lý lỗi để ứng dụng không chạy với cấu hình sai
+        console.error("❌ [GCS] LỖI NGHIÊM TRỌNG: Không thể parse GCS_CREDENTIALS. Vui lòng kiểm tra biến môi trường.", error);
         process.exit(1);
     }
 } else {
-    console.warn("⚠️ [GCS] Cảnh báo: GCS_CREDENTIALS hoặc GCS_BUCKET_NAME chưa được thiết lập. Chức năng lưu/tải model sẽ không hoạt động.");
+    console.warn("⚠️ [GCS] Cảnh báo: GCS_CREDENTIALS hoặc GCS_BUCKET_NAME chưa được thiết lập.");
 }
-
 const NN_MODEL_NAME = 'GDB_LSTM_TFJS_PREMIUM_V1';
 const SEQUENCE_LENGTH = 7;
 const OUTPUT_NODES = 50;
 const EPOCHS = 100;
 const BATCH_SIZE = 128;
+
+const getGcsIoHandler = (modelPath) => {
+    if (!bucket) {
+        throw new Error("GCS Bucket chưa được khởi tạo. Vui lòng kiểm tra cấu hình biến môi trường.");
+    }
+
+    const modelJsonPath = `${modelPath}/model.json`;
+    const weightsBinPath = `${modelPath}/weights.bin`;
+
+    const handler = {
+        /**
+         * Hàm LƯU model
+         * @param {tf.io.ModelArtifacts} modelArtifacts - Dữ liệu model do TensorFlow cung cấp.
+         */
+        save: async (modelArtifacts) => {
+            console.log(`...[GCS IO] Bắt đầu upload model lên: ${modelPath}`);
+            
+            // Chuyển trọng số từ ArrayBuffer sang Buffer của Node.js
+            const weightsBuffer = Buffer.from(modelArtifacts.weightData);
+
+            // Upload 2 file song song
+            await Promise.all([
+                bucket.file(modelJsonPath).save(JSON.stringify(modelArtifacts.modelTopology)),
+                bucket.file(weightsBinPath).save(weightsBuffer)
+            ]);
+
+            console.log(`...[GCS IO] Upload thành công.`);
+            return { modelArtifactsInfo: { dateSaved: new Date() } };
+        },
+
+        /**
+         * Hàm TẢI model
+         */
+        load: async () => {
+            console.log(`...[GCS IO] Bắt đầu download model từ: ${modelPath}`);
+
+            // Download 2 file song song
+            const [modelJsonFile, weightsBinFile] = await Promise.all([
+                bucket.file(modelJsonPath).download(),
+                bucket.file(weightsBinPath).download()
+            ]);
+
+            const modelTopology = JSON.parse(modelJsonFile[0].toString());
+            const weightData = weightsBinFile[0].buffer;
+
+            console.log(`...[GCS IO] Download thành công.`);
+            return { modelTopology, weightData };
+        }
+    };
+    return handler;
+};
 
 class TensorFlowService {
   constructor() {
@@ -324,29 +365,31 @@ class TensorFlowService {
 
   async saveModel() {
         if (!this.model) throw new Error('Không có model để lưu.');
-        if (!bucketName) throw new Error('GCS_BUCKET_NAME chưa được cấu hình.');
 
-        console.log(`💾 [SaveModel] Bắt đầu lưu model lên Google Cloud Storage (Bucket: ${bucketName})...`);
+        console.log(`💾 [SaveModel] Chuẩn bị lưu model lên GCS...`);
+        
+        // 1. Xác định đường dẫn lưu trên GCS
+        const modelGcsPath = `models/${NN_MODEL_NAME}`;
+        
+        // 2. Tạo handler tùy chỉnh
+        const ioHandler = getGcsIoHandler(modelGcsPath);
 
-        const modelPath = `models/${NN_MODEL_NAME}`;
-        const gcsFullPath = `gs://${bucketName}/${modelPath}`;
+        // 3. Dùng save handler để lưu model
+        const saveResult = await this.model.save(ioHandler);
 
-        // TensorFlow.js Node sẽ tự động tìm credentials nếu được cấu hình đúng.
-        // Việc khởi tạo `storage` ở trên là để đảm bảo.
-        const saveResult = await this.model.save(gcsFullPath);
-
+        // 4. Lưu thông tin metadata vào MongoDB
         const modelInfo = {
             modelName: NN_MODEL_NAME,
             inputNodes: this.inputNodes,
             savedAt: new Date().toISOString(),
-            gcsPath: gcsFullPath
+            gcsPath: `gs://${bucketName}/${modelGcsPath}` // Lưu đường dẫn thư mục model
         };
 
         await NNState.findOneAndUpdate(
             { modelName: NN_MODEL_NAME },
             { 
                 state: modelInfo,
-                modelArtifacts: saveResult
+                modelArtifacts: saveResult // Lưu thông tin trả về từ lệnh save
             },
             { upsert: true, new: true }
         );
@@ -355,22 +398,27 @@ class TensorFlowService {
     }
 
     async loadModel() {
-        console.log(`🔍 [LoadModel] Đang tìm và tải model từ Google Cloud Storage...`);
-        if (!bucketName) throw new Error('GCS_BUCKET_NAME chưa được cấu hình.');
+        console.log(`🔍 [LoadModel] Chuẩn bị tải model từ GCS...`);
 
         const modelState = await NNState.findOne({ modelName: NN_MODEL_NAME }).lean();
         
         if (modelState && modelState.state && modelState.state.gcsPath) {
-            const gcsPath = modelState.state.gcsPath;
+            // Lấy đường dẫn thư mục model từ DB và loại bỏ phần tiền tố "gs://<bucket-name>/"
+            const modelGcsPath = modelState.state.gcsPath.replace(`gs://${bucketName}/`, '');
+
             try {
-                this.model = await tf.loadLayersModel(gcsPath);
+                // 1. Tạo handler tùy chỉnh để tải
+                const ioHandler = getGcsIoHandler(modelGcsPath);
+                
+                // 2. Dùng tf.loadLayersModel với handler
+                this.model = await tf.loadLayersModel(ioHandler);
                 this.inputNodes = modelState.state.inputNodes;
                 
-                console.log(`✅ [LoadModel] Model đã được tải thành công từ GCS: ${gcsPath}`);
+                console.log(`✅ [LoadModel] Model đã được tải thành công từ GCS: ${modelState.state.gcsPath}`);
                 this.model.summary();
                 return true;
             } catch (error) {
-                console.error(`❌ [LoadModel] Lỗi khi tải model từ GCS (${gcsPath}):`, error);
+                console.error(`❌ [LoadModel] Lỗi khi tải model từ GCS (${modelState.state.gcsPath}):`, error);
                 return false;
             }
         } else {
