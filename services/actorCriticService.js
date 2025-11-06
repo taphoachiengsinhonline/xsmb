@@ -1,5 +1,5 @@
 const tf = require('@tensorflow/tfjs-node');
-const { Storage } = require('@google-cloud/storage');
+const { Storage } = require('@google-cloud/storage')
 const Result = require('../models/Result');
 const NNPrediction = require('../models/NNPrediction');
 const NNState = require('../models/NNState');
