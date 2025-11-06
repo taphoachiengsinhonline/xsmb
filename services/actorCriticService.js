@@ -1,3 +1,4 @@
+// services/actorCriticService.js (phiên bản đầy đủ)
 const tf = require('@tensorflow/tfjs-node');
 const { Storage } = require('@google-cloud/storage');
 const Result = require('../models/Result');
@@ -26,12 +27,12 @@ if (gcsCredentialsJSON && bucketName) {
 const ACTOR_MODEL_NAME = 'AC_ACTOR_V1';
 const CRITIC_MODEL_NAME = 'AC_CRITIC_V1';
 const SEQUENCE_LENGTH = 7;
-const FEATURE_SIZE = 346; // Giả định 346 features
+const FEATURE_SIZE = 346;
 const STATE_SHAPE = [SEQUENCE_LENGTH, FEATURE_SIZE];
 const OUTPUT_NODES = 50;
 
 // --- Hyperparameters cho RL ---
-const GAMMA = 0.99; // Discount factor for future rewards
+const GAMMA = 0.99;
 const ACTOR_LR = 0.0001;
 const CRITIC_LR = 0.0005;
 
@@ -167,13 +168,13 @@ class ActorCriticService {
                     const value = this.critic.predict(stateTensor);
                     const nextValue = this.critic.predict(nextStateTensor);
                     const tdTarget = tf.scalar(reward).add(nextValue.mul(tf.scalar(GAMMA)));
-                    return tdTarget.sub(value).detach(); // Detach để advantage là hằng số
+                    return tdTarget.sub(value).detach();
                 });
 
                 const actorGrads = tf.variableGrads(() => tf.tidy(() => {
                     const policy = this.actor.apply(stateTensor);
-                    const logProb = tf.log(policy.gather(action, 1)); // Lấy log_prob của hành động đã thực hiện
-                    return logProb.mul(advantage).mul(tf.scalar(-1));
+                    const logProb = tf.log(policy.gather(action, 1));
+                    return logProb.mul(advantage).mul(tf.scalar(-1)).mean(); // Lấy mean để loss là scalar
                 }));
                 actorOptimizer.applyGradients(actorGrads.grads);
                 tf.dispose(actorGrads.grads);
@@ -182,11 +183,12 @@ class ActorCriticService {
 
             stateTensor.dispose();
             nextStateTensor.dispose();
+            action.dispose();
             console.log(`...[AC Learn] Learned from episode on ${date}.`);
         }
         
         await this.saveModels();
-        await NNPrediction.updateMany({ danhDauDaSo: false }, { danhDauDaSo: true });
+        await NNPrediction.updateMany({ danhDauDaSo: { $in: episodes.map(e => e.date) } }, { danhDauDaSo: true });
         return { message: `RL training complete. Learned from ${episodes.length} episodes.` };
     }
 
@@ -205,15 +207,13 @@ class ActorCriticService {
         
         const { inputs, actorTargets, criticTargets } = trainingData;
 
-        // Huấn luyện Actor (Supervised Learning)
         console.log(`...Training Actor with ${inputs.shape[0]} samples...`);
         this.actor.compile({ optimizer: tf.train.adam(ACTOR_LR), loss: 'categoricalCrossentropy' });
-        await this.actor.fit(inputs, actorTargets, { epochs: 30, batchSize: 64, shuffle: true, verbose: 0 });
+        await this.actor.fit(inputs, actorTargets, { epochs: 30, batchSize: 64, shuffle: true, verbose: 0, callbacks: { onEpochEnd: (e) => console.log(`  Actor Epoch ${e+1}`) } });
 
-        // Huấn luyện Critic
         console.log(`...Training Critic with ${inputs.shape[0]} samples...`);
         this.critic.compile({ optimizer: tf.train.adam(CRITIC_LR), loss: 'meanSquaredError' });
-        await this.critic.fit(inputs, criticTargets, { epochs: 20, batchSize: 64, shuffle: true, verbose: 0 });
+        await this.critic.fit(inputs, criticTargets, { epochs: 20, batchSize: 64, shuffle: true, verbose: 0, callbacks: { onEpochEnd: (e) => console.log(`  Critic Epoch ${e+1}`) } });
         
         inputs.dispose();
         actorTargets.dispose();
@@ -237,7 +237,9 @@ class ActorCriticService {
         actionProbsTensor.dispose();
         
         const prediction = this.decodeOutput(output);
-        const latestDay = (await Result.find().sort({_id: -1}).limit(1))[0].ngay;
+        
+        const results = await Result.find().sort({_id: -1}).limit(1).lean();
+        const latestDay = results[0].ngay;
         const nextDayStr = DateTime.fromFormat(latestDay, 'dd/MM/yyyy').plus({ days: 1 }).toFormat('dd/MM/yyyy');
 
         await NNPrediction.findOneAndUpdate(
@@ -252,35 +254,19 @@ class ActorCriticService {
     // =================================================================
     // 4. CÁC HÀM HELPER (HOÀN CHỈNH)
     // =================================================================
-    
     dateKey(s) {
-        if (!s || typeof s !== 'string') return '';
+        if (!s) return '';
         const parts = s.split('/');
         return parts.length !== 3 ? s : `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
-    }
-
-    async prepareSingleState(date, allGroupedData) {
-        const dateIndex = Object.keys(allGroupedData).sort((a,b) => this.dateKey(a).localeCompare(this.dateKey(b))).indexOf(date);
-        if (dateIndex < SEQUENCE_LENGTH - 1) return null;
-        
-        const sequenceDays = Object.keys(allGroupedData).sort((a,b) => this.dateKey(a).localeCompare(this.dateKey(b))).slice(dateIndex - SEQUENCE_LENGTH + 1, dateIndex + 1);
-        
-        const inputSequence = [];
-        for (const day of sequenceDays) {
-            const dayResults = allGroupedData[day] || [];
-            // Lấy các ngày trước đó để tính feature
-            const previousDaysData = Object.values(allGroupedData).filter(d => this.dateKey(d[0].ngay) < this.dateKey(day));
-            
-            let featureVector = this.getFeatureVectorForDay(dayResults, previousDaysData, day);
-            inputSequence.push(featureVector);
-        }
-        return inputSequence;
     }
 
     getFeatureVectorForDay(dayResults, previousDaysData, dateStr) {
         const basicFeatures = this.featureService.extractAllFeatures(dayResults, previousDaysData, dateStr);
         const advancedFeatures = this.advancedFeatureEngineer.extractPremiumFeatures(dayResults, previousDaysData);
         let finalFeatureVector = [...basicFeatures, ...Object.values(advancedFeatures).flat()];
+        if (finalFeatureVector.some(v => isNaN(v) || v === null)) {
+            finalFeatureVector = finalFeatureVector.map(v => (isNaN(v) || v === null) ? 0 : v);
+        }
         if (finalFeatureVector.length !== FEATURE_SIZE) {
             finalFeatureVector = [...finalFeatureVector, ...Array(FEATURE_SIZE - finalFeatureVector.length).fill(0)].slice(0, FEATURE_SIZE);
         }
@@ -297,23 +283,22 @@ class ActorCriticService {
 
         const inputs = [];
         const actorTargets = [];
-        const criticTargets = []; // Reward giả định
+        const criticTargets = [];
 
         for (let i = SEQUENCE_LENGTH; i < days.length -1; i++) {
             const stateDays = days.slice(i - SEQUENCE_LENGTH, i);
             const targetDay = days[i];
 
-            const state = stateDays.map(day => this.getFeatureVectorForDay(grouped[day], [], day));
+            const state = stateDays.map(day => this.getFeatureVectorForDay(grouped[day] || [], [], day));
             const targetGDB = (grouped[targetDay] || []).find(r => r.giai === 'ĐB');
 
             if (targetGDB?.so && String(targetGDB.so).length >= 5) {
                 inputs.push(state);
                 const targetGDBString = String(targetGDB.so).padStart(5, '0');
-                const actorTarget = this.prepareTarget(targetGDBString, 'one-hot');
+                const actorTarget = this.prepareTarget(targetGDBString);
                 actorTargets.push(actorTarget);
                 
-                // Reward giả định: 1.0 nếu trúng ít nhất 1 số, -1.0 nếu trượt hết
-                // Logic này có thể cải thiện sau
+                // Reward giả định cho pre-training: 1.0 cho mọi dữ liệu lịch sử
                 criticTargets.push([1.0]); 
             }
         }
@@ -325,7 +310,12 @@ class ActorCriticService {
     }
     
     async collectEpisodes() {
+        console.log("...[AC Learn] Bắt đầu thu thập các 'tập' (ngày) để học...");
         const predictionsToLearn = await NNPrediction.find({ danhDauDaSo: false }).lean();
+        if (predictionsToLearn.length === 0) {
+            return [];
+        }
+        
         const results = await Result.find().sort({ 'ngay': 1 }).lean();
         const grouped = {};
         results.forEach(r => { if (!grouped[r.ngay]) grouped[r.ngay] = []; grouped[r.ngay].push(r); });
@@ -334,68 +324,78 @@ class ActorCriticService {
         const episodes = [];
 
         for (const pred of predictionsToLearn) {
-            const date = pred.ngayDoan;
+            const date = pred.ngayDuDoan;
             const dateIndex = days.indexOf(date);
-            if (dateIndex < SEQUENCE_LENGTH) continue;
+            
+            if (dateIndex < SEQUENCE_LENGTH || dateIndex >= days.length - 1) {
+                console.log(`...Bỏ qua ngày ${date}: không đủ dữ liệu trước/sau.`);
+                continue;
+            }
             
             const actualResultDoc = (grouped[date] || []).find(r => r.giai === 'ĐB');
-            if (!actualResultDoc?.so || String(actualResultDoc.so).length < 5) continue;
+            if (!actualResultDoc?.so || String(actualResultDoc.so).length < 5) {
+                 console.log(`...Bỏ qua ngày ${date}: không có kết quả GĐB thực tế.`);
+                continue;
+            }
 
             const stateDays = days.slice(dateIndex - SEQUENCE_LENGTH, dateIndex);
-            const state = stateDays.map(d => this.getFeatureVectorForDay(grouped[d], [], d));
+            const state = stateDays.map(d => this.getFeatureVectorForDay(grouped[d] || [], [], d));
 
             const nextStateDays = days.slice(dateIndex - SEQUENCE_LENGTH + 1, dateIndex + 1);
-            const nextState = nextStateDays.map(d => this.getFeatureVectorForDay(grouped[d], [], d));
+            const nextState = nextStateDays.map(d => this.getFeatureVectorForDay(grouped[d] || [], [], d));
 
             const actualGDBString = String(actualResultDoc.so).padStart(5, '0');
             const reward = this.calculateReward(pred, actualGDBString);
             
-            // Lấy hành động đã thực hiện (đơn giản hóa)
-            const action = pred.pos1.map(Number); // Tạm lấy vị trí 1
-
+            const action = tf.tidy(() => {
+                const actionIndices = [];
+                for(let i=0; i<5; i++) {
+                    const digit = parseInt(actualGDBString[i]);
+                    actionIndices.push(i * 10 + digit);
+                }
+                return tf.tensor2d(actionIndices, [5, 1], 'int32');
+            });
+            
             episodes.push({ state, action, reward, nextState, date });
         }
+        
+        console.log(`✅ [AC Learn] Đã thu thập thành công ${episodes.length} tập.`);
         return episodes;
     }
 
     calculateReward(prediction, actualGDB) {
-        let reward = -1.0; // Phạt nếu trượt hoàn toàn
-        const pos1Correct = prediction.pos1.includes(actualGDB[0]);
-        const pos2Correct = prediction.pos2.includes(actualGDB[1]);
-        const pos3Correct = prediction.pos3.includes(actualGDB[2]);
-        const pos4Correct = prediction.pos4.includes(actualGDB[3]);
-        const pos5Correct = prediction.pos5.includes(actualGDB[4]);
+        let correctCount = 0;
+        if (prediction.pos1.includes(actualGDB[0])) correctCount++;
+        if (prediction.pos2.includes(actualGDB[1])) correctCount++;
+        if (prediction.pos3.includes(actualGDB[2])) correctCount++;
+        if (prediction.pos4.includes(actualGDB[3])) correctCount++;
+        if (prediction.pos5.includes(actualGDB[4])) correctCount++;
         
-        if (pos1Correct && pos2Correct && pos3Correct && pos4Correct && pos5Correct) {
-            reward = 1.0; // Thưởng lớn nếu trúng cả 5
-        } else if (pos1Correct || pos2Correct || pos3Correct || pos4Correct || pos5Correct) {
-            reward = 0.5; // Thưởng nhỏ nếu trúng ít nhất 1
-        }
-        return reward;
+        if (correctCount === 5) return 1.0; // Thưởng lớn nếu trúng cả 5
+        if (correctCount > 0) return 0.5; // Thưởng nhỏ nếu trúng 1-4
+        return -1.0; // Phạt nếu trượt hoàn toàn
     }
 
-    prepareTarget(gdbString, type = 'prob') {
-        const target = Array(OUTPUT_NODES).fill(0);
+    prepareTarget(gdbString) {
+        const target = Array(OUTPUT_NODES).fill(0.001); // Small probability for all
         gdbString.split('').forEach((digit, index) => {
             const d = parseInt(digit);
             if (!isNaN(d) && index < 5) {
-                const position = index * 10 + d;
-                if (type === 'one-hot') {
-                    target[position] = 1;
-                } else {
-                    target[position] = 0.99;
-                }
+                target[index * 10 + d] = 0.99; // High probability for correct ones
             }
         });
         return target;
     }
     
     async preparePredictionInput() {
-        const results = await Result.find().sort({_id: -1}).limit(SEQUENCE_LENGTH * 2).lean();
+        const results = await Result.find().sort({_id: -1}).limit(SEQUENCE_LENGTH * 2).lean(); // Lấy nhiều hơn để đảm bảo đủ ngày
         const grouped = {};
         results.forEach(r => { if (!grouped[r.ngay]) grouped[r.ngay] = []; grouped[r.ngay].push(r); });
         const days = Object.keys(grouped).sort((a, b) => this.dateKey(a).localeCompare(this.dateKey(b)));
         const latestSequenceDays = days.slice(-SEQUENCE_LENGTH);
+        if (latestSequenceDays.length < SEQUENCE_LENGTH) {
+            throw new Error(`Không đủ dữ liệu để tạo input dự đoán, chỉ có ${latestSequenceDays.length} ngày.`);
+        }
         const inputSequence = latestSequenceDays.map(day => this.getFeatureVectorForDay(grouped[day], [], day));
         return inputSequence;
     }
@@ -407,7 +407,7 @@ class ActorCriticService {
             const digitsWithValues = positionOutput
                 .map((value, index) => ({ digit: String(index), value }))
                 .sort((a, b) => b.value - a.value)
-                .slice(0, 5) // Lấy 5 số có xác suất cao nhất
+                .slice(0, 5)
                 .map(item => item.digit);
             prediction[`pos${i + 1}`] = digitsWithValues;
         }
