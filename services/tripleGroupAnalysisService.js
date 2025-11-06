@@ -4,159 +4,32 @@ const Result = require('../models/Result');
 
 class TripleGroupAnalysisService {
     constructor() {
-        this.learningState = null; // Biến để lưu "bộ nhớ" học tập
+        this.learningState = null;
     }
 
     // =================================================================
-    // CÁC HÀM QUẢN LÝ "BỘ NHỚ" (LEARNING STATE)
+    // HÀM BỊ LỖI ĐÃ ĐƯỢỢC SỬA LẠI
     // =================================================================
-
     /**
-     * Tải hoặc tạo mới "bộ nhớ" học tập.
+     * Hàm này được gọi bởi API /generate-prediction.
+     * Nó sẽ đóng vai trò là hàm chính, tự động gọi phiên bản "có học hỏi" để có kết quả tốt nhất.
      */
-    async loadOrCreateLearningState() {
-        if (this.learningState) return;
-        
-        console.log("🧠 [Service] Đang tải hoặc tạo 'bộ nhớ' học tập...");
-        let state = await TripleGroupLearningState.findOne({ modelName: 'TripleGroupV1' });
-        
-        if (!state) {
-            console.log("...[Service] Chưa có 'bộ nhớ', tạo mới.");
-            state = new TripleGroupLearningState();
-            for (let i = 0; i < 10; i++) {
-                const digit = i.toString();
-                state.tram.push({ digit });
-                state.chuc.push({ digit });
-                state.donvi.push({ digit });
-            }
-            await state.save();
-        }
-        
-        this.learningState = state;
+    async generateTripleGroupPrediction(targetDateStr = null) {
+        console.log("✅ [Service] Nhận lệnh 'Tạo dự đoán mới', chuyển hướng đến hàm có học hỏi...");
+        return this.generatePredictionWithLearning(targetDateStr);
     }
-
-    /**
-     * Cập nhật "bộ nhớ" với kết quả của MỘT dự đoán duy nhất.
-     * @param {object} prediction - Đối tượng dự đoán (chứa topTram, topChuc, ...).
-     * @param {object} actualResult - Đối tượng kết quả thực tế (chứa tram, chuc, ...).
-     */
-    updateLearningStateWithSingleResult(prediction, actualResult) {
-        if (!this.learningState || !prediction || !actualResult) return;
-
-        const updatePosition = (positionKey, topPredicted, actualDigit) => {
-            if (!Array.isArray(topPredicted)) return;
-            
-            topPredicted.forEach(digit => {
-                const stat = this.learningState[positionKey].find(s => s.digit === digit);
-                if (stat) {
-                    stat.totalAppearances++;
-                    if (digit === actualDigit) {
-                        stat.correctPicks++;
-                    }
-                    stat.accuracy = (stat.correctPicks / stat.totalAppearances) * 100;
-                }
-            });
-        };
-
-        updatePosition('tram', prediction.topTram, actualResult.tram);
-        updatePosition('chuc', prediction.topChuc, actualResult.chuc);
-        updatePosition('donvi', prediction.topDonVi, actualResult.donvi);
-        
-        this.learningState.totalPredictionsAnalyzed = (this.learningState.totalPredictionsAnalyzed || 0) + 1;
-    }
-
-    // =================================================================
-    // HÀM TẠO LỊCH SỬ DỰ ĐOÁN (ĐÃ NÂNG CẤP VỚI HỌC TUẦN TỰ)
-    // =================================================================
     
-    async generateHistoricalPredictions() {
-        console.log('🕐 [Service] Bắt đầu quét và tạo lịch sử VỚI HỌC TUẦN TỰ...');
-        
-        // 1. Chuẩn bị dữ liệu và "bộ nhớ"
-        await this.loadOrCreateLearningState(); // Tải "bộ nhớ"
-        await TripleGroupLearningState.updateOne({ modelName: 'TripleGroupV1' }, { $set: this.getInitialState() }); // Reset "bộ nhớ" về 0
-        await this.loadOrCreateLearningState(); // Tải lại "bộ nhớ" đã reset
-        
-        const allResults = await Result.find().sort({ ngay: 1 }).lean();
-        if (allResults.length < 8) {
-            throw new Error('Không đủ dữ liệu lịch sử (cần ít nhất 8 ngày).');
-        }
-
-        const groupedByDate = {};
-        allResults.forEach(r => {
-            if (!groupedByDate[r.ngay]) groupedByDate[r.ngay] = [];
-            groupedByDate[r.ngay].push(r);
-        });
-
-        const sortedDates = Object.keys(groupedByDate).sort((a, b) => this.dateKey(a).localeCompare(this.dateKey(b)));
-        
-        let createdCount = 0;
-        const totalDaysToProcess = sortedDates.length - 7;
-        console.log(`📝 [Service] Tổng số ngày có thể tạo dự đoán: ${totalDaysToProcess}`);
-
-        // 2. Vòng lặp học tuần tự
-        for (let i = 7; i < sortedDates.length; i++) {
-            const targetDate = sortedDates[i];
-            
-            try {
-                // a. Lấy dữ liệu phân tích
-                const analysisDates = sortedDates.slice(i - 7, i);
-                const analysisResults = analysisDates.flatMap(date => groupedByDate[date]);
-                const analysis = this.analyzeRealData(analysisResults);
-                
-                // b. DỰ ĐOÁN: Áp dụng "kiến thức" hiện có tại thời điểm đó
-                const prediction = this.createPredictionFromAnalysis(analysis, targetDate, true);
-                
-                // c. Lấy kết quả thực tế
-                const actualGDB = (groupedByDate[targetDate] || []).find(r => r.giai === 'ĐB');
-                let actualResultObject = null;
-                if (actualGDB && actualGDB.so) {
-                    const lastThree = String(actualGDB.so).padStart(5, '0').slice(-3);
-                    if (lastThree.length === 3) {
-                        actualResultObject = {
-                            tram: lastThree[0], chuc: lastThree[1], donvi: lastThree[2]
-                        };
-                        prediction.actualResult = {
-                            ...actualResultObject,
-                            isCorrect: this.checkCorrectness(prediction, lastThree),
-                            updatedAt: new Date()
-                        };
-                    }
-                }
-
-                // d. Lưu lại dự đoán và kết quả
-                await this.savePrediction(prediction);
-                createdCount++;
-
-                // e. HỌC HỎI: Cập nhật "bộ nhớ" ngay lập tức với kết quả vừa có
-                if (actualResultObject) {
-                    this.updateLearningStateWithSingleResult(prediction, actualResultObject);
-                }
-
-                if (createdCount % 20 === 0 || createdCount === totalDaysToProcess) { 
-                    console.log(`...[Service] Đã tạo & học ${createdCount}/${totalDaysToProcess} (ngày ${targetDate})`);
-                }
-
-            } catch (error) {
-                console.error(`❌ [Service] Lỗi khi tạo/học cho ngày ${targetDate}:`, error.message);
-            }
-        }
-        
-        // 3. Lưu lại "bộ nhớ" cuối cùng sau khi đã học hết lịch sử
-        this.learningState.lastLearnedAt = new Date();
-        await this.learningState.save();
-
-        console.log(`🎉 [Service] Hoàn thành! Đã tạo và học tuần tự ${createdCount} dự đoán lịch sử.`);
-        return { created: createdCount, total: totalDaysToProcess };
-    }
-
     // =================================================================
-    // CÁC HÀM TẠO DỰ ĐOÁN VÀ HỌC KHÁC
+    // CÁC HÀM "HỌC" VÀ TẠO DỰ ĐOÁN
     // =================================================================
 
+    /**
+     * Tạo dự đoán cho ngày tiếp theo, có áp dụng "kiến thức" đã học.
+     * Đây là hàm xử lý logic chính.
+     */
     async generatePredictionWithLearning(targetDateStr = null) {
-        console.log('🎯 [Service] Bắt đầu tạo dự đoán CÓ HỌC HỎI cho ngày tiếp theo...');
-        await this.loadOrCreateLearningState();
+        console.log('🎯 [Service] Bắt đầu tạo dự đoán CÓ HỌC HỎI...');
+        await this.loadOrCreateLearningState(); // Tải "bộ nhớ"
         
         const targetDate = targetDateStr || await this.getNextPredictionDate();
         console.log(`📅 [Service] Ngày mục tiêu dự đoán: ${targetDate}`);
@@ -164,7 +37,7 @@ class TripleGroupAnalysisService {
         try {
             const resultsForAnalysis = await this.getResultsBeforeDate(targetDate, 100);
             const analysisResult = this.analyzeRealData(resultsForAnalysis);
-            const prediction = this.createPredictionFromAnalysis(analysisResult, targetDate, true); 
+            const prediction = this.createPredictionFromAnalysis(analysisResult, targetDate, true); // true = useLearning
             
             await this.savePrediction(prediction);
             console.log(`✅ [Service] Đã tạo dự đoán CÓ HỌC HỎI cho ngày ${targetDate}`);
@@ -174,38 +47,133 @@ class TripleGroupAnalysisService {
             return this.getFallbackPrediction(targetDate);
         }
     }
-    
+
+    /**
+     * Quy trình "Học" thực sự.
+     * Phân tích hiệu suất của tất cả các dự đoán trong quá khứ và LƯU LẠI "kiến thức".
+     */
     async learnFromHistory() {
-        console.log('🧠 [Service] Bắt đầu quy trình HỌC tổng hợp từ lịch sử...');
+        console.log('🧠 [Service] Bắt đầu quy trình HỌC từ lịch sử dự đoán...');
         await this.loadOrCreateLearningState();
         const { performance, totalAnalyzed } = await this.analyzeHistoricalPerformance();
+        
         if (totalAnalyzed === 0) {
-            console.log("...[Service] Không có dự đoán nào để học.");
+            console.log("...[Service] Không có dự đoán nào có kết quả để học.");
             return { updated: 0, total: 0 };
         }
+
         this.learningState.tram = this.formatPerformanceData(performance.tram);
         this.learningState.chuc = this.formatPerformanceData(performance.chuc);
         this.learningState.donvi = this.formatPerformanceData(performance.donvi);
         this.learningState.totalPredictionsAnalyzed = totalAnalyzed;
         this.learningState.lastLearnedAt = new Date();
+
         await this.learningState.save();
         console.log(`✅ [Service] Đã học và cập nhật 'bộ nhớ' thành công. Total analyzed: ${totalAnalyzed}`);
         return { updated: totalAnalyzed, total: totalAnalyzed };
     }
-
+    
     // =================================================================
-    // PHẦN CÒN LẠI CỦA FILE (GIỮ NGUYÊN)
+    // HÀM TẠO LỊCH SỬ DỰ ĐOÁN (HỌC TUẦN TỰ)
     // =================================================================
     
+    async generateHistoricalPredictions() {
+        console.log('🕐 [Service] Bắt đầu quét và tạo lịch sử VỚI HỌC TUẦN TỰ...');
+        await this.loadOrCreateLearningState();
+        await TripleGroupLearningState.updateOne({ modelName: 'TripleGroupV1' }, { $set: this.getInitialState() });
+        await this.loadOrCreateLearningState(); // Tải lại "bộ nhớ" đã reset
+        
+        const allResults = await Result.find().sort({ ngay: 1 }).lean();
+        if (allResults.length < 8) throw new Error('Không đủ dữ liệu lịch sử');
+
+        const groupedByDate = {};
+        allResults.forEach(r => {
+            if (!groupedByDate[r.ngay]) groupedByDate[r.ngay] = [];
+            groupedByDate[r.ngay].push(r);
+        });
+        const sortedDates = Object.keys(groupedByDate).sort((a, b) => this.dateKey(a).localeCompare(this.dateKey(b)));
+        
+        let createdCount = 0;
+        const totalDaysToProcess = sortedDates.length - 7;
+        console.log(`📝 [Service] Tổng số ngày có thể tạo dự đoán: ${totalDaysToProcess}`);
+
+        for (let i = 7; i < sortedDates.length; i++) {
+            const targetDate = sortedDates[i];
+            try {
+                const analysisDates = sortedDates.slice(i - 7, i);
+                const analysisResults = analysisDates.flatMap(date => groupedByDate[date]);
+                const analysis = this.analyzeRealData(analysisResults);
+                const prediction = this.createPredictionFromAnalysis(analysis, targetDate, true);
+                
+                const actualGDB = (groupedByDate[targetDate] || []).find(r => r.giai === 'ĐB');
+                let actualResultObject = null;
+                if (actualGDB && actualGDB.so) {
+                    const lastThree = String(actualGDB.so).padStart(5, '0').slice(-3);
+                    if (lastThree.length === 3) {
+                        actualResultObject = { tram: lastThree[0], chuc: lastThree[1], donvi: lastThree[2] };
+                        prediction.actualResult = { ...actualResultObject, isCorrect: this.checkCorrectness(prediction, lastThree), updatedAt: new Date() };
+                    }
+                }
+                await this.savePrediction(prediction);
+                createdCount++;
+                if (actualResultObject) this.updateLearningStateWithSingleResult(prediction, actualResultObject);
+                if (createdCount % 20 === 0 || createdCount === totalDaysToProcess) { 
+                    console.log(`...[Service] Đã tạo & học ${createdCount}/${totalDaysToProcess} (ngày ${targetDate})`);
+                }
+            } catch (error) {
+                console.error(`❌ [Service] Lỗi khi tạo/học cho ngày ${targetDate}:`, error.message);
+            }
+        }
+        this.learningState.lastLearnedAt = new Date();
+        await this.learningState.save();
+        console.log(`🎉 [Service] Hoàn thành! Đã tạo và học tuần tự ${createdCount} dự đoán lịch sử.`);
+        return { created: createdCount, total: totalDaysToProcess };
+    }
+
+    // =================================================================
+    // CÁC HÀM PHÂN TÍCH, THỐNG KÊ VÀ HELPER (KHÔNG THAY ĐỔI)
+    // =================================================================
+    
+    async loadOrCreateLearningState() {
+        if (this.learningState) return;
+        let state = await TripleGroupLearningState.findOne({ modelName: 'TripleGroupV1' });
+        if (!state) {
+            state = new TripleGroupLearningState();
+            for (let i = 0; i < 10; i++) {
+                const digit = i.toString();
+                state.tram.push({ digit }); state.chuc.push({ digit }); state.donvi.push({ digit });
+            }
+            await state.save();
+        }
+        this.learningState = state;
+    }
+
+    updateLearningStateWithSingleResult(prediction, actualResult) {
+        if (!this.learningState || !prediction || !actualResult) return;
+        const updatePosition = (positionKey, topPredicted, actualDigit) => {
+            if (!Array.isArray(topPredicted)) return;
+            topPredicted.forEach(digit => {
+                const stat = this.learningState[positionKey].find(s => s.digit === digit);
+                if (stat) {
+                    stat.totalAppearances++;
+                    if (digit === actualDigit) stat.correctPicks++;
+                    stat.accuracy = (stat.correctPicks / stat.totalAppearances) * 100;
+                }
+            });
+        };
+        updatePosition('tram', prediction.topTram, actualResult.tram);
+        updatePosition('chuc', prediction.topChuc, actualResult.chuc);
+        updatePosition('donvi', prediction.topDonVi, actualResult.donvi);
+        this.learningState.totalPredictionsAnalyzed = (this.learningState.totalPredictionsAnalyzed || 0) + 1;
+    }
+
     createPredictionFromAnalysis(analysis, targetDate, useLearning = false) {
         let topTram, topChuc, topDonVi;
         if (useLearning && this.learningState && this.learningState.totalPredictionsAnalyzed > 0) {
-            console.log("...[Service] Áp dụng kiến thức đã học để chọn số.");
             topTram = this.selectNumbersByWeightedScore(analysis.frequency.tram, this.learningState.tram, 5);
             topChuc = this.selectNumbersByWeightedScore(analysis.frequency.chuc, this.learningState.chuc, 5);
             topDonVi = this.selectNumbersByWeightedScore(analysis.frequency.donvi, this.learningState.donvi, 5);
         } else {
-            console.log("...[Service] Chỉ dùng tần suất thống kê để chọn số.");
             topTram = this.selectNumbersByFrequency(analysis.frequency.tram, 5);
             topChuc = this.selectNumbersByFrequency(analysis.frequency.chuc, 5);
             topDonVi = this.selectNumbersByFrequency(analysis.frequency.donvi, 5);
@@ -255,9 +223,7 @@ class TripleGroupAnalysisService {
         const digitCount = Array(10).fill(0);
         allGDB.forEach(result => {
             String(result.so).padStart(5, '0').split('').forEach(digit => {
-                if (!isNaN(parseInt(digit))) {
-                    digitCount[parseInt(digit)]++;
-                }
+                if (!isNaN(parseInt(digit))) digitCount[parseInt(digit)]++;
             });
         });
         const sortedDigits = digitCount.map((count, digit) => ({ digit, count })).sort((a, b) => b.count - a.count);
@@ -269,14 +235,8 @@ class TripleGroupAnalysisService {
     
     async analyzeHistoricalPerformance() {
         const predictionsWithResults = await TripleGroupPrediction.find({ 'actualResult': { $exists: true, $ne: null } }).lean();
-        if (predictionsWithResults.length < 10) {
-            return { performance: {}, totalAnalyzed: predictionsWithResults.length };
-        }
-        const performance = {
-            tram: this.initializePositionStats(),
-            chuc: this.initializePositionStats(),
-            donvi: this.initializePositionStats()
-        };
+        if (predictionsWithResults.length < 10) return { performance: {}, totalAnalyzed: predictionsWithResults.length };
+        const performance = { tram: this.initializePositionStats(), chuc: this.initializePositionStats(), donvi: this.initializePositionStats() };
         for (const pred of predictionsWithResults) {
             const actual = pred.actualResult;
             this.updatePositionStats(performance.tram, pred.topTram || [], actual.tram);
@@ -286,10 +246,7 @@ class TripleGroupAnalysisService {
         this.calculateFinalAccuracy(performance.tram);
         this.calculateFinalAccuracy(performance.chuc);
         this.calculateFinalAccuracy(performance.donvi);
-        return {
-            performance: performance,
-            totalAnalyzed: predictionsWithResults.length
-        };
+        return { performance, totalAnalyzed: predictionsWithResults.length };
     }
     
     selectNumbersByFrequency(frequencyArray, count) {
@@ -315,9 +272,7 @@ class TripleGroupAnalysisService {
         let confidence = 50;
         if (analysis.totalDays >= 30) confidence += 10;
         if (analysis.totalDays >= 60) confidence += 5;
-        if (useLearning && this.learningState && this.learningState.totalPredictionsAnalyzed > 20) {
-            confidence += 20;
-        }
+        if (useLearning && this.learningState && this.learningState.totalPredictionsAnalyzed > 20) confidence += 20;
         return Math.min(confidence, 95);
     }
 
@@ -369,11 +324,7 @@ class TripleGroupAnalysisService {
     }
 
     getInitialState() {
-        const initialState = {
-            tram: [], chuc: [], donvi: [],
-            totalPredictionsAnalyzed: 0,
-            lastLearnedAt: new Date()
-        };
+        const initialState = { tram: [], chuc: [], donvi: [], totalPredictionsAnalyzed: 0, lastLearnedAt: new Date() };
         for (let i = 0; i < 10; i++) {
             const digit = i.toString();
             const initialStat = { digit, totalAppearances: 0, correctPicks: 0, accuracy: 0 };
@@ -390,9 +341,7 @@ class TripleGroupAnalysisService {
             const stat = positionStats[digit.toString()];
             if (stat) {
                 stat.totalAppearances++;
-                if (digit === actualDigit) {
-                    stat.correctPicks++;
-                }
+                if (digit === actualDigit) stat.correctPicks++;
             }
         }
     }
