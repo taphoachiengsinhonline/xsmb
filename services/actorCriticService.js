@@ -1,10 +1,11 @@
 const tf = require('@tensorflow/tfjs-node');
-const { Storage } = require('@google-cloud/storage');
 const Result = require('../models/Result');
 const NNPrediction = require('../models/NNPrediction');
 const NNState = require('../models/NNState');
-const FeatureEngineeringService = require('./featureEngineeringService');
 const AdvancedFeatureEngineer = require('./advancedFeatureService');
+const FeatureEngineeringService = require('./featureEngineeringService');
+const AdvancedTraining = require('./advancedTrainingService');
+const { Storage } = require('@google-cloud/storage');
 const { DateTime } = require('luxon');
 
 // --- Cấu hình GCS (Giữ nguyên) ---
@@ -16,619 +17,533 @@ if (gcsCredentialsJSON && bucketName) {
         const credentials = JSON.parse(gcsCredentialsJSON);
         storage = new Storage({ credentials, projectId: credentials.project_id });
         bucket = storage.bucket(bucketName);
-        console.log(`✅ [GCS] Đã khởi tạo GCS cho Actor-Critic Service.`);
-    } catch (error) { console.error("❌ [GCS] Lỗi khởi tạo GCS.", error); process.exit(1); }
+        console.log(`✅ [GCS] Đã khởi tạo Google Cloud Storage thành công cho bucket: ${bucketName}`);
+    } catch (error) {
+        console.error("❌ [GCS] LỖI NGHIÊM TRỌNG: Không thể parse GCS_CREDENTIALS. Vui lòng kiểm tra biến môi trường.", error);
+        process.exit(1);
+    }
 } else {
-    console.warn("⚠️ [GCS] Cảnh báo: Biến môi trường GCS chưa được thiết lập.");
+    console.warn("⚠️ [GCS] Cảnh báo: GCS_CREDENTIALS hoặc GCS_BUCKET_NAME chưa được thiết lập.");
 }
 
 // --- Các Hằng Số ---
-const ACTOR_MODEL_NAME = 'AC_ACTOR_V2'; // Nâng cấp phiên bản
-const CRITIC_MODEL_NAME = 'AC_CRITIC_V2';
+const NN_MODEL_NAME = 'GDB_LSTM_TFJS_PREMIUM_V1'; // Giữ nguyên tên model của bạn
 const SEQUENCE_LENGTH = 7;
-const FEATURE_SIZE = 346;
-const STATE_SHAPE = [SEQUENCE_LENGTH, FEATURE_SIZE];
 const OUTPUT_NODES = 50;
-const GAMMA = 0.99;
-const ACTOR_LR = 0.0001;
-const CRITIC_LR = 0.0005;
+const EPOCHS = 100;
+const BATCH_SIZE = 128;
 
 // --- Custom GCS IO Handler (Giữ nguyên) ---
 const getGcsIoHandler = (modelPath) => {
-    if (!bucket) throw new Error("GCS Bucket chưa được khởi tạo.");
+    if (!bucket) {
+        throw new Error("GCS Bucket chưa được khởi tạo. Vui lòng kiểm tra cấu hình biến môi trường.");
+    }
     const modelJsonPath = `${modelPath}/model.json`;
     const weightsBinPath = `${modelPath}/weights.bin`;
     return {
         save: async (modelArtifacts) => {
+            console.log(`...[GCS IO] Bắt đầu upload model lên: ${modelPath}`);
             const weightsBuffer = Buffer.from(modelArtifacts.weightData);
             await Promise.all([
                 bucket.file(modelJsonPath).save(JSON.stringify(modelArtifacts.modelTopology)),
                 bucket.file(weightsBinPath).save(weightsBuffer)
             ]);
+            console.log(`...[GCS IO] Upload thành công.`);
             return { modelArtifactsInfo: { dateSaved: new Date() } };
         },
         load: async () => {
+            console.log(`...[GCS IO] Bắt đầu download model từ: ${modelPath}`);
             const [modelJsonFile, weightsBinFile] = await Promise.all([
                 bucket.file(modelJsonPath).download(),
                 bucket.file(weightsBinPath).download()
             ]);
             const modelTopology = JSON.parse(modelJsonFile[0].toString());
             const weightData = weightsBinFile[0].buffer;
+            console.log(`...[GCS IO] Download thành công.`);
             return { modelTopology, weightData };
         }
     };
 };
 
-class ActorCriticService {
-    constructor() {
-        this.actor = null;
-        this.critic = null;
-        this.inputNodes = FEATURE_SIZE;
-        this.featureService = new FeatureEngineeringService();
-        this.advancedFeatureEngineer = new AdvancedFeatureEngineer();
-        this.isInitialized = false;
-        // Khởi tạo optimizers một lần
-        this.actorOptimizer = tf.train.adam(ACTOR_LR);
-        this.criticOptimizer = tf.train.adam(CRITIC_LR);
+class TensorFlowService {
+  constructor() {
+    this.model = null;
+    this.featureService = new FeatureEngineeringService();
+    this.advancedFeatureEngineer = new AdvancedFeatureEngineer();
+    this.advancedTrainer = new AdvancedTraining();
+    this.inputNodes = 0;
+    this.ensembleModels = [];
+  }
+
+  // =================================================================
+  // CÁC HÀM GỐC CỦA BẠN - GIỮ NGUYÊN 100%
+  // =================================================================
+  async runAdvancedTraining() {
+    console.log('🚀 Bắt đầu Advanced Training...');
+    const trainingData = await this.prepareTrainingData();
+    const result = await this.advancedTrainer.trainWithAdvancedStrategies(
+      trainingData, 
+      ['ensemble', 'augmentation']
+    );
+    if (result.type === 'ensemble') {
+      this.ensembleModels = result.models;
+      console.log(`✅ Đã train ${result.models.length} models cho ensemble`);
+    } else {
+      this.model = result.model;
+      await this.saveModel();
     }
+    return {
+      message: 'Advanced training hoàn tất',
+      strategy: 'ensemble + augmentation',
+      modelsCount: result.models?.length || 1
+    };
+  }
+
+  async advancedPredict(inputSequence) {
+    if (this.ensembleModels && this.ensembleModels.length > 0) {
+      return await this.advancedTrainer.ensemblePredict(inputSequence);
+    } else {
+      return await this.predict(inputSequence);
+    }
+  }
+
+  async buildModel(inputNodes) {
+    console.log(`🏗️ Xây dựng model với ${inputNodes} features...`);
+    this.inputNodes = inputNodes;
+    const model = tf.sequential();
+    model.add(tf.layers.lstm({
+      units: 32,
+      returnSequences: false,
+      inputShape: [SEQUENCE_LENGTH, inputNodes],
+      kernelInitializer: 'glorotNormal',
+      recurrentInitializer: 'orthogonal',
+      kernelRegularizer: tf.regularizers.l2({l2: 0.001}),
+      recurrentRegularizer: tf.regularizers.l2({l2: 0.001}),
+      kernelConstraint: tf.constraints.maxNorm({maxValue: 1}),
+      recurrentConstraint: tf.constraints.maxNorm({maxValue: 1})
+    }));
+    model.add(tf.layers.batchNormalization());
+    model.add(tf.layers.dropout({rate: 0.2}));
+    model.add(tf.layers.dense({
+      units: 16,
+      activation: 'relu',
+      kernelInitializer: 'glorotNormal',
+      kernelRegularizer: tf.regularizers.l2({l2: 0.001})
+    }));
+    model.add(tf.layers.dense({
+      units: OUTPUT_NODES,
+      activation: 'sigmoid',
+      kernelInitializer: 'glorotNormal'
+    }));
+    model.summary();
+    const optimizer = tf.train.adam(0.0005);
+    model.compile({
+      optimizer: optimizer,
+      loss: 'meanSquaredError',
+      metrics: []
+    });
+    this.model = model;
+    return this.model;
+  }
+
+  async trainModel(trainingData) {
+    const { inputs, targets } = trainingData;
+    console.log('🔍 Kiểm tra cuối cùng trước khi training:');
+    console.log('- Inputs length:', inputs.length);
+    console.log('- Targets length:', targets.length);
+    const inputTensor = tf.tensor3d(inputs, [inputs.length, SEQUENCE_LENGTH, this.inputNodes]);
+    const targetTensor = tf.tensor2d(targets, [targets.length, OUTPUT_NODES]);
 
     // =================================================================
-    // 1. HÀM HUẤN LUYỆN LỊCH SỬ (ĐÃ NÂNG CẤP HOÀN TOÀN)
+    // SỬA LỖI NAN: Thêm Gradient Clipping vào optimizer
     // =================================================================
-    /**
-     * NÂNG CẤP: Chạy một lần duy nhất để huấn luyện từ đầu và tạo toàn bộ lịch sử.
-     * Quá trình này mô phỏng việc AI sống lại quá khứ, dự đoán và học hỏi mỗi ngày.
-     */
-    async runHistoricalTraining() {
-        console.log("🕐 [AC Train] Bắt đầu quá trình Huấn luyện & Tạo Lịch sử Tuần tự...");
-        this.buildActor();
-        this.buildCritic();
+    const optimizer = tf.train.adam(0.0005);
+    optimizer.clipNorm = 1.0; // Giới hạn gradient để chống bùng nổ
 
-        const allResults = await Result.find().sort({ 'ngay': 1 }).lean();
-        if (allResults.length < SEQUENCE_LENGTH + 1) {
-            throw new Error("Không đủ dữ liệu để bắt đầu huấn luyện.");
+    this.model.compile({
+      optimizer: optimizer,
+      loss: 'binaryCrossentropy',
+      metrics: []
+    });
+    // =================================================================
+
+    const history = await this.model.fit(inputTensor, targetTensor, {
+      epochs: EPOCHS,
+      batchSize: Math.min(BATCH_SIZE, inputs.length),
+      validationSplit: 0.1,
+      callbacks: {
+        onEpochEnd: (epoch, logs) => {
+          if (isNaN(logs.loss)) {
+            console.error('❌ NaN loss detected! Stopping training.');
+            this.model.stopTraining = true;
+            console.log('📊 Debug info:', { epoch, inputShape: inputTensor.shape, targetShape: targetTensor.shape });
+          } else {
+            console.log(`Epoch ${epoch + 1}: Loss = ${logs.loss.toFixed(4)}`);
+          }
         }
+      }
+    });
+    inputTensor.dispose();
+    targetTensor.dispose();
+    return history;
+  }
 
-        const grouped = {};
-        allResults.forEach(r => { if (!grouped[r.ngay]) grouped[r.ngay] = []; grouped[r.ngay].push(r); });
-        const days = Object.keys(grouped).sort((a, b) => this.dateKey(a).localeCompare(this.dateKey(b)));
-        
-        let createdCount = 0;
-        const totalDaysToProcess = days.length - SEQUENCE_LENGTH;
-
-        // Vòng lặp chính: "Sống" lại từng ngày trong quá khứ
-        for (let i = SEQUENCE_LENGTH; i < days.length; i++) {
-            const currentDate = days[i];
-            const previousDate = days[i-1];
-            
-            // a. Chuẩn bị state cho ngày hôm trước
-            const state = this.getStateFromDays(days.slice(i - SEQUENCE_LENGTH, i), grouped);
-
-            // b. DỰ ĐOÁN cho ngày hiện tại
-            const actionProbsTensor = tf.tidy(() => this.actor.predict(tf.tensor3d([state], [1, ...STATE_SHAPE])));
-            const actionProbs = await actionProbsTensor.data();
-            actionProbsTensor.dispose();
-            
-            const prediction = this.decodeOutput(actionProbs);
-            await NNPrediction.findOneAndUpdate({ ngayDuDoan: currentDate }, { ...prediction, danhDauDaSo: true }, { upsert: true });
-            createdCount++;
-
-            // c. HỌC HỎI từ kết quả của ngày hôm trước
-            const actualResultDoc = (grouped[previousDate] || []).find(r => r.giai === 'ĐB');
-            if (actualResultDoc) {
-                const prevState = this.getStateFromDays(days.slice(i - 1 - SEQUENCE_LENGTH, i - 1), grouped);
-                const prevPrediction = await NNPrediction.findOne({ ngayDuDoan: previousDate }).lean();
-                
-                if (prevState && prevPrediction) {
-                    const actualGDBString = String(actualResultDoc.so).padStart(5, '0');
-                    const reward = this.calculateReward(prevPrediction, actualGDBString);
-                    const action = this.getActionFromGDB(actualGDBString);
-
-                    // Thực hiện 1 bước học
-                    await this.learnFromSingleStep(prevState, action, reward, state);
-                }
-            }
-            console.log(`...[AC Train] Đã xử lý ngày ${currentDate} (${createdCount}/${totalDaysToProcess})`);
+  async predict(inputSequence) {
+    // Thêm kiểm tra NaN ở đầu ra
+    if (this.model.getWeights().some(w => w.dataSync().some(isNaN))) {
+        console.error("❌ LỖI: Trọng số của model chứa NaN. Không thể dự đoán.");
+        // Cân nhắc tải lại model hoặc huấn luyện lại
+        await this.loadModel(); 
+        if (this.model.getWeights().some(w => w.dataSync().some(isNaN))) {
+            throw new Error("Model weights are NaN even after reloading.");
         }
-        
-        await this.saveModels();
-        this.isInitialized = true;
-        return { message: `Huấn luyện & tạo lịch sử tuần tự hoàn tất. Đã xử lý ${createdCount} ngày.` };
     }
-
-    // =================================================================
-    // 2. CÁC HÀM CỐT LÕI CỦA RL
-    // =================================================================
-    
-    /**
-     * Thực hiện MỘT bước cập nhật trọng số cho Actor và Critic.
-     */
-    async learnFromSingleStep(state, action, reward, nextState) {
-        const stateTensor = tf.tensor3d([state], [1, ...STATE_SHAPE]);
-        const nextStateTensor = tf.tensor3d([nextState], [1, ...STATE_SHAPE]);
-        const actionTensor = tf.tensor1d(action, 'int32');
-
-        await tf.tidy(async () => {
-            // Cập nhật Critic
-            const criticGrads = tf.variableGrads(() => tf.tidy(() => {
-                const value = this.critic.apply(stateTensor);
-                const nextValue = this.critic.apply(nextStateTensor);
-                const tdTarget = tf.scalar(reward).add(nextValue.mul(tf.scalar(GAMMA)));
-                return tf.losses.meanSquaredError(tdTarget, value);
-            }));
-            this.criticOptimizer.applyGradients(criticGrads.grads);
-
-            // Cập nhật Actor
-            const advantage = tf.tidy(() => {
-                const value = this.critic.predict(stateTensor);
-                const nextValue = this.critic.predict(nextStateTensor);
-                const tdTarget = tf.scalar(reward).add(nextValue.mul(tf.scalar(GAMMA)));
-                return tdTarget.sub(value).detach();
-            });
-
-            const actorGrads = tf.variableGrads(() => tf.tidy(() => {
-                const policy = this.actor.apply(stateTensor).squeeze();
-                const logProb = tf.log(policy.gather(actionTensor));
-                return logProb.mul(advantage).mul(tf.scalar(-1)).mean();
-            }));
-            this.actorOptimizer.applyGradients(actorGrads.grads);
-        });
-
-        // Dọn dẹp tensor
-        stateTensor.dispose();
-        nextStateTensor.dispose();
-        actionTensor.dispose();
+    const inputTensor = tf.tensor3d([inputSequence], [1, SEQUENCE_LENGTH, this.inputNodes]);
+    const prediction = this.model.predict(inputTensor);
+    const output = await prediction.data();
+    if (output.some(isNaN)) {
+        console.error("❌ LỖI: Kết quả dự đoán là NaN.");
+        // Trả về một mảng rỗng hoặc giá trị mặc định thay vì NaN
+        return Array(OUTPUT_NODES).fill(0);
     }
-    
-    /**
-     * SỬA LỖI: Thu thập duy nhất 1 tập để học cho ngày mới nhất.
-     */
-    async collectEpisodes() {
-        const predictionToLearn = await NNPrediction.findOne({ danhDauDaSo: false }).sort({_id: -1}).lean();
-        if (!predictionToLearn) return [];
+    prediction.dispose();
+    inputTensor.dispose();
+    return Array.from(output);
+  }
 
-        const date = predictionToLearn.ngayDuDoan;
-        console.log(`...[AC Learn] Bắt đầu thu thập tập cho ngày ${date}...`);
+  prepareTarget(gdbString) {
+    const target = Array(OUTPUT_NODES).fill(0);
+    gdbString.split('').forEach((digit, index) => {
+      const d = parseInt(digit);
+      if (!isNaN(d) && index < 5) {
+        target[index * 10 + d] = 0.99;
+      }
+    });
+    return target;
+  }
 
-        const results = await Result.find().sort({ 'ngay': 1 }).lean();
-        const grouped = {};
-        results.forEach(r => { if (!grouped[r.ngay]) grouped[r.ngay] = []; grouped[r.ngay].push(r); });
-        const days = Object.keys(grouped).sort((a,b) => this.dateKey(a).localeCompare(this.dateKey(b)));
-        
-        const dateIndex = days.indexOf(date);
-        if (dateIndex < SEQUENCE_LENGTH) return [];
-        
-        const actualResultDoc = (grouped[date] || []).find(r => r.giai === 'ĐB');
-        if (!actualResultDoc?.so || String(actualResultDoc.so).length < 5) return [];
-
-        const state = this.getStateFromDays(days.slice(dateIndex - SEQUENCE_LENGTH, dateIndex), grouped);
-        const nextState = this.getStateFromDays(days.slice(dateIndex - SEQUENCE_LENGTH + 1, dateIndex + 1), grouped);
-        const actualGDBString = String(actualResultDoc.so).padStart(5, '0');
-        const reward = this.calculateReward(predictionToLearn, actualGDBString);
-        const action = this.getActionFromGDB(actualGDBString);
-        
-        return [{ state, action, reward, nextState, date }];
+  async prepareTrainingData() {
+    console.log('📝 Bắt đầu chuẩn bị dữ liệu huấn luyện...');
+    const results = await Result.find().sort({ 'ngay': 1 }).lean();
+    console.log(`📊 Tổng số bản ghi trong DB: ${results.length}`);
+    console.log('📋 5 bản ghi đầu tiên:', results.slice(0, 5).map(r => ({ ngay: r.ngay, giai: r.giai, so: r.so })));
+    if (results.length < SEQUENCE_LENGTH + 1) {
+      throw new Error(`Không đủ dữ liệu. Cần ít nhất ${SEQUENCE_LENGTH + 1} ngày.`);
     }
-
-    // =================================================================
-    // 3. CÁC HÀM CÔNG KHAI KHÁC
-    // =================================================================
-    
-    async runLearning() {
-        if (!this.isInitialized) {
-            const loaded = await this.loadModels();
-            if (!loaded) throw new Error("Models not trained. Please run historical training first.");
+    const grouped = {};
+    results.forEach(r => {
+      if (!grouped[r.ngay]) grouped[r.ngay] = [];
+      grouped[r.ngay].push(r);
+    });
+    const days = Object.keys(grouped).sort((a, b) => this.dateKey(a).localeCompare(this.dateKey(b)));
+    const trainingData = [];
+    console.log(`📅 Tổng số ngày có dữ liệu: ${days.length}`);
+    console.log('📅 5 ngày đầu:', days.slice(0, 5));
+    for (let i = 0; i < days.length - SEQUENCE_LENGTH; i++) {
+      const sequenceDaysStrings = days.slice(i, i + SEQUENCE_LENGTH);
+      const targetDayString = days[i + SEQUENCE_LENGTH];
+      const inputSequence = [];
+      let sequenceValid = true;
+      for(let j = 0; j < SEQUENCE_LENGTH; j++) {
+        const currentDayForFeature = grouped[sequenceDaysStrings[j]] || [];
+        const dateStr = sequenceDaysStrings[j];
+        const previousDaysForBasicFeatures = days.slice(0, i + j).map(day => grouped[day] || []);
+        const previousDaysForAdvancedFeatures = previousDaysForBasicFeatures.slice().reverse();
+        const basicFeatures = this.featureService.extractAllFeatures(currentDayForFeature, previousDaysForBasicFeatures, dateStr);
+        const advancedFeatures = this.advancedFeatureEngineer.extractPremiumFeatures(currentDayForFeature, previousDaysForAdvancedFeatures);
+        let finalFeatureVector = [...basicFeatures, ...Object.values(advancedFeatures).flat()];
+        const hasInvalid = finalFeatureVector.some(val => isNaN(val) || val === null || val === undefined || !isFinite(val));
+        if (hasInvalid) {
+          console.error(`❌ Dữ liệu không hợp lệ ở ngày ${dateStr}:`, {
+            basicFeatures: basicFeatures.some(v => isNaN(v)),
+            advancedFeatures: Object.values(advancedFeatures).flat().some(v => isNaN(v)),
+            finalVector: finalFeatureVector.filter(v => isNaN(v)).length
+          });
+          sequenceValid = false;
+          break;
         }
-        
-        console.log("🔔 [AC Learn] Starting Reinforcement Learning loop for new results...");
-        const episodes = await this.collectEpisodes();
-        if (episodes.length === 0) {
-            await NNPrediction.updateMany({ danhDauDaSo: false }, { danhDauDaSo: true });
-            return { message: "Không có dữ liệu mới hợp lệ để học." };
+        const EXPECTED_SIZE = 346;
+        if (finalFeatureVector.length !== EXPECTED_SIZE) {
+          console.warn(`⚠️ Điều chỉnh kích thước feature vector: ${finalFeatureVector.length} -> ${EXPECTED_SIZE}`);
+          if (finalFeatureVector.length > EXPECTED_SIZE) {
+            finalFeatureVector = finalFeatureVector.slice(0, EXPECTED_SIZE);
+          } else {
+            finalFeatureVector = [...finalFeatureVector, ...Array(EXPECTED_SIZE - finalFeatureVector.length).fill(0)];
+          }
         }
-
-        for (const episode of episodes) {
-            await this.learnFromSingleStep(episode.state, episode.action, episode.reward, episode.nextState);
-            console.log(`...[AC Learn] Learned from episode on ${episode.date}.`);
+        inputSequence.push(finalFeatureVector);
+      }
+      if (!sequenceValid) continue;
+      const targetGDB = (grouped[targetDayString] || []).find(r => r.giai === 'ĐB');
+      if (targetGDB?.so && String(targetGDB.so).length >= 5) {
+        const targetGDBString = String(targetGDB.so).padStart(5, '0');
+        const targetArray = this.prepareTarget(targetGDBString);
+        const invalidTargets = targetArray.filter(val => isNaN(val) || val === null || val === undefined);
+        if (invalidTargets.length > 0) {
+          console.error(`❌ Target không hợp lệ cho ngày ${targetDayString}:`, invalidTargets.length);
+          continue;
         }
-        
-        await this.saveModels();
-        await NNPrediction.updateMany({ danhDauDaSo: false }, { danhDauDaSo: true });
-        return { message: `RL training complete. Learned from ${episodes.length} episodes.` };
+        trainingData.push({ inputSequence, targetArray });
+      }
     }
-
-    async runNextDayPrediction() {
-        if (!this.isInitialized) {
-            const loaded = await this.loadModels();
-            if (!loaded) throw new Error("Models not trained.");
-        }
-        
-        const inputSequence = await this.preparePredictionInput();
-        
-        const actionProbsTensor = tf.tidy(() => this.actor.predict(tf.tensor3d([inputSequence], [1, ...STATE_SHAPE])));
-        const output = await actionProbsTensor.data();
-        actionProbsTensor.dispose();
-        
-        const prediction = this.decodeOutput(output);
-        
-        const results = await Result.find().sort({_id: -1}).limit(1).lean();
-        const latestDay = results[0].ngay;
-        const nextDayStr = DateTime.fromFormat(latestDay, 'dd/MM/yyyy').plus({ days: 1 }).toFormat('dd/MM/yyyy');
-
-        await NNPrediction.findOneAndUpdate(
-            { ngayDuDoan: nextDayStr },
-            { ...prediction, danhDauDaSo: false },
-            { upsert: true, new: true }
-        );
-
-        return { message: "Prediction generated by Actor-Critic model.", ngayDuDoan: nextDayStr };
+    if (trainingData.length > 0) {
+      console.log('🔍 DEBUG - Kiểm tra dữ liệu training:');
+      console.log(`- Số chuỗi: ${trainingData.length}`);
+      console.log(`- Kích thước input sequence: ${trainingData[0].inputSequence.length}`);
+      console.log(`- Kích thước feature vector: ${trainingData[0].inputSequence[0].length}`);
+      const sampleFeatures = trainingData[0].inputSequence.flat();
+      const sampleTargets = trainingData[0].targetArray;
+      console.log(`- Sample features - Min: ${Math.min(...sampleFeatures)}, Max: ${Math.max(...sampleFeatures)}`);
+      console.log(`- Sample targets - Min: ${Math.min(...sampleTargets)}, Max: ${Math.max(...sampleTargets)}`);
+      const nanSampleFeatures = sampleFeatures.filter(v => isNaN(v)).length;
+      const nanSampleTargets = sampleTargets.filter(v => isNaN(v)).length;
+      console.log(`- NaN trong sample features: ${nanSampleFeatures}`);
+      console.log(`- NaN trong sample targets: ${nanSampleTargets}`);
+      this.inputNodes = trainingData[0].inputSequence[0].length;
+      console.log(`✅ Đã chuẩn bị ${trainingData.length} chuỗi dữ liệu hợp lệ`);
+    } else {
+      throw new Error("❌ Không có dữ liệu training hợp lệ sau khi kiểm tra.");
     }
-    // =================================================================
-    // 1. XÂY DỰNG & LƯU/TẢI MÔ HÌNH
-    // =================================================================
-    buildActor() {
-        const model = tf.sequential();
-        model.add(tf.layers.lstm({ units: 64, inputShape: STATE_SHAPE, returnSequences: false }));
-        model.add(tf.layers.dense({ units: 32, activation: 'relu' }));
-        model.add(tf.layers.dense({ units: OUTPUT_NODES, activation: 'softmax' }));
-        this.actor = model;
-        console.log("✅ Actor model built.");
-    }
+    return trainingData;
+  }
 
-    buildCritic() {
-        const model = tf.sequential();
-        model.add(tf.layers.lstm({ units: 64, inputShape: STATE_SHAPE, returnSequences: false }));
-        model.add(tf.layers.dense({ units: 32, activation: 'relu' }));
-        model.add(tf.layers.dense({ units: 1, activation: 'tanh' }));
-        this.critic = model;
-        console.log("✅ Critic model built.");
-    }
-    
-    async saveModels() {
-        if (!this.actor || !this.critic) throw new Error("Models not built.");
-        console.log("💾 [AC Save] Saving Actor and Critic models to GCS...");
-        await Promise.all([
-            this.actor.save(getGcsIoHandler(`models/${ACTOR_MODEL_NAME}`)),
-            this.critic.save(getGcsIoHandler(`models/${CRITIC_MODEL_NAME}`))
-        ]);
-        await NNState.findOneAndUpdate(
-            { modelName: ACTOR_MODEL_NAME },
-            { state: { savedAt: new Date(), gcsPath: `gs://${bucketName}/models/${ACTOR_MODEL_NAME}` } },
-            { upsert: true }
-        );
-        console.log("✅ [AC Save] Models saved successfully.");
-    }
+  dateKey(s) {
+    if (!s || typeof s !== 'string') return '';
+    const parts = s.split('/');
+    return parts.length !== 3 ? s : `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
+  }
 
-    async loadModels() {
+  async saveModel() {
+    if (!this.model) throw new Error('Không có model để lưu.');
+    console.log(`💾 [SaveModel] Chuẩn bị lưu model lên GCS...`);
+    const modelGcsPath = `models/${NN_MODEL_NAME}`;
+    const ioHandler = getGcsIoHandler(modelGcsPath);
+    const saveResult = await this.model.save(ioHandler);
+    const modelInfo = {
+        modelName: NN_MODEL_NAME,
+        inputNodes: this.inputNodes,
+        savedAt: new Date().toISOString(),
+        gcsPath: `gs://${bucketName}/${modelGcsPath}`
+    };
+    await NNState.findOneAndUpdate(
+        { modelName: NN_MODEL_NAME },
+        { state: modelInfo, modelArtifacts: saveResult },
+        { upsert: true, new: true }
+    );
+    console.log(`✅ [SaveModel] Model đã được lưu thành công lên GCS tại: ${modelInfo.gcsPath}`);
+  }
+
+  async loadModel() {
+    console.log(`🔍 [LoadModel] Chuẩn bị tải model từ GCS...`);
+    const modelState = await NNState.findOne({ modelName: NN_MODEL_NAME }).lean();
+    if (modelState && modelState.state && modelState.state.gcsPath) {
+        const modelGcsPath = modelState.state.gcsPath.replace(`gs://${bucketName}/`, '');
         try {
-            console.log("🔍 [AC Load] Loading Actor and Critic models from GCS...");
-            const [actor, critic] = await Promise.all([
-                tf.loadLayersModel(getGcsIoHandler(`models/${ACTOR_MODEL_NAME}`)),
-                tf.loadLayersModel(getGcsIoHandler(`models/${CRITIC_MODEL_NAME}`))
-            ]);
-            this.actor = actor;
-            this.critic = critic;
-            this.isInitialized = true;
-            console.log("✅ [AC Load] Models loaded successfully.");
+            const ioHandler = getGcsIoHandler(modelGcsPath);
+            this.model = await tf.loadLayersModel(ioHandler);
+            this.inputNodes = modelState.state.inputNodes;
+            console.log(`✅ [LoadModel] Model đã được tải thành công từ GCS: ${modelState.state.gcsPath}`);
+            this.model.summary();
             return true;
         } catch (error) {
-            console.log("❌ [AC Load] Could not load models. Need training.", error.message);
+            console.error(`❌ [LoadModel] Lỗi khi tải model từ GCS (${modelState.state.gcsPath}):`, error);
             return false;
         }
+    } else {
+        console.log('❌ [LoadModel] Không tìm thấy đường dẫn GCS trong database. Model cần được huấn luyện lại.');
+        return false;
     }
-    
-    // =================================================================
-    // 2. QUY TRÌNH HỌC TĂNG CƯỜNG
-    // =================================================================
-    async runLearning() {
-        if (!this.isInitialized) {
-            const loaded = await this.loadModels();
-            if (!loaded) throw new Error("Models not trained. Please run historical training first.");
-        }
-        
-        console.log("🔔 [AC Learn] Starting Reinforcement Learning loop...");
-        const episodes = await this.collectEpisodes();
-        if (episodes.length === 0) {
-            await NNPrediction.updateMany({ danhDauDaSo: false }, { danhDauDaSo: true });
-            return { message: "Không có dữ liệu mới hợp lệ để học." };
-        }
+  }
 
-        const actorOptimizer = tf.train.adam(ACTOR_LR);
-        const criticOptimizer = tf.train.adam(CRITIC_LR);
-
-        for (const episode of episodes) {
-            const { state, action, reward, nextState, date } = episode;
-
-            const stateTensor = tf.tensor3d([state], [1, ...STATE_SHAPE]);
-            const nextStateTensor = tf.tensor3d([nextState], [1, ...STATE_SHAPE]);
-            
-            await tf.tidy(async () => {
-                // --- Cập nhật Critic ---
-                const criticGrads = tf.variableGrads(() => tf.tidy(() => {
-                    const value = this.critic.apply(stateTensor);
-                    const nextValue = this.critic.apply(nextStateTensor);
-                    const tdTarget = tf.scalar(reward).add(nextValue.mul(tf.scalar(GAMMA)));
-                    const tdError = tdTarget.sub(value);
-                    return tdError.square().mean();
-                }));
-                criticOptimizer.applyGradients(criticGrads.grads);
-                tf.dispose(criticGrads.grads);
-
-                // --- Cập nhật Actor ---
-                const advantage = tf.tidy(() => {
-                    const value = this.critic.predict(stateTensor);
-                    const nextValue = this.critic.predict(nextStateTensor);
-                    const tdTarget = tf.scalar(reward).add(nextValue.mul(tf.scalar(GAMMA)));
-                    return tdTarget.sub(value).detach();
-                });
-
-                const actorGrads = tf.variableGrads(() => tf.tidy(() => {
-                    const policy = this.actor.apply(stateTensor);
-                    const logProb = tf.log(policy.gather(action, 1));
-                    return logProb.mul(advantage).mul(tf.scalar(-1)).mean(); // Lấy mean để loss là scalar
-                }));
-                actorOptimizer.applyGradients(actorGrads.grads);
-                tf.dispose(actorGrads.grads);
-                advantage.dispose();
-            });
-
-            stateTensor.dispose();
-            nextStateTensor.dispose();
-            action.dispose();
-            console.log(`...[AC Learn] Learned from episode on ${date}.`);
-        }
-        
-        await this.saveModels();
-        await NNPrediction.updateMany({ danhDauDaSo: { $in: episodes.map(e => e.date) } }, { danhDauDaSo: true });
-        return { message: `RL training complete. Learned from ${episodes.length} episodes.` };
+  async runHistoricalTraining() {
+    console.log('🔔 [TensorFlow Service] Bắt đầu Huấn luyện Lịch sử với kiến trúc Premium...');
+    const trainingData = await this.prepareTrainingData();
+    if (trainingData.length === 0 || trainingData.some(d => d.inputSequence.length !== SEQUENCE_LENGTH || d.inputSequence.flat().some(isNaN))) {
+      throw new Error('Dữ liệu training rỗng hoặc chứa giá trị không hợp lệ. Kiểm tra DB và feature engineering.');
     }
+    const inputs = trainingData.map(d => d.inputSequence);
+    const targets = trainingData.map(d => d.targetArray);
+    await this.buildModel(this.inputNodes);
+    console.log('✅ Model đã được compile. Bắt đầu quá trình training...');
+    await this.trainModel({ inputs, targets });
+    await this.saveModel();
+    return {
+      message: `Huấn luyện Premium Model hoàn tất. Đã xử lý ${trainingData.length} chuỗi, ${EPOCHS} epochs.`,
+      sequences: trainingData.length,
+      epochs: EPOCHS,
+      featureSize: this.inputNodes,
+      modelName: NN_MODEL_NAME
+    };
+  }
 
-    // =================================================================
-    // 3. HUẤN LUYỆN LỊCH SỬ & DỰ ĐOÁN
-    // =================================================================
-    async runHistoricalTraining() {
-        console.log("🕐 [AC Train] Starting historical pre-training...");
-        this.buildActor();
-        this.buildCritic();
-
-        const trainingData = await this.prepareHistoricalData();
-        if (!trainingData) {
-            throw new Error("Không thể chuẩn bị dữ liệu huấn luyện lịch sử.");
-        }
-        
-        const { inputs, actorTargets, criticTargets } = trainingData;
-
-        console.log(`...Training Actor with ${inputs.shape[0]} samples...`);
-        this.actor.compile({ optimizer: tf.train.adam(ACTOR_LR), loss: 'categoricalCrossentropy' });
-        await this.actor.fit(inputs, actorTargets, { epochs: 30, batchSize: 64, shuffle: true, verbose: 0, callbacks: { onEpochEnd: (e) => console.log(`  Actor Epoch ${e+1}`) } });
-
-        console.log(`...Training Critic with ${inputs.shape[0]} samples...`);
-        this.critic.compile({ optimizer: tf.train.adam(CRITIC_LR), loss: 'meanSquaredError' });
-        await this.critic.fit(inputs, criticTargets, { epochs: 20, batchSize: 64, shuffle: true, verbose: 0, callbacks: { onEpochEnd: (e) => console.log(`  Critic Epoch ${e+1}`) } });
-        
-        inputs.dispose();
-        actorTargets.dispose();
-        criticTargets.dispose();
-
-        await this.saveModels();
-        this.isInitialized = true;
-        return { message: "Actor-Critic models pre-trained successfully." };
+  async runLearning() {
+    console.log('🔔 [TensorFlow Service] Learning from new results...');
+    if (!this.model) {
+      const modelLoaded = await this.loadModel();
+      if (!modelLoaded) {
+        throw new Error('Model chưa được huấn luyện. Hãy chạy huấn luyện lịch sử trước.');
+      }
     }
-
-    async runNextDayPrediction() {
-        if (!this.isInitialized) {
-            const loaded = await this.loadModels();
-            if (!loaded) throw new Error("Models not trained.");
-        }
-        
-        const inputSequence = await this.preparePredictionInput();
-        
-        const actionProbsTensor = tf.tidy(() => this.actor.predict(tf.tensor3d([inputSequence], [1, ...STATE_SHAPE])));
-        const output = await actionProbsTensor.data();
-        actionProbsTensor.dispose();
-        
-        const prediction = this.decodeOutput(output);
-        
-        const results = await Result.find().sort({_id: -1}).limit(1).lean();
-        const latestDay = results[0].ngay;
-        const nextDayStr = DateTime.fromFormat(latestDay, 'dd/MM/yyyy').plus({ days: 1 }).toFormat('dd/MM/yyyy');
-
-        await NNPrediction.findOneAndUpdate(
-            { ngayDuDoan: nextDayStr },
-            { ngayDuDoan: nextDayStr, ...prediction, danhDauDaSo: false },
-            { upsert: true, new: true }
-        );
-
-        return { message: "Prediction generated by Actor-Critic model.", ngayDuDoan: nextDayStr };
+    const predictionsToLearn = await NNPrediction.find({ danhDauDaSo: false }).lean();
+    if (predictionsToLearn.length === 0) {
+      return { message: 'Không có dự đoán mới nào để học.' };
     }
-
-    // =================================================================
-    // 4. CÁC HÀM HELPER (HOÀN CHỈNH)
-    // =================================================================
-    dateKey(s) {
-        if (!s) return '';
-        const parts = s.split('/');
-        return parts.length !== 3 ? s : `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
-    }
-
-    getStateFromDays(days, groupedData) {
-        return days.map(day => this.getFeatureVectorForDay(groupedData[day] || [], [], day));
-    }
-
-    
- getFeatureVectorForDay(dayResults, previousDaysData, dateStr) {
-        // Hàm này có thể rất phức tạp, tạm thời đơn giản hóa
-        const features = Array(FEATURE_SIZE).fill(0);
-        if(dayResults.length > 0) {
-            const gdb = dayResults.find(r => r.giai === 'ĐB');
-            if (gdb && gdb.so) {
-                const digits = String(gdb.so).padStart(5,'0').split('').map(Number);
-                digits.forEach((d,i) => features[i] = d / 9.0);
+    const results = await Result.find().sort({ 'ngay': 1 }).lean();
+    const grouped = {};
+    results.forEach(r => {
+      if (!grouped[r.ngay]) grouped[r.ngay] = [];
+      grouped[r.ngay].push(r);
+    });
+    const days = Object.keys(grouped).sort((a, b) => this.dateKey(a).localeCompare(this.dateKey(b)));
+    let learnedCount = 0;
+    const trainingData = [];
+    for (const pred of predictionsToLearn) {
+      const targetDayStr = pred.ngayDuDoan;
+      const targetDayIndex = days.indexOf(targetDayStr);
+      if (targetDayIndex >= SEQUENCE_LENGTH) {
+        const actualResult = (grouped[targetDayStr] || []).find(r => r.giai === 'ĐB');
+        if (actualResult?.so && String(actualResult.so).length >= 5) {
+          const sequenceDays = days.slice(targetDayIndex - SEQUENCE_LENGTH, targetDayIndex);
+          const previousDays = [];
+          const inputSequence = sequenceDays.map(day => {
+            const dayResults = grouped[day] || [];
+            const prevDays = previousDays.slice();
+            previousDays.push(dayResults);
+            const basicFeatures = this.featureService.extractAllFeatures(dayResults, prevDays, day);
+            const advancedFeatures = this.advancedFeatureEngineer.extractPremiumFeatures(dayResults, prevDays);
+            let finalFeatureVector = [...basicFeatures, ...Object.values(advancedFeatures).flat()];
+            console.log(`📊 [Learning] Ngày ${day}: Basic=${basicFeatures.length}, Advanced=${Object.values(advancedFeatures).flat().length}, Total=${finalFeatureVector.length}`);
+            const EXPECTED_SIZE = 346;
+            if (finalFeatureVector.length !== EXPECTED_SIZE) {
+              console.warn(`⚠️ Điều chỉnh features: ${finalFeatureVector.length} -> ${EXPECTED_SIZE}`);
+              if (finalFeatureVector.length > EXPECTED_SIZE) {
+                finalFeatureVector = finalFeatureVector.slice(0, EXPECTED_SIZE);
+              } else {
+                finalFeatureVector = [...finalFeatureVector, ...Array(EXPECTED_SIZE - finalFeatureVector.length).fill(0)];
+              }
             }
+            return finalFeatureVector;
+          });
+          const totalValues = inputSequence.flat().length;
+          const expectedValues = SEQUENCE_LENGTH * 346;
+          console.log(`🔢 [Learning] Tổng số values: ${totalValues}, Expected: ${expectedValues}`);
+          if (totalValues !== expectedValues) {
+            console.error(`❌ [Learning] Lỗi dimension: có ${totalValues} values, cần ${expectedValues} values`);
+            continue;
+          }
+          const targetGDBString = String(actualResult.so).padStart(5, '0');
+          const targetArray = this.prepareTarget(targetGDBString);
+          trainingData.push({ inputSequence, targetArray });
+          learnedCount++;
         }
-        return features;
+      }
+      await NNPrediction.updateOne({ _id: pred._id }, { danhDauDaSo: true });
     }
+    if (trainingData.length > 0) {
+      console.log(`🎯 [Learning] Bắt đầu học từ ${trainingData.length} chuỗi dữ liệu mới`);
+      const inputs = trainingData.map(d => d.inputSequence);
+      const targets = trainingData.map(d => d.targetArray);
+      const inputTensor = tf.tensor3d(inputs, [inputs.length, SEQUENCE_LENGTH, this.inputNodes]);
+      const targetTensor = tf.tensor2d(targets, [targets.length, OUTPUT_NODES]);
 
-    calculateReward(prediction, actualGDB) {
-        let correctCount = 0;
-        if (prediction.pos1.includes(actualGDB[0])) correctCount++;
-        if (prediction.pos2.includes(actualGDB[1])) correctCount++;
-        if (prediction.pos3.includes(actualGDB[2])) correctCount++;
-        if (prediction.pos4.includes(actualGDB[3])) correctCount++;
-        if (prediction.pos5.includes(actualGDB[4])) correctCount++;
-        
-        if (correctCount === 5) return 1.0;
-        if (correctCount >= 3) return 0.5;
-        if (correctCount > 0) return 0.1;
-        return -1.0;
+      // =================================================================
+      // SỬA LỖI NAN: Thêm Gradient Clipping vào optimizer khi học
+      // =================================================================
+      const learningOptimizer = tf.train.adam(0.0001); // Learning rate nhỏ hơn khi học thêm
+      learningOptimizer.clipNorm = 1.0;
+
+      await this.model.fit(inputTensor, targetTensor, {
+        epochs: 3,
+        batchSize: Math.min(BATCH_SIZE, inputs.length),
+        validationSplit: 0.1,
+        optimizer: learningOptimizer // Sử dụng optimizer đã được cấu hình
+      });
+      // =================================================================
+
+      inputTensor.dispose();
+      targetTensor.dispose();
+      await this.saveModel();
+      console.log(`✅ [Learning] Đã học xong từ ${learnedCount} kết quả mới`);
+    } else {
+      console.log('ℹ️ [Learning] Không có dữ liệu training hợp lệ để học');
     }
+    return { message: `TensorFlow LSTM đã học xong. Đã xử lý ${learnedCount} kết quả mới.` };
+  }
 
-    getActionFromGDB(gdbString) {
-        const actionIndices = [];
-        for(let i=0; i<5; i++) {
-            const digit = parseInt(gdbString[i]);
-            actionIndices.push(i * 10 + digit);
+  async runNextDayPrediction() {
+    console.log('🔔 [TensorFlow Service] Generating next day prediction...');
+    if (!this.model) {
+      const modelLoaded = await this.loadModel();
+      if (!modelLoaded) {
+        throw new Error('Model chưa được huấn luyện. Hãy chạy huấn luyện lịch sử trước.');
+      }
+    }
+    const results = await Result.find().lean();
+    if (results.length < SEQUENCE_LENGTH) {
+      throw new Error(`Không đủ dữ liệu. Cần ít nhất ${SEQUENCE_LENGTH} ngày.`);
+    }
+    const grouped = {};
+    results.forEach(r => {
+      if (!grouped[r.ngay]) grouped[r.ngay] = [];
+      grouped[r.ngay].push(r);
+    });
+    const days = Object.keys(grouped).sort((a, b) => this.dateKey(a).localeCompare(this.dateKey(b)));
+    const latestSequenceDays = days.slice(-SEQUENCE_LENGTH);
+    console.log(`🔍 Chuẩn bị dữ liệu dự đoán từ ${latestSequenceDays.length} ngày gần nhất`);
+    const previousDays = [];
+    const inputSequence = latestSequenceDays.map(day => {
+      const dayResults = grouped[day] || [];
+      const prevDays = previousDays.slice();
+      previousDays.push(dayResults);
+      const basicFeatures = this.featureService.extractAllFeatures(dayResults, prevDays, day);
+      const advancedFeatures = this.advancedFeatureEngineer.extractPremiumFeatures(dayResults, prevDays);
+      let finalFeatureVector = [...basicFeatures, ...Object.values(advancedFeatures).flat()];
+      console.log(`📊 Ngày ${day}: Basic=${basicFeatures.length}, Advanced=${Object.values(advancedFeatures).flat().length}, Total=${finalFeatureVector.length}`);
+      const EXPECTED_SIZE = 346;
+      if (finalFeatureVector.length !== EXPECTED_SIZE) {
+        console.warn(`⚠️ Điều chỉnh features: ${finalFeatureVector.length} -> ${EXPECTED_SIZE}`);
+        if (finalFeatureVector.length > EXPECTED_SIZE) {
+          finalFeatureVector = finalFeatureVector.slice(0, EXPECTED_SIZE);
+        } else {
+          finalFeatureVector = [...finalFeatureVector, ...Array(EXPECTED_SIZE - finalFeatureVector.length).fill(0)];
         }
-        return actionIndices;
+      }
+      return finalFeatureVector;
+    });
+    const totalValues = inputSequence.flat().length;
+    const expectedValues = SEQUENCE_LENGTH * 346;
+    console.log(`🔢 Tổng số values: ${totalValues}, Expected: ${expectedValues}`);
+    if (totalValues !== expectedValues) {
+      throw new Error(`Lỗi dimension: có ${totalValues} values, cần ${expectedValues} values`);
     }
-    
-    async prepareHistoricalData() {
-        const results = await Result.find().sort({ 'ngay': 1 }).lean();
-        if (results.length < SEQUENCE_LENGTH + 2) return null;
+    const output = await this.predict(inputSequence);
+    const prediction = this.decodeOutput(output);
+    const latestDay = latestSequenceDays[latestSequenceDays.length - 1];
+    const nextDayStr = DateTime.fromFormat(latestDay, 'dd/MM/yyyy').plus({ days: 1 }).toFormat('dd/MM/yyyy');
+    await NNPrediction.findOneAndUpdate(
+      { ngayDuDoan: nextDayStr },
+      { ngayDuDoan: nextDayStr, ...prediction, danhDauDaSo: false },
+      { upsert: true, new: true }
+    );
+    return {
+      message: `TensorFlow LSTM đã tạo dự đoán cho ngày ${nextDayStr}.`,
+      ngayDuDoan: nextDayStr
+    };
+  }
 
-        const grouped = {};
-        results.forEach(r => { if (!grouped[r.ngay]) grouped[r.ngay] = []; grouped[r.ngay].push(r); });
-        const days = Object.keys(grouped).sort((a, b) => this.dateKey(a).localeCompare(this.dateKey(b)));
-
-        const inputs = [];
-        const actorTargets = [];
-        const criticTargets = [];
-
-        for (let i = SEQUENCE_LENGTH; i < days.length -1; i++) {
-            const stateDays = days.slice(i - SEQUENCE_LENGTH, i);
-            const targetDay = days[i];
-
-            const state = stateDays.map(day => this.getFeatureVectorForDay(grouped[day] || [], [], day));
-            const targetGDB = (grouped[targetDay] || []).find(r => r.giai === 'ĐB');
-
-            if (targetGDB?.so && String(targetGDB.so).length >= 5) {
-                inputs.push(state);
-                const targetGDBString = String(targetGDB.so).padStart(5, '0');
-                const actorTarget = this.prepareTarget(targetGDBString);
-                actorTargets.push(actorTarget);
-                
-                // Reward giả định cho pre-training: 1.0 cho mọi dữ liệu lịch sử
-                criticTargets.push([1.0]); 
-            }
-        }
-        return {
-            inputs: tf.tensor3d(inputs),
-            actorTargets: tf.tensor2d(actorTargets),
-            criticTargets: tf.tensor2d(criticTargets)
-        };
+  decodeOutput(output) {
+    const prediction = { pos1: [], pos2: [], pos3: [], pos4: [], pos5: [] };
+    for (let i = 0; i < 5; i++) {
+      const positionOutput = output.slice(i * 10, (i + 1) * 10);
+      const digitsWithValues = positionOutput
+        .map((value, index) => ({ digit: String(index), value }))
+        .sort((a, b) => b.value - a.value)
+        .slice(0, 5)
+        .map(item => item.digit);
+      prediction[`pos${i + 1}`] = digitsWithValues;
     }
-    
-    async collectEpisodes() {
-        console.log("...[AC Learn] Bắt đầu thu thập các 'tập' (ngày) để học...");
-        const predictionsToLearn = await NNPrediction.find({ danhDauDaSo: false }).lean();
-        if (predictionsToLearn.length === 0) {
-            return [];
-        }
-        
-        const results = await Result.find().sort({ 'ngay': 1 }).lean();
-        const grouped = {};
-        results.forEach(r => { if (!grouped[r.ngay]) grouped[r.ngay] = []; grouped[r.ngay].push(r); });
-        const days = Object.keys(grouped).sort((a,b) => this.dateKey(a).localeCompare(this.dateKey(b)));
-        
-        const episodes = [];
-
-        for (const pred of predictionsToLearn) {
-            const date = pred.ngayDuDoan;
-            const dateIndex = days.indexOf(date);
-            
-            if (dateIndex < SEQUENCE_LENGTH || dateIndex >= days.length - 1) {
-                console.log(`...Bỏ qua ngày ${date}: không đủ dữ liệu trước/sau.`);
-                continue;
-            }
-            
-            const actualResultDoc = (grouped[date] || []).find(r => r.giai === 'ĐB');
-            if (!actualResultDoc?.so || String(actualResultDoc.so).length < 5) {
-                 console.log(`...Bỏ qua ngày ${date}: không có kết quả GĐB thực tế.`);
-                continue;
-            }
-
-            const stateDays = days.slice(dateIndex - SEQUENCE_LENGTH, dateIndex);
-            const state = stateDays.map(d => this.getFeatureVectorForDay(grouped[d] || [], [], d));
-
-            const nextStateDays = days.slice(dateIndex - SEQUENCE_LENGTH + 1, dateIndex + 1);
-            const nextState = nextStateDays.map(d => this.getFeatureVectorForDay(grouped[d] || [], [], d));
-
-            const actualGDBString = String(actualResultDoc.so).padStart(5, '0');
-            const reward = this.calculateReward(pred, actualGDBString);
-            
-            const action = tf.tidy(() => {
-                const actionIndices = [];
-                for(let i=0; i<5; i++) {
-                    const digit = parseInt(actualGDBString[i]);
-                    actionIndices.push(i * 10 + digit);
-                }
-                return tf.tensor2d(actionIndices, [5, 1], 'int32');
-            });
-            
-            episodes.push({ state, action, reward, nextState, date });
-        }
-        
-        console.log(`✅ [AC Learn] Đã thu thập thành công ${episodes.length} tập.`);
-        return episodes;
-    }
-
-    calculateReward(prediction, actualGDB) {
-        let correctCount = 0;
-        if (prediction.pos1.includes(actualGDB[0])) correctCount++;
-        if (prediction.pos2.includes(actualGDB[1])) correctCount++;
-        if (prediction.pos3.includes(actualGDB[2])) correctCount++;
-        if (prediction.pos4.includes(actualGDB[3])) correctCount++;
-        if (prediction.pos5.includes(actualGDB[4])) correctCount++;
-        
-        if (correctCount === 5) return 1.0; // Thưởng lớn nếu trúng cả 5
-        if (correctCount > 0) return 0.5; // Thưởng nhỏ nếu trúng 1-4
-        return -1.0; // Phạt nếu trượt hoàn toàn
-    }
-
-    prepareTarget(gdbString) {
-        const target = Array(OUTPUT_NODES).fill(0.001); // Small probability for all
-        gdbString.split('').forEach((digit, index) => {
-            const d = parseInt(digit);
-            if (!isNaN(d) && index < 5) {
-                target[index * 10 + d] = 0.99; // High probability for correct ones
-            }
-        });
-        return target;
-    }
-    
-    async preparePredictionInput() {
-        const results = await Result.find().sort({_id: -1}).lean();
-        const grouped = {};
-        results.forEach(r => { if (!grouped[r.ngay]) grouped[r.ngay] = []; grouped[r.ngay].push(r); });
-        const days = Object.keys(grouped).sort((a, b) => this.dateKey(a).localeCompare(this.dateKey(b)));
-        
-        if (days.length < SEQUENCE_LENGTH) {
-            throw new Error(`Không đủ dữ liệu để tạo input dự đoán, chỉ có ${days.length} ngày.`);
-        }
-        const latestSequenceDays = days.slice(-SEQUENCE_LENGTH);
-        return this.getStateFromDays(latestSequenceDays, grouped);
-    }
-
-    decodeOutput(output) {
-        const prediction = { pos1: [], pos2: [], pos3: [], pos4: [], pos5: [] };
-        for (let i = 0; i < 5; i++) {
-            const positionOutput = output.slice(i * 10, (i + 1) * 10);
-            const digitsWithValues = positionOutput.map((value, index) => ({ digit: String(index), value }))
-                .sort((a, b) => b.value - a.value).slice(0, 5).map(item => item.digit);
-            prediction[`pos${i + 1}`] = digitsWithValues;
-        }
-        return prediction;
-    }
+    return prediction;
+  }
 }
 
-module.exports = ActorCriticService;
+module.exports = TensorFlowService;
