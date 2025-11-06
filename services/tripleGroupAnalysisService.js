@@ -1,110 +1,77 @@
 const TripleGroupPrediction = require('../models/TripleGroupPrediction');
 const Result = require('../models/Result');
 
-// Các service khác có thể không cần thiết cho logic cốt lõi trong file này,
-// nhưng chúng ta giữ lại để phòng trường hợp mở rộng trong tương lai.
-const FeatureEngineeringService = require('./featureEngineeringService');
-const AdvancedFeatureEngineer = require('./advancedFeatureService');
-
 class TripleGroupAnalysisService {
     constructor() {
-        // Các hằng số và khởi tạo có thể dùng sau
         this.CL_PATTERNS = ['CCC','CCL','CLC','CLL','LLC','LLL','LCC','LCL'];
-        // this.featureService = new FeatureEngineeringService(); // Không dùng trong logic hiện tại
-        // this.advancedFeatureEngineer = new AdvancedFeatureEngineer(); // Không dùng trong logic hiện tại
     }
 
     // =================================================================
-    // CÁC HÀM TẠO DỰ ĐOÁN CHÍNH (CORE FUNCTIONS)
+    // CÁC HÀM TẠO DỰ ĐOÁN CHÍNH
     // =================================================================
 
-    /**
-     * Tạo dự đoán cho ngày tiếp theo (mặc định) hoặc một ngày cụ thể.
-     * @param {string|null} targetDateStr - Ngày dự đoán (dd/MM/yyyy). Nếu null, tự động lấy ngày tiếp theo.
-     * @returns {Promise<object>} - Đối tượng dự đoán đã được tạo và lưu.
-     */
     async generateTripleGroupPrediction(targetDateStr = null) {
-        console.log('🎯 Bắt đầu tạo dự đoán Triple Group...');
+        console.log('🎯 [Service] Bắt đầu tạo dự đoán Triple Group...');
+        // SỬA LỖI: Luôn gọi hàm getNextPredictionDate đã được sửa lỗi để đảm bảo ngày chính xác.
         const targetDate = targetDateStr || await this.getNextPredictionDate();
-        console.log(`📅 Ngày mục tiêu dự đoán: ${targetDate}`);
+        console.log(`📅 [Service] Ngày mục tiêu dự đoán đã được xác định: ${targetDate}`);
 
         try {
-            // Lấy 100 ngày kết quả gần nhất TÍNH TỪ TRƯỚC ngày mục tiêu để phân tích.
             const resultsForAnalysis = await this.getResultsBeforeDate(targetDate, 100);
-            
-            // Phân tích dữ liệu đã lấy.
             const analysisResult = this.analyzeRealData(resultsForAnalysis);
-            
-            // Tạo đối tượng dự đoán từ kết quả phân tích.
             const prediction = this.createPredictionFromAnalysis(analysisResult, targetDate);
             
-            // Lưu dự đoán vào CSDL.
             await this.savePrediction(prediction);
-            console.log(`✅ Đã tạo và lưu dự đoán thành công cho ngày ${targetDate}`);
+            console.log(`✅ [Service] Đã tạo và lưu dự đoán thành công cho ngày ${targetDate}`);
             return prediction;
         } catch (error) {
-            console.error(`❌ Lỗi nghiêm trọng trong generateTripleGroupPrediction cho ngày ${targetDate}:`, error);
-            // Trả về một dự đoán dự phòng nếu có lỗi.
+            console.error(`❌ [Service] Lỗi nghiêm trọng khi tạo dự đoán cho ngày ${targetDate}:`, error);
             return this.getFallbackPrediction(targetDate);
         }
     }
 
-    /**
-     * Tạo dự đoán có tích hợp logic học hỏi (để đáp ứng API).
-     * Hiện tại, nó gọi hàm tạo dự đoán chính.
-     */
     async generatePredictionWithLearning() {
-        console.log('🧠 Dịch vụ: Tạo dự đoán VỚI HỌC HỎI (gọi hàm tạo dự đoán chính)...');
+        console.log('🧠 [Service] Tạo dự đoán VỚI HỌC HỎI...');
         return this.generateTripleGroupPrediction();
     }
 
     // =================================================================
-    // HÀM TẠO LỊCH SỬ DỰ ĐOÁN (ĐÃ SỬA LỖI TRIỆT ĐỂ)
+    // HÀM TẠO LỊCH SỬ DỰ ĐOÁN (Đã sửa lỗi)
     // =================================================================
-    /**
-     * Quét toàn bộ lịch sử kết quả, tạo/cập nhật dự đoán cho mỗi ngày có thể.
-     * @returns {Promise<object>} - Thống kê số lượng dự đoán đã tạo.
-     */
+
     async generateHistoricalPredictions() {
-        console.log('🕐 Bắt đầu quét và tạo lại TOÀN BỘ dự đoán lịch sử...');
+        console.log('🕐 [Service] Bắt đầu quét và tạo lại TOÀN BỘ dự đoán lịch sử...');
         
         const allResults = await Result.find().sort({ ngay: 1 }).lean();
         if (allResults.length < 8) {
             throw new Error('Không đủ dữ liệu lịch sử (cần ít nhất 8 ngày).');
         }
 
-        // Nhóm tất cả kết quả theo ngày để truy vấn nhanh hơn.
         const groupedByDate = {};
         allResults.forEach(r => {
             if (!groupedByDate[r.ngay]) groupedByDate[r.ngay] = [];
             groupedByDate[r.ngay].push(r);
         });
 
-        // Lấy danh sách các ngày đã được sắp xếp chính xác.
         const sortedDates = Object.keys(groupedByDate).sort((a, b) => this.dateKey(a).localeCompare(this.dateKey(b)));
         
         let createdCount = 0;
         const totalDaysToProcess = sortedDates.length - 7;
-        console.log(`📝 Tổng số ngày có thể tạo dự đoán: ${totalDaysToProcess}`);
+        console.log(`📝 [Service] Tổng số ngày có thể tạo dự đoán: ${totalDaysToProcess}`);
 
-        // ** SỬA LỖI: Vòng lặp chạy qua TOÀN BỘ các ngày, không còn giới hạn batchSize **
         for (let i = 7; i < sortedDates.length; i++) {
             const targetDate = sortedDates[i];
             
             try {
-                // Lấy 7 ngày trước đó từ dữ liệu đã sắp xếp để phân tích.
                 const analysisDates = sortedDates.slice(i - 7, i);
                 const analysisResults = analysisDates.flatMap(date => groupedByDate[date]);
                 
-                // Thực hiện phân tích và tạo dự đoán.
                 const analysis = this.analyzeRealData(analysisResults);
                 const prediction = this.createPredictionFromAnalysis(analysis, targetDate);
                 
-                // ** SỬA LỖI: Tự động cập nhật kết quả thực tế ngay lập tức. **
                 const actualGDB = (groupedByDate[targetDate] || []).find(r => r.giai === 'ĐB');
                 if (actualGDB && actualGDB.so) {
-                    const gdbStr = String(actualGDB.so).padStart(5, '0');
-                    const lastThree = gdbStr.slice(-3);
+                    const lastThree = String(actualGDB.so).padStart(5, '0').slice(-3);
                     if (lastThree.length === 3) {
                         prediction.actualResult = {
                             tram: lastThree[0],
@@ -118,16 +85,15 @@ class TripleGroupAnalysisService {
 
                 await this.savePrediction(prediction);
                 createdCount++;
-                // Log tiến độ mỗi 20 ngày để theo dõi.
-                if(createdCount % 20 === 0 || createdCount === totalDaysToProcess) { 
-                    console.log(`...Đã tạo ${createdCount}/${totalDaysToProcess} dự đoán lịch sử (ngày gần nhất: ${targetDate})`);
+                if (createdCount % 20 === 0 || createdCount === totalDaysToProcess) { 
+                    console.log(`...[Service] Đã tạo ${createdCount}/${totalDaysToProcess} dự đoán lịch sử (ngày gần nhất: ${targetDate})`);
                 }
             } catch (error) {
-                console.error(`❌ Lỗi khi tạo dự đoán lịch sử cho ngày ${targetDate}:`, error.message);
+                console.error(`❌ [Service] Lỗi khi tạo dự đoán lịch sử cho ngày ${targetDate}:`, error.message);
             }
         }
 
-        console.log(`🎉 Hoàn thành! Đã tạo hoặc cập nhật ${createdCount} dự đoán lịch sử.`);
+        console.log(`🎉 [Service] Hoàn thành! Đã tạo hoặc cập nhật ${createdCount} dự đoán lịch sử.`);
         return { created: createdCount, total: totalDaysToProcess };
     }
 
@@ -135,18 +101,9 @@ class TripleGroupAnalysisService {
     // CÁC HÀM PHÂN TÍCH VÀ XỬ LÝ DỮ LIỆU
     // =================================================================
     
-    /**
-     * Phân tích một tập hợp kết quả để trích xuất các đặc trưng.
-     * @param {Array} results - Mảng các bản ghi kết quả.
-     * @returns {object} - Đối tượng chứa kết quả phân tích.
-     */
     analyzeRealData(results) {
         if (!results || results.length === 0) throw new Error('Không có dữ liệu kết quả để phân tích');
-        
-        // Sắp xếp lại để chắc chắn lấy GĐB gần nhất trong tập dữ liệu.
-        const latestGDB = results
-            .filter(r => r.giai === 'ĐB')
-            .sort((a, b) => this.dateKey(b.ngay).localeCompare(this.dateKey(a.ngay)))[0];
+        const latestGDB = results.filter(r => r.giai === 'ĐB').sort((a, b) => this.dateKey(b.ngay).localeCompare(this.dateKey(a.ngay)))[0];
         
         return {
             totalDays: new Set(results.map(r => r.ngay)).size,
@@ -156,9 +113,6 @@ class TripleGroupAnalysisService {
         };
     }
 
-    /**
-     * Phân tích tần suất xuất hiện của các chữ số ở 3 vị trí cuối GĐB.
-     */
     analyzeDigitFrequency(results) {
         const frequency = { tram: Array(10).fill(0), chuc: Array(10).fill(0), donvi: Array(10).fill(0) };
         const gdbResults = results.filter(r => r.giai === 'ĐB' && r.so);
@@ -174,15 +128,8 @@ class TripleGroupAnalysisService {
         return frequency;
     }
 
-    /**
-     * Phân tích xu hướng số nóng/lạnh từ 30 GĐB gần nhất.
-     */
     analyzeTrends(results) {
-        const allGDB = results
-            .filter(r => r.giai === 'ĐB')
-            .sort((a, b) => this.dateKey(b.ngay).localeCompare(this.dateKey(a.ngay)))
-            .slice(0, 30);
-            
+        const allGDB = results.filter(r => r.giai === 'ĐB').sort((a, b) => this.dateKey(b.ngay).localeCompare(this.dateKey(a.ngay))).slice(0, 30);
         if (allGDB.length === 0) return { hotNumbers: [], coldNumbers: [] };
 
         const digitCount = Array(10).fill(0);
@@ -194,19 +141,13 @@ class TripleGroupAnalysisService {
             });
         });
 
-        const sortedDigits = digitCount
-            .map((count, digit) => ({ digit, count }))
-            .sort((a, b) => b.count - a.count);
-            
+        const sortedDigits = digitCount.map((count, digit) => ({ digit, count })).sort((a, b) => b.count - a.count);
         return {
             hotNumbers: sortedDigits.slice(0, 5).map(item => item.digit.toString()),
             coldNumbers: sortedDigits.slice(-5).reverse().map(item => item.digit.toString())
         };
     }
     
-    /**
-     * Tạo đối tượng dự đoán hoàn chỉnh từ kết quả phân tích.
-     */
     createPredictionFromAnalysis(analysis, targetDate) {
         const topTram = this.selectNumbersByFrequency(analysis.frequency.tram, 5);
         const topChuc = this.selectNumbersByFrequency(analysis.frequency.chuc, 5);
@@ -215,9 +156,9 @@ class TripleGroupAnalysisService {
         return {
             ngayDuDoan: targetDate,
             ngayPhanTich: new Date().toISOString().split('T')[0],
-            topTram: topTram,
-            topChuc: topChuc,
-            topDonVi: topDonVi,
+            topTram,
+            topChuc,
+            topDonVi,
             analysisData: {
                 totalDaysAnalyzed: analysis.totalDays,
                 latestGDB: analysis.latestGDB,
@@ -229,19 +170,18 @@ class TripleGroupAnalysisService {
     }
 
     // =================================================================
-    // CÁC HÀM THỐNG KÊ VÀ HỌC TẬP (ĐÃ BỔ SUNG)
+    // CÁC HÀM THỐNG KÊ VÀ HỌC TẬP
     // =================================================================
     
     async learnFromOwnHistory() {
-        console.log('🧠 Dịch vụ: Bắt đầu học từ lịch sử dự đoán...');
+        console.log('🧠 [Service] Bắt đầu học từ lịch sử dự đoán...');
         const predictionsToUpdate = await TripleGroupPrediction.find({ 'actualResult': { $exists: true, $ne: null } });
-        // Logic học hỏi phức tạp hơn có thể được thêm vào đây, ví dụ cập nhật trọng số.
-        console.log(`✅ Hoàn thành học hỏi từ ${predictionsToUpdate.length} bản ghi.`);
+        console.log(`✅ [Service] Hoàn thành học hỏi từ ${predictionsToUpdate.length} bản ghi.`);
         return { updated: predictionsToUpdate.length, total: predictionsToUpdate.length };
     }
     
     async analyzeHistoricalPerformance() {
-        console.log('📈 Dịch vụ: Phân tích hiệu suất lịch sử...');
+        console.log('📈 [Service] Phân tích hiệu suất lịch sử...');
         const predictionsWithResults = await TripleGroupPrediction.find({ 'actualResult': { $exists: true, $ne: null } }).lean();
         if (predictionsWithResults.length < 10) {
             return {
@@ -275,11 +215,7 @@ class TripleGroupAnalysisService {
     // =================================================================
     
     selectNumbersByFrequency(frequencyArray, count) {
-        return frequencyArray
-            .map((freq, digit) => ({ digit: digit.toString(), freq }))
-            .sort((a, b) => b.freq - a.freq)
-            .slice(0, count)
-            .map(item => item.digit);
+        return frequencyArray.map((freq, digit) => ({ digit: digit.toString(), freq })).sort((a, b) => b.freq - a.freq).slice(0, count).map(item => item.digit);
     }
 
     calculateConfidence(analysis) {
@@ -290,11 +226,35 @@ class TripleGroupAnalysisService {
         return Math.min(confidence, 90);
     }
 
+    /**
+     * SỬA LỖI CHÍ MẠNG: Lấy ngày tiếp theo một cách chính xác.
+     */
     async getNextPredictionDate() {
-        const latestResult = await Result.findOne().sort({ ngay: -1 }).lean();
-        if (!latestResult) throw new Error('Không có dữ liệu kết quả để xác định ngày dự đoán tiếp theo');
-        const [day, month, year] = latestResult.ngay.split('/').map(Number);
+        console.log("...[Service] Đang xác định ngày dự đoán tiếp theo...");
+        const allDates = await Result.distinct('ngay');
+        if (allDates.length === 0) {
+            throw new Error('Không có dữ liệu kết quả nào trong CSDL.');
+        }
+
+        // Lọc bỏ ngày không hợp lệ và sắp xếp đúng
+        const sortedDates = allDates
+            .filter(d => d && d.split('/').length === 3) // Lọc bỏ giá trị null/không hợp lệ
+            .sort((a, b) => {
+                const dateA = new Date(a.split('/').reverse().join('-'));
+                const dateB = new Date(b.split('/').reverse().join('-'));
+                return dateB - dateA; // Sắp xếp giảm dần
+            });
+        
+        if (sortedDates.length === 0) {
+            throw new Error('Không tìm thấy ngày hợp lệ nào để xác định ngày tiếp theo.');
+        }
+
+        const latestDateStr = sortedDates[0];
+        console.log(`...[Service] Ngày kết quả gần nhất tìm thấy: ${latestDateStr}`);
+
+        const [day, month, year] = latestDateStr.split('/').map(Number);
         const nextDate = new Date(year, month - 1, day + 1);
+        
         return `${String(nextDate.getDate()).padStart(2, '0')}/${String(nextDate.getMonth() + 1).padStart(2, '0')}/${nextDate.getFullYear()}`;
     }
 
@@ -318,7 +278,6 @@ class TripleGroupAnalysisService {
         if (!predictionData || !predictionData.ngayDuDoan) {
             throw new Error('Không thể lưu dự đoán vì thiếu dữ liệu hoặc thiếu ngày');
         }
-        // Sử dụng findOneAndUpdate với upsert: true để tạo mới nếu chưa có, hoặc cập nhật nếu đã tồn tại.
         await TripleGroupPrediction.findOneAndUpdate(
             { ngayDuDoan: predictionData.ngayDuDoan },
             predictionData,
@@ -333,7 +292,7 @@ class TripleGroupAnalysisService {
     }
     
     getFallbackPrediction(targetDate) {
-        console.warn(`⚠️ Sử dụng dự đoán dự phòng cho ngày ${targetDate}`);
+        console.warn(`⚠️ [Service] Sử dụng dự đoán dự phòng cho ngày ${targetDate}`);
         return {
             ngayDuDoan: targetDate,
             topTram: ['0','1','2','3','4'],
