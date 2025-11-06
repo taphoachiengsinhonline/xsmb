@@ -5,7 +5,34 @@ const NNState = require('../models/NNState');
 const AdvancedFeatureEngineer = require('./advancedFeatureService');
 const FeatureEngineeringService = require('./featureEngineeringService');
 const AdvancedTraining = require('./advancedTrainingService');
+const { Storage } = require('@google-cloud/storage');
 const { DateTime } = require('luxon');
+
+const gcsCredentials = process.env.GCS_CREDENTIALS;
+const bucketName = process.env.GCS_BUCKET_NAME;
+
+let storage;
+
+if (gcsCredentials && bucketName) {
+    try {
+        // Parse chuỗi JSON từ biến môi trường
+        const credentials = JSON.parse(gcsCredentials);
+        
+        // Khởi tạo Storage với credentials đã được parse
+        storage = new Storage({
+            credentials,
+            projectId: credentials.project_id,
+        });
+        
+        console.log(`✅ [GCS] Đã khởi tạo Google Cloud Storage thành công cho bucket: ${bucketName}`);
+    } catch (error) {
+        console.error("❌ [GCS] LỖI NGHIÊM TRỌNG: Không thể parse GCS_CREDENTIALS. Vui lòng kiểm tra biến môi trường trên Railway.", error);
+        // Thoát hoặc xử lý lỗi để ứng dụng không chạy với cấu hình sai
+        process.exit(1);
+    }
+} else {
+    console.warn("⚠️ [GCS] Cảnh báo: GCS_CREDENTIALS hoặc GCS_BUCKET_NAME chưa được thiết lập. Chức năng lưu/tải model sẽ không hoạt động.");
+}
 
 const NN_MODEL_NAME = 'GDB_LSTM_TFJS_PREMIUM_V1';
 const SEQUENCE_LENGTH = 7;
@@ -296,61 +323,61 @@ class TensorFlowService {
   }
 
   async saveModel() {
-    if (!this.model) {
-      throw new Error('No model to save');
+        if (!this.model) throw new Error('Không có model để lưu.');
+        if (!bucketName) throw new Error('GCS_BUCKET_NAME chưa được cấu hình.');
+
+        console.log(`💾 [SaveModel] Bắt đầu lưu model lên Google Cloud Storage (Bucket: ${bucketName})...`);
+
+        const modelPath = `models/${NN_MODEL_NAME}`;
+        const gcsFullPath = `gs://${bucketName}/${modelPath}`;
+
+        // TensorFlow.js Node sẽ tự động tìm credentials nếu được cấu hình đúng.
+        // Việc khởi tạo `storage` ở trên là để đảm bảo.
+        const saveResult = await this.model.save(gcsFullPath);
+
+        const modelInfo = {
+            modelName: NN_MODEL_NAME,
+            inputNodes: this.inputNodes,
+            savedAt: new Date().toISOString(),
+            gcsPath: gcsFullPath
+        };
+
+        await NNState.findOneAndUpdate(
+            { modelName: NN_MODEL_NAME },
+            { 
+                state: modelInfo,
+                modelArtifacts: saveResult
+            },
+            { upsert: true, new: true }
+        );
+        
+        console.log(`✅ [SaveModel] Model đã được lưu thành công lên GCS tại: ${modelInfo.gcsPath}`);
     }
 
-    const modelInfo = {
-      modelName: NN_MODEL_NAME,
-      inputNodes: this.inputNodes,
-      savedAt: new Date().toISOString()
-    };
+    async loadModel() {
+        console.log(`🔍 [LoadModel] Đang tìm và tải model từ Google Cloud Storage...`);
+        if (!bucketName) throw new Error('GCS_BUCKET_NAME chưa được cấu hình.');
 
-    try {
-      // Lưu model ra file
-      const saveResult = await this.model.save('file://./models/tfjs_model');
-      console.log('💾 Model đã được lưu ra file');
-      
-      // Lưu thông tin vào database
-      await NNState.findOneAndUpdate(
-        { modelName: NN_MODEL_NAME },
-        { 
-          state: modelInfo,
-          modelArtifacts: saveResult 
-        },
-        { upsert: true, new: true }
-      );
-      
-      console.log(`💾 TensorFlow model saved với ${this.inputNodes} input nodes`);
-    } catch (error) {
-      console.error('❌ Lỗi khi save model:', error);
-      throw error;
+        const modelState = await NNState.findOne({ modelName: NN_MODEL_NAME }).lean();
+        
+        if (modelState && modelState.state && modelState.state.gcsPath) {
+            const gcsPath = modelState.state.gcsPath;
+            try {
+                this.model = await tf.loadLayersModel(gcsPath);
+                this.inputNodes = modelState.state.inputNodes;
+                
+                console.log(`✅ [LoadModel] Model đã được tải thành công từ GCS: ${gcsPath}`);
+                this.model.summary();
+                return true;
+            } catch (error) {
+                console.error(`❌ [LoadModel] Lỗi khi tải model từ GCS (${gcsPath}):`, error);
+                return false;
+            }
+        } else {
+            console.log('❌ [LoadModel] Không tìm thấy đường dẫn GCS trong database. Model cần được huấn luyện lại.');
+            return false;
+        }
     }
-  }
-
-  async loadModel() {
-    console.log('🔍 [LoadModel] Đang tìm model trong database...');
-    const modelState = await NNState.findOne({ modelName: NN_MODEL_NAME });
-    
-    if (modelState && modelState.modelArtifacts) {
-      console.log('✅ [LoadModel] Đã tìm thấy model state trong database');
-      try {
-        this.model = await tf.loadLayersModel('file://./models/tfjs_model/model.json');
-        this.inputNodes = modelState.state.inputNodes;
-        console.log(`✅ TensorFlow model loaded với ${this.inputNodes} input nodes`);
-        return true;
-      } catch (error) {
-        console.error('❌ [LoadModel] Lỗi khi load model từ file:', error.message);
-        return false;
-      }
-    } else {
-      console.log('❌ [LoadModel] Không tìm thấy model trong database:', {
-        modelStateExists: !!modelState,
-        hasArtifacts: !!(modelState && modelState.modelArtifacts)
-      });
-      return false;
-    }
-  }
 
   async runHistoricalTraining() {
     console.log('🔔 [TensorFlow Service] Bắt đầu Huấn luyện Lịch sử với kiến trúc Premium...');
