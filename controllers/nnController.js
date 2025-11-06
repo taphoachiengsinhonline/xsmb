@@ -2,7 +2,7 @@
 const ActorCriticService = require('../services/actorCriticService');
 const NNPrediction = require('../models/NNPrediction');
 
-const tfService = new TensorFlowService();
+//const tfService = new TensorFlowService();
 const acService = new ActorCriticService(); // <-- KHỞI TẠO SERVICE MỚI
 
 exports.trainHistorical = async (req, res) => {
