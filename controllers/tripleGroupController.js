@@ -1,4 +1,3 @@
-// controllers/tripleGroupController.js
 const TripleGroupAnalysisService = require('../services/tripleGroupAnalysisService');
 const TripleGroupPrediction = require('../models/TripleGroupPrediction');
 const Result = require('../models/Result');
@@ -103,25 +102,22 @@ exports.getPredictions = async (req, res) => {
             query.ngayDuDoan = date;
         }
 
-        // 1. Lấy dữ liệu từ DB mà KHÔNG sắp xếp theo ngày (vì sẽ sắp xếp sau)
+        // Sửa lỗi sắp xếp: Lấy dữ liệu trước rồi sắp xếp trong JS
         const predictionsFromDB = await TripleGroupPrediction.find(query)
-            .sort({ createdAt: -1 }) // Sắp xếp theo thời gian tạo để có thứ tự ổn định
+            .sort({ _id: -1 }) // Sắp xếp theo thời gian tạo để ổn định
             .skip(skip)
             .limit(limitNum)
             .lean();
 
-        // 2. SẮP XẾP LẠI MỘT CÁCH CHÍNH XÁC trong JavaScript
         const predictions = predictionsFromDB.sort((a, b) => {
-            if (!a.ngayDuDoan || !b.ngayDuDoan) return 0; // Xử lý trường hợp ngày null
-            // Chuyển "dd/MM/yyyy" thành đối tượng Date để so sánh
-            const dateA = new Date(a.ngayDuDoan.split('/').reverse().join('-'));
-            const dateB = new Date(b.ngayDuDoan.split('/').reverse().join('-'));
-            return dateB - dateA; // Sắp xếp giảm dần (ngày mới nhất trước)
+            if (!a.ngayDuDoan || !b.ngayDuDoan) return 0;
+            return new Date(b.ngayDuDoan.split('/').reverse().join('-')) - new Date(a.ngayDuDoan.split('/').reverse().join('-'));
         });
 
         const total = await TripleGroupPrediction.countDocuments(query);
         const totalPages = Math.ceil(total / limitNum);
 
+        // Tính thống kê nhanh
         const predictionsWithResults = predictions.filter(p => p.actualResult);
         const correctPredictions = predictionsWithResults.filter(p => p.actualResult.isCorrect);
         const accuracy = predictionsWithResults.length > 0 
@@ -130,7 +126,7 @@ exports.getPredictions = async (req, res) => {
 
         res.json({
             success: true,
-            predictions: predictions, // Trả về mảng đã được sắp xếp đúng
+            predictions: predictions,
             pagination: {
                 page: pageNum,
                 limit: limitNum,
@@ -287,7 +283,12 @@ exports.learnFromHistory = async (req, res) => {
     try {
         console.log('🧠 [Controller] Bắt đầu học từ lịch sử...');
         
-        const result = await tripleGroupService.learnFromOwnHistory();
+        // =================================================================
+        // SỬA LỖI DUY NHẤT TẠI ĐÂY:
+        // Đổi tên hàm từ "learnFromOwnHistory" thành "learnFromHistory"
+        // để khớp với file service mới nhất.
+        // =================================================================
+        const result = await tripleGroupService.learnFromHistory();
         
         res.json({
             success: true,
@@ -324,7 +325,10 @@ exports.getAccuracyStats = async (req, res) => {
         // Thống kê theo tháng
         const monthlyStats = {};
         predictionsWithResults.forEach(pred => {
-            const [day, month, year] = pred.ngayDuDoan.split('/');
+            if (!pred.ngayDuDoan) return; // Bỏ qua nếu ngày không hợp lệ
+            const parts = pred.ngayDuDoan.split('/');
+            if (parts.length !== 3) return;
+            const [day, month, year] = parts;
             const monthYear = `${month}/${year}`;
             
             if (!monthlyStats[monthYear]) {
@@ -419,28 +423,23 @@ exports.getAvailableDates = async (req, res) => {
         console.log('📅 [Controller] Lấy danh sách ngày có dự đoán...');
         
         const predictions = await TripleGroupPrediction.find({})
-            .sort({ ngayDuDoan: -1 }) // Sắp xếp sơ bộ nếu có thể
+            .sort({ ngayDuDoan: -1 }) // Vẫn giữ sort sơ bộ
             .select('ngayDuDoan')
             .lean();
 
-        // Lấy tất cả các ngày, sau đó lọc bỏ các giá trị null/undefined
-        const allDates = predictions.map(p => p.ngayDuDoan);
-        const validDates = allDates.filter(date => date); // Lọc bỏ các giá trị "falsy" (null, undefined, '')
-
-        const uniqueDates = [...new Set(validDates)];
-
-        // Sắp xếp các ngày hợp lệ một cách chính xác
-        const sortedDates = uniqueDates.sort((a, b) => {
-            // Logic chuyển đổi ngày tháng của bạn đã đúng
-            const dateA = new Date(a.split('/').reverse().join('-'));
-            const dateB = new Date(b.split('/').reverse().join('-'));
-            return dateB - dateA;
-        });
+        // Lọc bỏ ngày null/undefined và sắp xếp đúng
+        const dates = [...new Set(predictions.map(p => p.ngayDuDoan))]
+            .filter(d => d) // Lọc bỏ giá trị falsy
+            .sort((a, b) => {
+                const dateA = new Date(a.split('/').reverse().join('-'));
+                const dateB = new Date(b.split('/').reverse().join('-'));
+                return dateB - dateA;
+            });
 
         res.json({
             success: true,
-            dates: sortedDates,
-            total: sortedDates.length,
+            dates: dates,
+            total: dates.length,
             timestamp: new Date().toISOString()
         });
     } catch (error) {
@@ -556,7 +555,7 @@ exports.getSystemInfo = async (req, res) => {
                 overallAccuracy: parseFloat(accuracy),
                 latestPrediction: latestPrediction,
                 service: 'Triple Group Analysis',
-                version: '1.0.0',
+                version: '2.0.0-learning', // Cập nhật phiên bản
                 lastUpdated: new Date().toISOString()
             },
             timestamp: new Date().toISOString()
