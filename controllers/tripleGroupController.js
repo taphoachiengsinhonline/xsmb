@@ -103,16 +103,25 @@ exports.getPredictions = async (req, res) => {
             query.ngayDuDoan = date;
         }
 
-        const predictions = await TripleGroupPrediction.find(query)
-            .sort({ ngayDuDoan: -1 })
+        // 1. Lấy dữ liệu từ DB mà KHÔNG sắp xếp theo ngày (vì sẽ sắp xếp sau)
+        const predictionsFromDB = await TripleGroupPrediction.find(query)
+            .sort({ createdAt: -1 }) // Sắp xếp theo thời gian tạo để có thứ tự ổn định
             .skip(skip)
             .limit(limitNum)
             .lean();
 
+        // 2. SẮP XẾP LẠI MỘT CÁCH CHÍNH XÁC trong JavaScript
+        const predictions = predictionsFromDB.sort((a, b) => {
+            if (!a.ngayDuDoan || !b.ngayDuDoan) return 0; // Xử lý trường hợp ngày null
+            // Chuyển "dd/MM/yyyy" thành đối tượng Date để so sánh
+            const dateA = new Date(a.ngayDuDoan.split('/').reverse().join('-'));
+            const dateB = new Date(b.ngayDuDoan.split('/').reverse().join('-'));
+            return dateB - dateA; // Sắp xếp giảm dần (ngày mới nhất trước)
+        });
+
         const total = await TripleGroupPrediction.countDocuments(query);
         const totalPages = Math.ceil(total / limitNum);
 
-        // Tính thống kê nhanh
         const predictionsWithResults = predictions.filter(p => p.actualResult);
         const correctPredictions = predictionsWithResults.filter(p => p.actualResult.isCorrect);
         const accuracy = predictionsWithResults.length > 0 
@@ -121,7 +130,7 @@ exports.getPredictions = async (req, res) => {
 
         res.json({
             success: true,
-            predictions: predictions,
+            predictions: predictions, // Trả về mảng đã được sắp xếp đúng
             pagination: {
                 page: pageNum,
                 limit: limitNum,
