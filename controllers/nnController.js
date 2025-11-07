@@ -84,7 +84,7 @@ exports.getAllPredictions = async (req, res) => {
 };
 
 // API TẠO DỰ ĐOÁN HÀNG LOẠT
-const generateBatchPredictions = async (req, res) => {
+exports.generateBatchPredictions = async (req, res) => {
     try {
         const { days = 10 } = req.body;
         const tensorflowService = new TensorFlowService();
