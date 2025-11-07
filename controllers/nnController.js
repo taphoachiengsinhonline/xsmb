@@ -88,6 +88,6 @@ exports.predictionHistory= async (req, res) => {
             details: error.message 
         });
     }
-});
+};
 
 module.exports = exports;
