@@ -449,6 +449,118 @@ class TensorFlowService {
     return Array.from(output);
   }
 
+ // TỰ ĐỘNG TẠO DỰ ĐOÁN SAU KHI HUẤN LUYỆN
+// =================================================================
+async autoGeneratePredictionsAfterTraining() {
+    console.log('🚀 Bắt đầu tự động tạo dự đoán sau huấn luyện...');
+    
+    let generatedCount = 0;
+    const results = await Result.find().sort({ 'ngay': 1 }).lean();
+    
+    if (results.length < SEQUENCE_LENGTH) {
+        console.log('⚠️ Không đủ dữ liệu để tạo dự đoán');
+        return 0;
+    }
+
+    const grouped = {};
+    results.forEach(r => {
+        if (!grouped[r.ngay]) grouped[r.ngay] = [];
+        grouped[r.ngay].push(r);
+    });
+
+    const days = Object.keys(grouped).sort((a, b) => this.dateKey(a).localeCompare(this.dateKey(b)));
+    
+    // 1. TẠO DỰ ĐOÁN CHO NGÀY TIẾP THEO
+    try {
+        console.log('📅 Tạo dự đoán cho ngày tiếp theo...');
+        const nextDayPrediction = await this.runNextDayPrediction();
+        console.log(`✅ Đã tạo dự đoán cho: ${nextDayPrediction.ngayDuDoan}`);
+        generatedCount++;
+    } catch (error) {
+        console.error('❌ Lỗi tạo dự đoán ngày tiếp theo:', error.message);
+    }
+
+    // 2. TẠO DỰ ĐOÁN CHO CÁC NGÀY TRONG QUÁ KHỨ (để có lịch sử đánh giá)
+    console.log('🕐 Tạo dự đoán cho các ngày trong quá khứ...');
+    
+    // Lấy danh sách các ngày đã có kết quả nhưng chưa có dự đoán
+    const existingPredictions = await NNPrediction.find().lean();
+    const existingPredictionDates = new Set(existingPredictions.map(p => p.ngayDuDoan));
+    
+    // Tạo dự đoán cho 30 ngày gần nhất có kết quả nhưng chưa có dự đoán
+    const recentDays = days.slice(-30); // 30 ngày gần nhất
+    
+    for (const day of recentDays) {
+        if (existingPredictionDates.has(day)) {
+            continue; // Đã có dự đoán rồi
+        }
+
+        try {
+            const dayIndex = days.indexOf(day);
+            if (dayIndex < SEQUENCE_LENGTH) continue;
+
+            const sequenceDays = days.slice(dayIndex - SEQUENCE_LENGTH, dayIndex);
+            const previousDays = [];
+            const inputSequence = sequenceDays.map(sequenceDay => {
+                const dayResults = grouped[sequenceDay] || [];
+                const prevDays = previousDays.slice();
+                previousDays.push(dayResults);
+                
+                const basicFeatures = this.featureService.extractAllFeatures(dayResults, prevDays, sequenceDay);
+                const advancedFeatures = this.advancedFeatureEngineer.extractPremiumFeatures(dayResults, prevDays);
+                
+                let finalFeatureVector = [...basicFeatures, ...Object.values(advancedFeatures).flat()];
+                
+                const EXPECTED_SIZE = 346;
+                if (finalFeatureVector.length !== EXPECTED_SIZE) {
+                    if (finalFeatureVector.length > EXPECTED_SIZE) {
+                        finalFeatureVector = finalFeatureVector.slice(0, EXPECTED_SIZE);
+                    } else {
+                        finalFeatureVector = [...finalFeatureVector, ...Array(EXPECTED_SIZE - finalFeatureVector.length).fill(0)];
+                    }
+                }
+                
+                return finalFeatureVector;
+            });
+
+            const output = await this.predict(inputSequence);
+            const prediction = this.decodeOutput(output);
+
+            // ✅ LƯU DỰ ĐOÁN VỚI THÔNG TIN ĐẦY ĐỦ
+            const predictionRecord = {
+                ngayDuDoan: day,
+                ...prediction,
+                danhDauDaSo: true, // Đánh dấu đã có kết quả thực tế
+                modelVersion: NN_MODEL_NAME,
+                createdAt: new Date(),
+                confidenceScore: this.calculateConfidence(output),
+                isHistorical: true // Đánh dấu là dự đoán lịch sử
+            };
+
+            await NNPrediction.findOneAndUpdate(
+                { ngayDuDoan: day },
+                predictionRecord,
+                { upsert: true, new: true }
+            );
+
+            generatedCount++;
+            console.log(`✅ Đã tạo dự đoán lịch sử cho: ${day}`);
+
+            // Giới hạn số lượng để không quá tải
+            if (generatedCount >= 10) {
+                break;
+            }
+
+        } catch (error) {
+            console.error(`❌ Lỗi tạo dự đoán cho ${day}:`, error.message);
+        }
+    }
+
+    console.log(`🎉 Đã tạo tổng cộng ${generatedCount} dự đoán sau huấn luyện`);
+    return generatedCount;
+}
+
+
   prepareTarget(gdbString) {
     const target = Array(OUTPUT_NODES).fill(0);
     gdbString.split('').forEach((digit, index) => {
@@ -464,7 +576,7 @@ class TensorFlowService {
   // PHƯƠNG THỨC CHÍNH - SỬA ĐỔI ĐỂ DÙNG SMART WEIGHTING
   // =================================================================
   async runHistoricalTraining() {
-    console.log('🔔 [TensorFlow Service] Bắt đầu Huấn luyện Lịch sử với Smart Weighting...');
+    console.log('🔔 [TensorFlow Service] Bắt đầu Huấn luyện Lịch sử với Smart Oversampling...');
    
     const trainingData = await this.prepareTrainingData();
     if (trainingData.length === 0 || trainingData.some(d => d.inputSequence.length !== SEQUENCE_LENGTH || d.inputSequence.flat().some(isNaN))) {
@@ -479,22 +591,26 @@ class TensorFlowService {
       metrics: []
     });
     
-    console.log('✅ Model đã được compile. Bắt đầu quá trình training với Smart Weighting...');
+    console.log('✅ Model đã được compile. Bắt đầu quá trình training với Smart Oversampling...');
     
-    // ✅ SỬ DỤNG SMART WEIGHTING THAY VÌ TRAINING THÔNG THƯỜNG
     await this.trainModelWithSmartOversampling(trainingData);
    
     await this.saveModel();
+
+    // ✅ THÊM: TỰ ĐỘNG TẠO DỰ ĐOÁN SAU KHI HUẤN LUYỆN
+    console.log('🎯 Bắt đầu tự động tạo dự đoán sau huấn luyện...');
+    const generatedCount = await this.autoGeneratePredictionsAfterTraining();
     
     return {
-      message: `Huấn luyện với Smart Weighting hoàn tất. Đã xử lý ${trainingData.length} chuỗi, ${EPOCHS} epochs.`,
+      message: `Huấn luyện với Smart Oversampling hoàn tất. Đã xử lý ${trainingData.length} chuỗi, tạo ${generatedCount} dự đoán mới.`,
       sequences: trainingData.length,
       epochs: EPOCHS,
       featureSize: this.inputNodes,
       modelName: NN_MODEL_NAME,
-      smartWeighting: true
+      predictionsGenerated: generatedCount,
+      smartOversampling: true
     };
-  }
+}
 
   async runLearning() {
     console.log('🔔 [TensorFlow Service] Learning from new results...');
