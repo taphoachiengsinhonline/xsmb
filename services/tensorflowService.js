@@ -190,53 +190,41 @@ class TensorFlowService {
   // OVERSAMPLING THÔNG MINH - THAY THẾ CHO SAMPLE WEIGHTING
   // =================================================================
   applySmartOversampling(trainingData) {
-    console.log('🎯 Áp dụng Smart Oversampling...');
+    console.log('🎯 Áp dụng Smart Oversampling CÂN BẰNG...');
     
     if (!this.errorPatterns || trainingData.length === 0) {
-      console.log('⚠️ Chưa có phân tích lỗi hoặc dữ liệu rỗng, không áp dụng oversampling');
-      return trainingData;
+        return trainingData;
     }
 
     const oversampledData = [...trainingData];
-    const samplesToAdd = [];
-
-    // GIỚI HẠN OVERSAMPLING - CHỈ THÊM TỐI ĐA 50% SỐ MẪU GỐC
-    const maxOversamples = Math.floor(trainingData.length * 0.5);
+    
+    // ✅ GIẢM TỶ LỆ OVERSAMPLING XUỐNG 20%
+    const maxOversamples = Math.floor(trainingData.length * 0.2);
     let addedCount = 0;
 
-    // CHỈ TẬP TRUNG VÀO CÁC VỊ TRÍ RẤT YẾU (errorRate > 70%)
-    const veryWeakPositions = this.errorPatterns.weakPositions.filter(pos => pos.errorRate > 0.7);
+    // ✅ CHỈ OVERSAMPLE CÁC VỊ TRÍ RẤT YẾU (errorRate > 60%)
+    const weakPositions = this.errorPatterns.weakPositions.filter(pos => pos.errorRate > 0.6);
     
-    if (veryWeakPositions.length === 0) {
-      console.log('⚠️ Không có vị trí nào quá yếu, không áp dụng oversampling');
-      return trainingData;
+    if (weakPositions.length === 0) {
+        return trainingData;
     }
 
     trainingData.forEach((sample, index) => {
-      if (addedCount >= maxOversamples) return;
+        if (addedCount >= maxOversamples) return;
 
-      const featureVector = sample.inputSequence.flat();
-      
-      // CHỈ THÊM MẪU NẾU CÓ FEATURES QUAN TRỌNG
-      const hasImportantFeatures = featureVector.some(val => Math.abs(val) > 0.5);
-      const featureComplexity = this.calculateFeatureComplexity(featureVector);
-      
-      if (hasImportantFeatures && featureComplexity > 0.3) {
-        samplesToAdd.push(sample);
-        addedCount++;
-      }
+        // ✅ CHỌN MẪU CÓ FEATURES PHỨC TẠP
+        const featureVector = sample.inputSequence.flat();
+        const featureComplexity = this.calculateFeatureComplexity(featureVector);
+        
+        if (featureComplexity > 0.5) { // TĂNG NGƯỠNG LÊN 0.5
+            oversampledData.push(sample);
+            addedCount++;
+        }
     });
 
-    // THÊM CÁC MẪU ĐÃ CHỌN
-    oversampledData.push(...samplesToAdd);
-
-    console.log(`✅ Đã áp dụng Smart Oversampling CÂN BẰNG:`);
-    console.log(`- Dữ liệu gốc: ${trainingData.length} mẫu`);
-    console.log(`- Đã thêm: ${samplesToAdd.length} mẫu (${Math.round(samplesToAdd.length/trainingData.length*100)}%)`);
-    console.log(`- Tổng sau oversampling: ${oversampledData.length} mẫu`);
-
+    console.log(`✅ Smart Oversampling: Thêm ${addedCount} mẫu (${Math.round(addedCount/trainingData.length*100)}%)`);
     return oversampledData;
-  }
+}
 
   calculateFeatureComplexity(featureVector) {
     const mean = featureVector.reduce((a, b) => a + b, 0) / featureVector.length;
@@ -250,20 +238,20 @@ class TensorFlowService {
   async trainModelWithSmartOversampling(trainingData) {
     console.log('🚀 Bắt đầu huấn luyện với Smart Oversampling...');
     
-    // PHÂN TÍCH LỖI TRƯỚC KHI HUẤN LUYỆN
-    await this.analyzeHistoricalErrors();
-    
-    // ÁP DỤNG OVERSAMPLING THÔNG MINH
-    const enhancedData = this.applySmartOversampling(trainingData);
-    
-    // ✅ THÊM KIỂM TRA DỮ LIỆU TRƯỚC KHI TẠO TENSOR
-    console.log('🔍 Kiểm tra dữ liệu trước khi training:');
-    enhancedData.forEach((data, idx) => {
-      const inputFlat = data.inputSequence.flat();
-      const hasNaN = inputFlat.some(v => isNaN(v)) || data.targetArray.some(v => isNaN(v));
-      if (hasNaN) {
-        console.error(`❌ Mẫu ${idx} có NaN values!`);
-      }
+    // ✅ THÊM VALIDATION MẠNH MẼ
+    console.log('🔍 Validation dữ liệu training:');
+    trainingData.forEach((data, idx) => {
+        const inputFlat = data.inputSequence.flat();
+        const targetFlat = data.targetArray;
+        
+        const inputHasNaN = inputFlat.some(v => isNaN(v));
+        const targetHasNaN = targetFlat.some(v => isNaN(v));
+        
+        if (inputHasNaN || targetHasNaN) {
+            console.error(`❌ Mẫu ${idx} có NaN values!`);
+            console.log('Input NaN count:', inputFlat.filter(v => isNaN(v)).length);
+            console.log('Target NaN count:', targetFlat.filter(v => isNaN(v)).length);
+        }
     });
     
     const inputs = enhancedData.map(d => d.inputSequence);
@@ -1119,35 +1107,57 @@ calculateConfidence(output) {
     if (!output || output.length === 0) return 0;
     
     let confidence = 0;
+    let validPositions = 0;
+    
     for (let i = 0; i < 5; i++) {
         const positionProbs = output.slice(i * 10, (i + 1) * 10);
-        const maxProb = Math.max(...positionProbs);
-        const sumProb = positionProbs.reduce((a, b) => a + b, 0);
         
-        // ✅ CÔNG THỨC TÍNH CONFIDENCE TỐT HƠN
-        const positionConfidence = maxProb / (sumProb / positionProbs.length || 1);
-        confidence += positionConfidence;
+        // ✅ LỌC VÀ LÀM SẠCH PROBABILITIES
+        const cleanProbs = positionProbs.map(p => isNaN(p) ? 0 : Math.max(0, p));
+        const maxProb = Math.max(...cleanProbs);
+        const sumProb = cleanProbs.reduce((a, b) => a + b, 0);
+        
+        if (sumProb > 0 && maxProb > 0.1) {
+            const positionConfidence = maxProb / (sumProb / cleanProbs.length);
+            confidence += Math.min(positionConfidence, 1.0); // GIỚI HẠN MAX = 1.0
+            validPositions++;
+        }
     }
     
-    const finalConfidence = confidence / 5;
+    const finalConfidence = validPositions > 0 ? confidence / validPositions : 0;
     console.log(`🎯 Confidence score: ${finalConfidence.toFixed(4)}`);
     
     return Math.min(finalConfidence, 1.0);
 }
-
   decodeOutput(output) {
+    console.log('🔍 [Debug] Raw output for decoding:', output.slice(0, 10));
+    
     const prediction = { pos1: [], pos2: [], pos3: [], pos4: [], pos5: [] };
+    
     for (let i = 0; i < 5; i++) {
-      const positionOutput = output.slice(i * 10, (i + 1) * 10);
-      const digitsWithValues = positionOutput
-        .map((value, index) => ({ digit: String(index), value }))
-        .sort((a, b) => b.value - a.value)
-        .slice(0, 5)
-        .map(item => item.digit);
-      prediction[`pos${i + 1}`] = digitsWithValues;
+        const startIdx = i * 10;
+        const endIdx = (i + 1) * 10;
+        const positionOutput = output.slice(startIdx, endIdx);
+        
+        // ✅ VALIDATE VÀ LÀM SẠCH DỮ LIỆU
+        const validOutput = positionOutput.map((val, idx) => ({
+            digit: String(idx),
+            value: isNaN(val) || !isFinite(val) ? 0 : Math.max(0, val)
+        }));
+        
+        // ✅ SẮP XẾP VÀ LỌC CHỈ LẤY 3 SỐ TỐT NHẤT (thay vì 5)
+        const digitsWithValues = validOutput
+            .sort((a, b) => b.value - a.value)
+            .slice(0, 3)  // GIẢM TỪ 5 XUỐNG 3 SỐ
+            .filter(item => item.value > 0.1)  // CHỈ LẤY SỐ CÓ XÁC SUẤT > 10%
+            .map(item => item.digit);
+            
+        prediction[`pos${i + 1}`] = digitsWithValues.length > 0 ? digitsWithValues : ['0','1','2']; // Fallback
     }
+    
+    console.log('🔍 [Debug] Final prediction:', prediction);
     return prediction;
-  }
+}
 }
 
 module.exports = TensorFlowService;
