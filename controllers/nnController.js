@@ -1,6 +1,7 @@
 const TensorFlowService = require('../services/tensorflowService');
 //const ActorCriticService = require('../services/actorCriticService');
 const NNPrediction = require('../models/NNPrediction');
+const Result = require('../models/Result');
 
 const tfService = new TensorFlowService();
 //const acService = new ActorCriticService(); // <-- KHỞI TẠO SERVICE MỚI
