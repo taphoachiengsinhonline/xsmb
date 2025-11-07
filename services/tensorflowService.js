@@ -215,11 +215,13 @@ async debugTrainingData() {
     console.log('🎯 Áp dụng Smart Oversampling CÂN BẰNG...');
     
     if (!this.errorPatterns || trainingData.length === 0) {
+        console.log('⚠️ Chưa có phân tích lỗi hoặc dữ liệu rỗng, không áp dụng oversampling');
         return trainingData;
     }
 
     const oversampledData = [...trainingData];
-    
+    const samplesToAdd = [];
+
     // ✅ GIẢM TỶ LỆ OVERSAMPLING XUỐNG 20%
     const maxOversamples = Math.floor(trainingData.length * 0.2);
     let addedCount = 0;
@@ -228,24 +230,40 @@ async debugTrainingData() {
     const weakPositions = this.errorPatterns.weakPositions.filter(pos => pos.errorRate > 0.6);
     
     if (weakPositions.length === 0) {
+        console.log('⚠️ Không có vị trí nào quá yếu, không áp dụng oversampling');
         return trainingData;
     }
 
     trainingData.forEach((sample, index) => {
         if (addedCount >= maxOversamples) return;
 
-        // ✅ CHỌN MẪU CÓ FEATURES PHỨC TẠP
         const featureVector = sample.inputSequence.flat();
+        
+        // ✅ CHỈ THÊM MẪU NẾU CÓ FEATURES QUAN TRỌNG
+        const hasImportantFeatures = featureVector.some(val => Math.abs(val) > 0.5);
         const featureComplexity = this.calculateFeatureComplexity(featureVector);
         
-        if (featureComplexity > 0.5) { // TĂNG NGƯỠNG LÊN 0.5
-            oversampledData.push(sample);
+        if (hasImportantFeatures && featureComplexity > 0.5) { // TĂNG NGƯỠNG LÊN 0.5
+            samplesToAdd.push(sample);
             addedCount++;
         }
     });
 
-    console.log(`✅ Smart Oversampling: Thêm ${addedCount} mẫu (${Math.round(addedCount/trainingData.length*100)}%)`);
+    // THÊM CÁC MẪU ĐÃ CHỌN
+    oversampledData.push(...samplesToAdd);
+
+    console.log(`✅ Đã áp dụng Smart Oversampling CÂN BẰNG:`);
+    console.log(`- Dữ liệu gốc: ${trainingData.length} mẫu`);
+    console.log(`- Đã thêm: ${samplesToAdd.length} mẫu (${Math.round(samplesToAdd.length/trainingData.length*100)}%)`);
+    console.log(`- Tổng sau oversampling: ${oversampledData.length} mẫu`);
+
     return oversampledData;
+}
+
+calculateFeatureComplexity(featureVector) {
+    const mean = featureVector.reduce((a, b) => a + b, 0) / featureVector.length;
+    const variance = featureVector.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / featureVector.length;
+    return Math.min(variance * 10, 1.0);
 }
 
   calculateFeatureComplexity(featureVector) {
