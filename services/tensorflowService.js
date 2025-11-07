@@ -190,52 +190,47 @@ class TensorFlowService {
   applySmartOversampling(trainingData) {
     console.log('🎯 Áp dụng Smart Oversampling...');
     
-    if (!this.errorPatterns) {
-      console.log('⚠️ Chưa có phân tích lỗi, không áp dụng oversampling');
+    if (!this.errorPatterns || trainingData.length === 0) {
+      console.log('⚠️ Chưa có phân tích lỗi hoặc dữ liệu rỗng, không áp dụng oversampling');
       return trainingData;
     }
 
     const oversampledData = [...trainingData];
     const samplesToAdd = [];
 
-    // TÌM CÁC MẪU LIÊN QUAN ĐẾN VỊ TRÍ YẾU VÀ THÊM VÀO
+    // GIỚI HẠN OVERSAMPLING - CHỈ THÊM TỐI ĐA 50% SỐ MẪU GỐC
+    const maxOversamples = Math.floor(trainingData.length * 0.5);
+    let addedCount = 0;
+
+    // CHỈ TẬP TRUNG VÀO CÁC VỊ TRÍ RẤT YẾU (errorRate > 70%)
+    const veryWeakPositions = this.errorPatterns.weakPositions.filter(pos => pos.errorRate > 0.7);
+    
+    if (veryWeakPositions.length === 0) {
+      console.log('⚠️ Không có vị trí nào quá yếu, không áp dụng oversampling');
+      return trainingData;
+    }
+
     trainingData.forEach((sample, index) => {
-      let shouldOversample = false;
-      
-      // KIỂM TRA NẾU MẪU NÀY CÓ ĐẶC ĐIỂM CẦN ĐƯỢC TẬP TRUNG
+      if (addedCount >= maxOversamples) return;
+
       const featureVector = sample.inputSequence.flat();
       
-      // 1. CÁC MẪU CÓ FEATURES CỰC TRỊ (QUAN TRỌNG)
-      const hasExtremeValues = featureVector.some(val => Math.abs(val) > 0.8);
-      if (hasExtremeValues) {
-        shouldOversample = true;
-      }
-
-      // 2. CÁC MẪU CÓ PATTERN PHỨC TẠP
+      // CHỈ THÊM MẪU NẾU CÓ FEATURES QUAN TRỌNG
+      const hasImportantFeatures = featureVector.some(val => Math.abs(val) > 0.5);
       const featureComplexity = this.calculateFeatureComplexity(featureVector);
-      if (featureComplexity > 0.7) {
-        shouldOversample = true;
-      }
-
-      // 3. CÁC MẪU LIÊN QUAN ĐẾN VỊ TRÍ YẾU
-      this.errorPatterns.weakPositions.forEach(weakPos => {
-        if (weakPos.errorRate > 0.6) { // CHỈ XÉT CÁC VỊ TRÍ SAI > 60%
-          // Thêm mẫu này thêm 1 lần nữa để tập trung học
-          samplesToAdd.push(sample);
-        }
-      });
-
-      if (shouldOversample) {
-        samplesToAdd.push(sample); // Thêm 1 bản sao
+      
+      if (hasImportantFeatures && featureComplexity > 0.3) {
+        samplesToAdd.push(sample);
+        addedCount++;
       }
     });
 
-    // THÊM CÁC MẪU ĐÃ CHỌN VÀO DỮ LIỆU HUẤN LUYỆN
+    // THÊM CÁC MẪU ĐÃ CHỌN
     oversampledData.push(...samplesToAdd);
 
-    console.log(`✅ Đã áp dụng Smart Oversampling:`);
+    console.log(`✅ Đã áp dụng Smart Oversampling CÂN BẰNG:`);
     console.log(`- Dữ liệu gốc: ${trainingData.length} mẫu`);
-    console.log(`- Đã thêm: ${samplesToAdd.length} mẫu`);
+    console.log(`- Đã thêm: ${samplesToAdd.length} mẫu (${Math.round(samplesToAdd.length/trainingData.length*100)}%)`);
     console.log(`- Tổng sau oversampling: ${oversampledData.length} mẫu`);
 
     return oversampledData;
@@ -259,6 +254,16 @@ class TensorFlowService {
     // ÁP DỤNG OVERSAMPLING THÔNG MINH
     const enhancedData = this.applySmartOversampling(trainingData);
     
+    // ✅ THÊM KIỂM TRA DỮ LIỆU TRƯỚC KHI TẠO TENSOR
+    console.log('🔍 Kiểm tra dữ liệu trước khi training:');
+    enhancedData.forEach((data, idx) => {
+      const inputFlat = data.inputSequence.flat();
+      const hasNaN = inputFlat.some(v => isNaN(v)) || data.targetArray.some(v => isNaN(v));
+      if (hasNaN) {
+        console.error(`❌ Mẫu ${idx} có NaN values!`);
+      }
+    });
+    
     const inputs = enhancedData.map(d => d.inputSequence);
     const targets = enhancedData.map(d => d.targetArray);
 
@@ -267,31 +272,46 @@ class TensorFlowService {
 
     console.log('🔧 Bắt đầu training với dữ liệu đã được oversampling...');
     
+    // ✅ THÊM GRADIENT CLIPPING ĐỂ TRÁNH NaN
+    const optimizer = tf.train.adam(0.0005);
+    
+    this.model.compile({
+      optimizer: optimizer,
+      loss: 'binaryCrossentropy',
+      metrics: []
+    });
+
     const history = await this.model.fit(inputTensor, targetTensor, {
       epochs: EPOCHS,
-      batchSize: Math.min(BATCH_SIZE, inputs.length),
-      validationSplit: 0.1,
-      verbose: 0, // ✅ TẮT TIẾN TRÌNH
+      batchSize: Math.min(32, inputs.length), // GIẢM BATCH SIZE
+      validationSplit: 0.2,
+      verbose: 0,
       callbacks: {
+        onEpochBegin: (epoch) => {
+          console.log(`▶️ Bắt đầu epoch ${epoch + 1}`);
+        },
         onEpochEnd: (epoch, logs) => {
           if (isNaN(logs.loss)) {
             console.error('❌ NaN loss detected! Stopping training.');
             this.model.stopTraining = true;
-          } else if (epoch % 10 === 0) {
+            // THỬ LẠI VỚI LEARNING RATE NHỎ HƠN
+            this.model.compile({
+              optimizer: tf.train.adam(0.0001),
+              loss: 'binaryCrossentropy'
+            });
+          } else if (epoch % 5 === 0) {
             console.log(`📈 Epoch ${epoch + 1}: Loss = ${logs.loss.toFixed(4)}, Val Loss = ${logs.val_loss?.toFixed(4) || 'N/A'}`);
           }
         }
       }
     });
 
-    // GIẢI PHÓNG BỘ NHỚ
     inputTensor.dispose();
     targetTensor.dispose();
 
     console.log('✅ Huấn luyện với Smart Oversampling hoàn tất!');
     return history;
   }
-
   // =================================================================
   // PHƯƠNG THỨC CHÍNH - SỬA ĐỔI ĐỂ DÙNG SMART OVERSAMPLING
   // =================================================================
@@ -371,7 +391,7 @@ class TensorFlowService {
     
     model.compile({
       optimizer: tf.train.adam(0.0005),
-      loss: 'meanSquaredError',
+      loss: 'binaryCrossentropy',
       metrics: []
     });
 
@@ -622,11 +642,13 @@ class TensorFlowService {
         
         let finalFeatureVector = [...basicFeatures, ...Object.values(advancedFeatures).flat()];
         
+        // ✅ THÊM KIỂM TRA KỸ HƠN
         const hasInvalid = finalFeatureVector.some(val => 
-          isNaN(val) || val === null || val === undefined || !isFinite(val)
+          isNaN(val) || val === null || val === undefined || !isFinite(val) || Math.abs(val) > 1000
         );
         
         if (hasInvalid) {
+          console.warn(`⚠️ Dữ liệu không hợp lệ ở ngày ${dateStr}`);
           sequenceValid = false;
           break;
         }
@@ -657,7 +679,17 @@ class TensorFlowService {
       }
     }
 
+    // ✅ THÊM KIỂM TRA CUỐI CÙNG
     if (trainingData.length > 0) {
+      console.log('🔍 KIỂM TRA DỮ LIỆU CUỐI CÙNG:');
+      const sampleInput = trainingData[0].inputSequence.flat();
+      const sampleTarget = trainingData[0].targetArray;
+      
+      console.log(`- Input range: ${Math.min(...sampleInput)} to ${Math.max(...sampleInput)}`);
+      console.log(`- Target range: ${Math.min(...sampleTarget)} to ${Math.max(...sampleTarget)}`);
+      console.log(`- NaN trong input: ${sampleInput.filter(v => isNaN(v)).length}`);
+      console.log(`- NaN trong target: ${sampleTarget.filter(v => isNaN(v)).length}`);
+      
       this.inputNodes = trainingData[0].inputSequence[0].length;
       console.log(`✅ Đã chuẩn bị ${trainingData.length} chuỗi dữ liệu hợp lệ`);
     } else {
