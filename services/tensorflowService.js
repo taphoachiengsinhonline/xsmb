@@ -89,6 +89,28 @@ class TensorFlowService {
     this.errorPatterns = null;
   }
 
+    // Thêm vào tensorflowService.js
+async debugTrainingData() {
+    const trainingData = await this.prepareTrainingData();
+    console.log('🔍 Debug Training Data:');
+    console.log('- Số lượng samples:', trainingData.length);
+    
+    if (trainingData.length > 0) {
+        const sample = trainingData[0];
+        console.log('- Input shape:', sample.inputSequence.length, 'x', sample.inputSequence[0].length);
+        console.log('- Target shape:', sample.targetArray.length);
+        console.log('- Input range:', 
+            Math.min(...sample.inputSequence.flat()), 
+            'to', 
+            Math.max(...sample.inputSequence.flat())
+        );
+        console.log('- Target range:', 
+            Math.min(...sample.targetArray), 
+            'to', 
+            Math.max(...sample.targetArray)
+        );
+    }
+}
   // =================================================================
   // PHÂN TÍCH LỖI TOÀN DIỆN - GIỮ NGUYÊN
   // =================================================================
@@ -561,13 +583,23 @@ class TensorFlowService {
   }
 
   async predict(inputSequence) {
+    console.log('🔍 [Predict Debug] Input sequence length:', inputSequence.length);
+    
     const inputTensor = tf.tensor3d([inputSequence], [1, SEQUENCE_LENGTH, this.inputNodes]);
     const prediction = this.model.predict(inputTensor);
     const output = await prediction.data();
+    
+    console.log('🔍 [Predict Debug] Model output stats:');
+    console.log('- Output length:', output.length);
+    console.log('- Min value:', Math.min(...output));
+    console.log('- Max value:', Math.max(...output));
+    console.log('- NaN values:', output.filter(v => isNaN(v)).length);
+    console.log('- First 10 values:', output.slice(0, 10));
+    
     prediction.dispose();
     inputTensor.dispose();
     return Array.from(output);
-  }
+}
 
  // TỰ ĐỘNG TẠO DỰ ĐOÁN SAU KHI HUẤN LUYỆN
 // =================================================================
