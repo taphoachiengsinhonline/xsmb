@@ -89,8 +89,10 @@ class TensorFlowService {
     this.errorPatterns = null;
   }
 
-    // Thêm vào tensorflowService.js
-async debugTrainingData() {
+  // =================================================================
+  // DEBUG TRAINING DATA
+  // =================================================================
+  async debugTrainingData() {
     const trainingData = await this.prepareTrainingData();
     console.log('🔍 Debug Training Data:');
     console.log('- Số lượng samples:', trainingData.length);
@@ -110,9 +112,10 @@ async debugTrainingData() {
             Math.max(...sample.targetArray)
         );
     }
-}
+  }
+
   // =================================================================
-  // PHÂN TÍCH LỖI TOÀN DIỆN - GIỮ NGUYÊN
+  // PHÂN TÍCH LỖI TOÀN DIỆN
   // =================================================================
   async analyzeHistoricalErrors() {
     console.log('🔍 Bắt đầu phân tích lỗi toàn diện từ dữ liệu...');
@@ -209,7 +212,7 @@ async debugTrainingData() {
   }
 
   // =================================================================
-  // OVERSAMPLING THÔNG MINH - THAY THẾ CHO SAMPLE WEIGHTING
+  // OVERSAMPLING THÔNG MINH - SỬA LỖI
   // =================================================================
   applySmartOversampling(trainingData) {
     console.log('🎯 Áp dụng Smart Oversampling CÂN BẰNG...');
@@ -243,7 +246,7 @@ async debugTrainingData() {
         const hasImportantFeatures = featureVector.some(val => Math.abs(val) > 0.5);
         const featureComplexity = this.calculateFeatureComplexity(featureVector);
         
-        if (hasImportantFeatures && featureComplexity > 0.5) { // TĂNG NGƯỠNG LÊN 0.5
+        if (hasImportantFeatures && featureComplexity > 0.5) {
             samplesToAdd.push(sample);
             addedCount++;
         }
@@ -258,13 +261,7 @@ async debugTrainingData() {
     console.log(`- Tổng sau oversampling: ${oversampledData.length} mẫu`);
 
     return oversampledData;
-}
-
-calculateFeatureComplexity(featureVector) {
-    const mean = featureVector.reduce((a, b) => a + b, 0) / featureVector.length;
-    const variance = featureVector.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / featureVector.length;
-    return Math.min(variance * 10, 1.0);
-}
+  }
 
   calculateFeatureComplexity(featureVector) {
     const mean = featureVector.reduce((a, b) => a + b, 0) / featureVector.length;
@@ -273,14 +270,20 @@ calculateFeatureComplexity(featureVector) {
   }
 
   // =================================================================
-  // HUẤN LUYỆN VỚI SMART OVERSAMPLING - SỬA LỖI
+  // HUẤN LUYỆN VỚI SMART OVERSAMPLING - SỬA LỖI enhancedData
   // =================================================================
   async trainModelWithSmartOversampling(trainingData) {
     console.log('🚀 Bắt đầu huấn luyện với Smart Oversampling...');
     
+    // ✅ SỬA LỖI: KHAI BÁO BIẾN enhancedData TRƯỚC KHI SỬ DỤNG
+    const enhancedData = this.applySmartOversampling(trainingData);
+    
     // ✅ THÊM VALIDATION MẠNH MẼ
     console.log('🔍 Validation dữ liệu training:');
-    trainingData.forEach((data, idx) => {
+    console.log(`- Dữ liệu gốc: ${trainingData.length} mẫu`);
+    console.log(`- Dữ liệu enhanced: ${enhancedData.length} mẫu`);
+    
+    enhancedData.forEach((data, idx) => {
         const inputFlat = data.inputSequence.flat();
         const targetFlat = data.targetArray;
         
@@ -294,9 +297,12 @@ calculateFeatureComplexity(featureVector) {
         }
     });
     
+    // ✅ SỬA: DÙNG enhancedData THAY VÌ trainingData
     const inputs = enhancedData.map(d => d.inputSequence);
     const targets = enhancedData.map(d => d.targetArray);
 
+    console.log(`🔧 Tạo tensor với ${inputs.length} mẫu...`);
+    
     const inputTensor = tf.tensor3d(inputs, [inputs.length, SEQUENCE_LENGTH, this.inputNodes]);
     const targetTensor = tf.tensor2d(targets, [targets.length, OUTPUT_NODES]);
 
@@ -313,7 +319,7 @@ calculateFeatureComplexity(featureVector) {
 
     const history = await this.model.fit(inputTensor, targetTensor, {
       epochs: EPOCHS,
-      batchSize: Math.min(32, inputs.length), // GIẢM BATCH SIZE
+      batchSize: Math.min(32, inputs.length),
       validationSplit: 0.2,
       verbose: 0,
       callbacks: {
@@ -342,174 +348,49 @@ calculateFeatureComplexity(featureVector) {
     console.log('✅ Huấn luyện với Smart Oversampling hoàn tất!');
     return history;
   }
+
   // =================================================================
-  // PHƯƠNG THỨC CHÍNH - SỬA ĐỔI ĐỂ DÙNG SMART OVERSAMPLING
+  // PHƯƠNG THỨC CHÍNH - HUẤN LUYỆN LỊCH SỬ
   // =================================================================
   async runHistoricalTraining() {
-    console.log('🔔 [TensorFlow Service] Bắt đầu Huấn luyện Lịch sử TUẦN TỰ THEO THỜI GIAN...');
-    
-    const results = await Result.find().sort({ 'ngay': 1 }).lean();
-    if (results.length < SEQUENCE_LENGTH + 1) {
-        throw new Error(`Không đủ dữ liệu. Cần ít nhất ${SEQUENCE_LENGTH + 1} ngày.`);
+    console.log('🔔 [TensorFlow Service] Bắt đầu Huấn luyện Lịch sử với Smart Oversampling...');
+   
+    const trainingData = await this.prepareTrainingData();
+    if (trainingData.length === 0 || trainingData.some(d => d.inputSequence.length !== SEQUENCE_LENGTH || d.inputSequence.flat().some(isNaN))) {
+      throw new Error('Dữ liệu training rỗng hoặc chứa giá trị không hợp lệ.');
     }
-
-    const grouped = {};
-    results.forEach(r => {
-        if (!grouped[r.ngay]) grouped[r.ngay] = [];
-        grouped[r.ngay].push(r);
+    
+    await this.buildModel(this.inputNodes);
+    
+    this.model.compile({
+      optimizer: tf.train.adam({learningRate: 0.0005}),
+      loss: 'binaryCrossentropy',
+      metrics: []
     });
-
-    const days = Object.keys(grouped).sort((a, b) => this.dateKey(a).localeCompare(this.dateKey(b)));
     
-    // XÂY DỰNG MODEL BAN ĐẦU
-    await this.buildModel(346);
+    console.log('✅ Model đã được compile. Bắt đầu quá trình training với Smart Oversampling...');
     
-    let totalProcessed = 0;
-    let correctPredictions = 0;
-
-    console.log(`📊 Bắt đầu quá trình học tuần tự từ ${days[SEQUENCE_LENGTH]} đến ${days[days.length-1]}`);
-    console.log(`📊 Tổng số bước: ${days.length - SEQUENCE_LENGTH}`);
-
-    // ✅ HỌC TUẦN TỰ TỪNG NGÀY MỘT
-    for (let currentIndex = SEQUENCE_LENGTH; currentIndex < days.length; currentIndex++) {
-        const currentDay = days[currentIndex];
-        const sequenceDays = days.slice(currentIndex - SEQUENCE_LENGTH, currentIndex);
-        
-        // 1. CHUẨN BỊ DỮ LIỆU ĐẦU VÀO (7 ngày trước đó)
-        const previousDays = [];
-        const inputSequence = sequenceDays.map(day => {
-            const dayResults = grouped[day] || [];
-            const prevDays = previousDays.slice();
-            previousDays.push(dayResults);
-            
-            const basicFeatures = this.featureService.extractAllFeatures(dayResults, prevDays, day);
-            const advancedFeatures = this.advancedFeatureEngineer.extractPremiumFeatures(dayResults, prevDays);
-            
-            let finalFeatureVector = [...basicFeatures, ...Object.values(advancedFeatures).flat()];
-            
-            const EXPECTED_SIZE = 346;
-            if (finalFeatureVector.length !== EXPECTED_SIZE) {
-                if (finalFeatureVector.length > EXPECTED_SIZE) {
-                    finalFeatureVector = finalFeatureVector.slice(0, EXPECTED_SIZE);
-                } else {
-                    finalFeatureVector = [...finalFeatureVector, ...Array(EXPECTED_SIZE - finalFeatureVector.length).fill(0)];
-                }
-            }
-            
-            return finalFeatureVector;
-        });
-
-        // 2. TẠO DỰ ĐOÁN CHO NGÀY HIỆN TẠI
-        console.log(`🎯 [${currentIndex-SEQUENCE_LENGTH+1}/${days.length-SEQUENCE_LENGTH}] Ngày ${currentDay}: Tạo dự đoán...`);
-        const predictionOutput = await this.predict(inputSequence);
-        const prediction = this.decodeOutput(predictionOutput);
-
-        // 3. LẤY KẾT QUẢ THỰC TẾ
-        const targetGDB = (grouped[currentDay] || []).find(r => r.giai === 'ĐB');
-        if (!targetGDB?.so || String(targetGDB.so).length < 5) {
-            console.log(`⚠️ Ngày ${currentDay}: Không có kết quả GĐB, bỏ qua`);
-            continue;
-        }
-
-        const targetGDBString = String(targetGDB.so).padStart(5, '0');
-        const targetArray = this.prepareTarget(targetGDBString);
-
-        // 4. LƯU DỰ ĐOÁN VÀO DB (TRƯỚC KHI HỌC)
-        const predictionRecord = {
-            ngayDuDoan: currentDay,
-            ...prediction,
-            danhDauDaSo: false, // Chưa học từ dự đoán này
-            modelVersion: NN_MODEL_NAME,
-            createdAt: new Date(),
-            confidenceScore: this.calculateConfidence(predictionOutput),
-            isTrainingPrediction: true,
-            trainingStep: currentIndex - SEQUENCE_LENGTH + 1
-        };
-
-        await NNPrediction.findOneAndUpdate(
-            { ngayDuDoan: currentDay },
-            predictionRecord,
-            { upsert: true, new: true }
-        );
-
-        // 5. SO SÁNH VÀ TÍNH ĐỘ CHÍNH XÁC
-        const actualStr = String(targetGDB.so).padStart(5, '0');
-        let correctCount = 0;
-        let positionAccuracy = [];
-        
-        for (let i = 0; i < 5; i++) {
-            const predictedDigits = prediction[`pos${i+1}`] || [];
-            const isCorrect = predictedDigits.includes(actualStr[i]);
-            if (isCorrect) correctCount++;
-            positionAccuracy.push({
-                position: `pos${i+1}`,
-                predicted: predictedDigits,
-                actual: actualStr[i],
-                correct: isCorrect
-            });
-        }
-        
-        const accuracy = correctCount / 5;
-        if (accuracy > 0) correctPredictions++;
-
-        console.log(`📊 Ngày ${currentDay}: ${correctCount}/5 vị trí đúng (${(accuracy * 100).toFixed(1)}%)`);
-
-        // 6. HUẤN LUYỆN MODEL VỚI DỮ LIỆU HIỆN TẠI
-        const inputTensor = tf.tensor3d([inputSequence], [1, SEQUENCE_LENGTH, 346]);
-        const targetTensor = tf.tensor2d([targetArray], [1, OUTPUT_NODES]);
-
-        await this.model.fit(inputTensor, targetTensor, {
-            epochs: 3, // Học 3 epochs cho mỗi ngày
-            batchSize: 1,
-            verbose: 0
-        });
-
-        // GIẢI PHÓNG BỘ NHỚ
-        inputTensor.dispose();
-        targetTensor.dispose();
-
-        // 7. ĐÁNH DẤU ĐÃ HỌC VÀ LƯU ĐỘ CHÍNH XÁC
-        await NNPrediction.updateOne(
-            { ngayDuDoan: currentDay },
-            { 
-                danhDauDaSo: true,
-                actualAccuracy: accuracy,
-                positionAccuracy: positionAccuracy,
-                learnedAt: new Date(),
-                trainingCompleted: true
-            }
-        );
-
-        totalProcessed++;
-
-        // HIỂN THỊ TIẾN TRÌNH
-        if (totalProcessed % 10 === 0) {
-            const progress = ((currentIndex - SEQUENCE_LENGTH + 1) / (days.length - SEQUENCE_LENGTH) * 100).toFixed(1);
-            console.log(`📈 Đã xử lý ${totalProcessed} ngày (${progress}%) - Tỷ lệ đúng: ${((correctPredictions/totalProcessed)*100).toFixed(1)}%`);
-        }
-    }
-
-    // LƯU MODEL SAU KHI HỌC XONG TẤT CẢ
+    await this.trainModelWithSmartOversampling(trainingData);
+   
     await this.saveModel();
-    
-    // TẠO DỰ ĐOÁN CHO NGÀY TIẾP THEO
-    console.log('🔮 Tạo dự đoán cho ngày tiếp theo sau khi học...');
-    const nextDayPrediction = await this.runNextDayPrediction();
 
-    const finalAccuracy = totalProcessed > 0 ? (correctPredictions / totalProcessed) * 100 : 0;
+    // ✅ TỰ ĐỘNG TẠO DỰ ĐOÁN SAU KHI HUẤN LUYỆN
+    console.log('🎯 Bắt đầu tự động tạo dự đoán sau huấn luyện...');
+    const generatedCount = await this.autoGeneratePredictionsAfterTraining();
     
     return {
-        message: `Huấn luyện TUẦN TỰ hoàn tất. Đã xử lý ${totalProcessed} ngày, tỷ lệ đúng: ${finalAccuracy.toFixed(1)}%. Đã tạo dự đoán cho ${nextDayPrediction.ngayDuDoan}.`,
-        totalProcessed: totalProcessed,
-        correctPredictions: correctPredictions,
-        accuracy: finalAccuracy,
-        nextPrediction: nextDayPrediction.ngayDuDoan,
-        modelName: NN_MODEL_NAME
+      message: `Huấn luyện với Smart Oversampling hoàn tất. Đã xử lý ${trainingData.length} chuỗi, tạo ${generatedCount} dự đoán mới.`,
+      sequences: trainingData.length,
+      epochs: EPOCHS,
+      featureSize: this.inputNodes,
+      modelName: NN_MODEL_NAME,
+      predictionsGenerated: generatedCount,
+      smartOversampling: true
     };
-}
+  }
 
   // =================================================================
-  // CÁC PHƯƠNG THỨC KHÁC GIỮ NGUYÊN
+  // BUILD MODEL
   // =================================================================
   async buildModel(inputNodes) {
     console.log(`🏗️ Xây dựng model với ${inputNodes} features...`);
@@ -581,7 +462,7 @@ calculateFeatureComplexity(featureVector) {
       epochs: EPOCHS,
       batchSize: Math.min(BATCH_SIZE, inputs.length),
       validationSplit: 0.1,
-      verbose: 0, // ✅ TẮT TIẾN TRÌNH
+      verbose: 0,
       callbacks: {
         onEpochEnd: (epoch, logs) => {
           if (isNaN(logs.loss)) {
@@ -600,6 +481,9 @@ calculateFeatureComplexity(featureVector) {
     return history;
   }
 
+  // =================================================================
+  // PREDICT VÀ DECODE OUTPUT
+  // =================================================================
   async predict(inputSequence) {
     console.log('🔍 [Predict Debug] Input sequence length:', inputSequence.length);
     
@@ -617,11 +501,42 @@ calculateFeatureComplexity(featureVector) {
     prediction.dispose();
     inputTensor.dispose();
     return Array.from(output);
-}
+  }
 
- // TỰ ĐỘNG TẠO DỰ ĐOÁN SAU KHI HUẤN LUYỆN
-// =================================================================
-async autoGeneratePredictionsAfterTraining() {
+  decodeOutput(output) {
+    console.log('🔍 [Debug] Raw output for decoding:', output.slice(0, 10));
+    
+    const prediction = { pos1: [], pos2: [], pos3: [], pos4: [], pos5: [] };
+    
+    for (let i = 0; i < 5; i++) {
+        const startIdx = i * 10;
+        const endIdx = (i + 1) * 10;
+        const positionOutput = output.slice(startIdx, endIdx);
+        
+        // ✅ VALIDATE VÀ LÀM SẠCH DỮ LIỆU
+        const validOutput = positionOutput.map((val, idx) => ({
+            digit: String(idx),
+            value: isNaN(val) || !isFinite(val) ? 0 : Math.max(0, val)
+        }));
+        
+        // ✅ SẮP XẾP VÀ LỌC CHỈ LẤY 3 SỐ TỐT NHẤT
+        const digitsWithValues = validOutput
+            .sort((a, b) => b.value - a.value)
+            .slice(0, 3)
+            .filter(item => item.value > 0.1)
+            .map(item => item.digit);
+            
+        prediction[`pos${i + 1}`] = digitsWithValues.length > 0 ? digitsWithValues : ['0','1','2'];
+    }
+    
+    console.log('🔍 [Debug] Final prediction:', prediction);
+    return prediction;
+  }
+
+  // =================================================================
+  // TỰ ĐỘNG TẠO DỰ ĐOÁN SAU HUẤN LUYỆN
+  // =================================================================
+  async autoGeneratePredictionsAfterTraining() {
     console.log('🚀 Bắt đầu tự động tạo dự đoán sau huấn luyện...');
     
     let generatedCount = 0;
@@ -650,19 +565,17 @@ async autoGeneratePredictionsAfterTraining() {
         console.error('❌ Lỗi tạo dự đoán ngày tiếp theo:', error.message);
     }
 
-    // 2. TẠO DỰ ĐOÁN CHO CÁC NGÀY TRONG QUÁ KHỨ (để có lịch sử đánh giá)
+    // 2. TẠO DỰ ĐOÁN CHO CÁC NGÀY TRONG QUÁ KHỨ
     console.log('🕐 Tạo dự đoán cho các ngày trong quá khứ...');
     
-    // Lấy danh sách các ngày đã có kết quả nhưng chưa có dự đoán
     const existingPredictions = await NNPrediction.find().lean();
     const existingPredictionDates = new Set(existingPredictions.map(p => p.ngayDuDoan));
     
-    // Tạo dự đoán cho 30 ngày gần nhất có kết quả nhưng chưa có dự đoán
-    const recentDays = days.slice(-30); // 30 ngày gần nhất
+    const recentDays = days.slice(-30);
     
     for (const day of recentDays) {
         if (existingPredictionDates.has(day)) {
-            continue; // Đã có dự đoán rồi
+            continue;
         }
 
         try {
@@ -696,15 +609,14 @@ async autoGeneratePredictionsAfterTraining() {
             const output = await this.predict(inputSequence);
             const prediction = this.decodeOutput(output);
 
-            // ✅ LƯU DỰ ĐOÁN VỚI THÔNG TIN ĐẦY ĐỦ
             const predictionRecord = {
                 ngayDuDoan: day,
                 ...prediction,
-                danhDauDaSo: true, // Đánh dấu đã có kết quả thực tế
+                danhDauDaSo: true,
                 modelVersion: NN_MODEL_NAME,
                 createdAt: new Date(),
                 confidenceScore: this.calculateConfidence(output),
-                isHistorical: true // Đánh dấu là dự đoán lịch sử
+                isHistorical: true
             };
 
             await NNPrediction.findOneAndUpdate(
@@ -716,7 +628,6 @@ async autoGeneratePredictionsAfterTraining() {
             generatedCount++;
             console.log(`✅ Đã tạo dự đoán lịch sử cho: ${day}`);
 
-            // Giới hạn số lượng để không quá tải
             if (generatedCount >= 10) {
                 break;
             }
@@ -728,8 +639,7 @@ async autoGeneratePredictionsAfterTraining() {
 
     console.log(`🎉 Đã tạo tổng cộng ${generatedCount} dự đoán sau huấn luyện`);
     return generatedCount;
-}
-
+  }
 
   prepareTarget(gdbString) {
     const target = Array(OUTPUT_NODES).fill(0);
@@ -743,45 +653,8 @@ async autoGeneratePredictionsAfterTraining() {
   }
 
   // =================================================================
-  // PHƯƠNG THỨC CHÍNH - SỬA ĐỔI ĐỂ DÙNG SMART WEIGHTING
+  // LEARNING TỪ DỰ ĐOÁN MỚI
   // =================================================================
-  async runHistoricalTraining() {
-    console.log('🔔 [TensorFlow Service] Bắt đầu Huấn luyện Lịch sử với Smart Oversampling...');
-   
-    const trainingData = await this.prepareTrainingData();
-    if (trainingData.length === 0 || trainingData.some(d => d.inputSequence.length !== SEQUENCE_LENGTH || d.inputSequence.flat().some(isNaN))) {
-      throw new Error('Dữ liệu training rỗng hoặc chứa giá trị không hợp lệ.');
-    }
-    
-    await this.buildModel(this.inputNodes);
-    
-    this.model.compile({
-      optimizer: tf.train.adam({learningRate: 0.0005}),
-      loss: 'binaryCrossentropy',
-      metrics: []
-    });
-    
-    console.log('✅ Model đã được compile. Bắt đầu quá trình training với Smart Oversampling...');
-    
-    await this.trainModelWithSmartOversampling(trainingData);
-   
-    await this.saveModel();
-
-    // ✅ THÊM: TỰ ĐỘNG TẠO DỰ ĐOÁN SAU KHI HUẤN LUYỆN
-    console.log('🎯 Bắt đầu tự động tạo dự đoán sau huấn luyện...');
-    const generatedCount = await this.autoGeneratePredictionsAfterTraining();
-    
-    return {
-      message: `Huấn luyện với Smart Oversampling hoàn tất. Đã xử lý ${trainingData.length} chuỗi, tạo ${generatedCount} dự đoán mới.`,
-      sequences: trainingData.length,
-      epochs: EPOCHS,
-      featureSize: this.inputNodes,
-      modelName: NN_MODEL_NAME,
-      predictionsGenerated: generatedCount,
-      smartOversampling: true
-    };
-}
-
   async runLearning() {
     console.log('🔔 [TensorFlow Service] Learning from NEW predictions...');
     
@@ -792,10 +665,9 @@ async autoGeneratePredictionsAfterTraining() {
         }
     }
 
-    // CHỈ LẤY DỰ ĐOÁN CHƯA ĐƯỢC HỌC VÀ ĐÃ CÓ KẾT QUẢ
     const predictionsToLearn = await NNPrediction.find({ 
         danhDauDaSo: false,
-        isTrainingPrediction: { $ne: true } // Không phải dự đoán trong training
+        isTrainingPrediction: { $ne: true }
     }).lean();
 
     if (predictionsToLearn.length === 0) {
@@ -818,7 +690,6 @@ async autoGeneratePredictionsAfterTraining() {
         const actualResult = (grouped[pred.ngayDuDoan] || []).find(r => r.giai === 'ĐB');
         if (!actualResult?.so) continue;
 
-        // TÌM DỮ LIỆU ĐẦU VÀO CHO DỰ ĐOÁN NÀY
         const predDayIndex = days.indexOf(pred.ngayDuDoan);
         if (predDayIndex < SEQUENCE_LENGTH) continue;
 
@@ -849,12 +720,11 @@ async autoGeneratePredictionsAfterTraining() {
         const targetGDBString = String(actualResult.so).padStart(5, '0');
         const targetArray = this.prepareTarget(targetGDBString);
 
-        // HỌC TỪ DỰ ĐOÁN SAI
         const inputTensor = tf.tensor3d([inputSequence], [1, SEQUENCE_LENGTH, 346]);
         const targetTensor = tf.tensor2d([targetArray], [1, OUTPUT_NODES]);
 
         await this.model.fit(inputTensor, targetTensor, {
-            epochs: 5, // Học kỹ hơn từ dự đoán sai
+            epochs: 5,
             batchSize: 1,
             verbose: 0
         });
@@ -862,7 +732,6 @@ async autoGeneratePredictionsAfterTraining() {
         inputTensor.dispose();
         targetTensor.dispose();
 
-        // TÍNH ĐỘ CHÍNH XÁC VÀ CẬP NHẬT
         const actualStr = String(actualResult.so).padStart(5, '0');
         let correctCount = 0;
         for (let i = 0; i < 5; i++) {
@@ -889,8 +758,6 @@ async autoGeneratePredictionsAfterTraining() {
 
     if (learnedCount > 0) {
         await this.saveModel();
-        
-        // TỰ ĐỘNG TẠO DỰ ĐOÁN MỚI SAU KHI HỌC
         console.log('🔮 Tạo dự đoán mới sau khi học...');
         await this.runNextDayPrediction();
     }
@@ -899,10 +766,10 @@ async autoGeneratePredictionsAfterTraining() {
         message: `Đã học từ ${learnedCount} dự đoán mới và tạo dự đoán tiếp theo.`,
         learnedCount: learnedCount
     };
-}
+  }
 
   // =================================================================
-  // CÁC PHƯƠNG THỨC CÒN LẠI - GIỮ NGUYÊN
+  // CHUẨN BỊ DỮ LIỆU TRAINING
   // =================================================================
   async prepareTrainingData() {
     console.log('📝 Bắt đầu chuẩn bị dữ liệu huấn luyện...');
@@ -942,7 +809,6 @@ async autoGeneratePredictionsAfterTraining() {
         
         let finalFeatureVector = [...basicFeatures, ...Object.values(advancedFeatures).flat()];
         
-        // ✅ THÊM KIỂM TRA KỸ HƠN
         const hasInvalid = finalFeatureVector.some(val => 
           isNaN(val) || val === null || val === undefined || !isFinite(val) || Math.abs(val) > 1000
         );
@@ -979,7 +845,6 @@ async autoGeneratePredictionsAfterTraining() {
       }
     }
 
-    // ✅ THÊM KIỂM TRA CUỐI CÙNG
     if (trainingData.length > 0) {
       console.log('🔍 KIỂM TRA DỮ LIỆU CUỐI CÙNG:');
       const sampleInput = trainingData[0].inputSequence.flat();
@@ -1005,6 +870,9 @@ async autoGeneratePredictionsAfterTraining() {
     return parts.length !== 3 ? s : `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
   }
 
+  // =================================================================
+  // SAVE VÀ LOAD MODEL
+  // =================================================================
   async saveModel() {
     if (!this.model) throw new Error('Không có model để lưu.');
 
@@ -1062,6 +930,9 @@ async autoGeneratePredictionsAfterTraining() {
     }
   }
 
+  // =================================================================
+  // DỰ ĐOÁN NGÀY TIẾP THEO
+  // =================================================================
   async runNextDayPrediction() {
     console.log('🔔 [TensorFlow Service] Generating next day prediction...');
     
@@ -1124,14 +995,12 @@ async autoGeneratePredictionsAfterTraining() {
     const latestDay = latestSequenceDays[latestSequenceDays.length - 1];
     const nextDayStr = DateTime.fromFormat(latestDay, 'dd/MM/yyyy').plus({ days: 1 }).toFormat('dd/MM/yyyy');
 
-    // ✅ THÊM THÔNG TIN MODEL VERSION VÀ TIMESTAMP
     const predictionRecord = {
       ngayDuDoan: nextDayStr,
       ...prediction,
       danhDauDaSo: false,
       modelVersion: NN_MODEL_NAME,
       createdAt: new Date(),
-      // ✅ LƯU CẢ XÁC SUẤT GỐC ĐỂ PHÂN TÍCH SAU NÀY
       rawProbabilities: output,
       confidenceScore: this.calculateConfidence(output)
     };
@@ -1150,10 +1019,12 @@ async autoGeneratePredictionsAfterTraining() {
       prediction: prediction,
       confidence: predictionRecord.confidenceScore
     };
-}
+  }
 
-// ✅ THÊM PHƯƠNG THỨC TÍNH ĐỘ TIN CẬY
-calculateConfidence(output) {
+  // =================================================================
+  // TÍNH ĐỘ TIN CẬY
+  // =================================================================
+  calculateConfidence(output) {
     if (!output || output.length === 0) return 0;
     
     let confidence = 0;
@@ -1162,14 +1033,13 @@ calculateConfidence(output) {
     for (let i = 0; i < 5; i++) {
         const positionProbs = output.slice(i * 10, (i + 1) * 10);
         
-        // ✅ LỌC VÀ LÀM SẠCH PROBABILITIES
         const cleanProbs = positionProbs.map(p => isNaN(p) ? 0 : Math.max(0, p));
         const maxProb = Math.max(...cleanProbs);
         const sumProb = cleanProbs.reduce((a, b) => a + b, 0);
         
         if (sumProb > 0 && maxProb > 0.1) {
             const positionConfidence = maxProb / (sumProb / cleanProbs.length);
-            confidence += Math.min(positionConfidence, 1.0); // GIỚI HẠN MAX = 1.0
+            confidence += Math.min(positionConfidence, 1.0);
             validPositions++;
         }
     }
@@ -1178,36 +1048,7 @@ calculateConfidence(output) {
     console.log(`🎯 Confidence score: ${finalConfidence.toFixed(4)}`);
     
     return Math.min(finalConfidence, 1.0);
-}
-  decodeOutput(output) {
-    console.log('🔍 [Debug] Raw output for decoding:', output.slice(0, 10));
-    
-    const prediction = { pos1: [], pos2: [], pos3: [], pos4: [], pos5: [] };
-    
-    for (let i = 0; i < 5; i++) {
-        const startIdx = i * 10;
-        const endIdx = (i + 1) * 10;
-        const positionOutput = output.slice(startIdx, endIdx);
-        
-        // ✅ VALIDATE VÀ LÀM SẠCH DỮ LIỆU
-        const validOutput = positionOutput.map((val, idx) => ({
-            digit: String(idx),
-            value: isNaN(val) || !isFinite(val) ? 0 : Math.max(0, val)
-        }));
-        
-        // ✅ SẮP XẾP VÀ LỌC CHỈ LẤY 3 SỐ TỐT NHẤT (thay vì 5)
-        const digitsWithValues = validOutput
-            .sort((a, b) => b.value - a.value)
-            .slice(0, 3)  // GIẢM TỪ 5 XUỐNG 3 SỐ
-            .filter(item => item.value > 0.1)  // CHỈ LẤY SỐ CÓ XÁC SUẤT > 10%
-            .map(item => item.digit);
-            
-        prediction[`pos${i + 1}`] = digitsWithValues.length > 0 ? digitsWithValues : ['0','1','2']; // Fallback
-    }
-    
-    console.log('🔍 [Debug] Final prediction:', prediction);
-    return prediction;
-}
+  }
 }
 
 module.exports = TensorFlowService;
