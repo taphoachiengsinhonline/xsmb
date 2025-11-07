@@ -24,40 +24,63 @@ const CL_PATTERNS_3_DIGIT = ['CCC','CCL','CLC','CLL','LCC','LCL','LLC','LLL']; /
 class AdvancedFeatureEngineer {
     extractPremiumFeatures(currentDayResults, previousDaysResults) {
     try {
+        // ✅ THÊM VALIDATION ĐẦU VÀO
+        if (!currentDayResults || !Array.isArray(currentDayResults)) {
+            console.warn('⚠️ currentDayResults không hợp lệ');
+            return this.getDefaultFeatures();
+        }
+
         const resultsMap = new Map(currentDayResults.map(r => [r.giai, r]));
-
-        const prizeCorrelationFeatures = this._extractPrizeCorrelationFeatures(resultsMap);
-        const sumFrequencyFeatures = this._extractSumFrequencyFeatures(currentDayResults);
-        const chanLePatterns = this._extractChanLePatterns(currentDayResults);
-        const gapAnalysis = this._extractGapAnalysis(previousDaysResults);
-
-        // KIỂM TRA VÀ LÀM SẠCH TỪNG NHÓM FEATURES
-        const cleanFeatures = (features, name) => {
+        
+        // ✅ VALIDATE VÀ NORMALIZE TỪNG NHÓM FEATURES
+        const normalizeFeatures = (features, size, name) => {
             if (!Array.isArray(features)) {
                 console.warn(`⚠️ ${name} không phải mảng:`, features);
-                return Array(50).fill(0); // Trả về mảng mặc định
+                return Array(size).fill(0);
             }
-            return features.map(val => 
-                (isNaN(val) || val === null || val === undefined || !isFinite(val)) ? 0 : val
-            );
+            
+            return features.map(val => {
+                const cleanVal = (isNaN(val) || val === null || val === undefined || !isFinite(val)) ? 0 : val;
+                return Math.max(0, Math.min(1, cleanVal)); // CLAMP VỀ [0,1]
+            }).slice(0, size); // ĐẢM BẢO ĐÚNG KÍCH THƯỚC
         };
 
+        const prizeCorrelationFeatures = normalizeFeatures(
+            this._extractPrizeCorrelationFeatures(resultsMap), 50, 'Prize Correlation'
+        );
+        
+        const sumFrequencyFeatures = normalizeFeatures(
+            this._extractSumFrequencyFeatures(currentDayResults), 28, 'Sum Frequency'
+        );
+        
+        const chanLePatterns = normalizeFeatures(
+            this._extractChanLePatterns(currentDayResults), 24, 'ChanLe Patterns'
+        );
+        
+        const gapAnalysis = normalizeFeatures(
+            this._extractGapAnalysis(previousDaysResults), 30, 'Gap Analysis'
+        );
+
         return {
-            prizeCorrelationFeatures: cleanFeatures(prizeCorrelationFeatures, 'Prize Correlation'),
-            sumFrequencyFeatures: cleanFeatures(sumFrequencyFeatures, 'Sum Frequency'), 
-            chanLePatterns: cleanFeatures(chanLePatterns, 'ChanLe Patterns'),
-            gapAnalysis: cleanFeatures(gapAnalysis, 'Gap Analysis')
+            prizeCorrelationFeatures,
+            sumFrequencyFeatures, 
+            chanLePatterns,
+            gapAnalysis
         };
     } catch (error) {
         console.error('❌ Lỗi trong extractPremiumFeatures:', error);
-        // Trả về features mặc định nếu có lỗi
-        return {
-            prizeCorrelationFeatures: Array(50).fill(0),
-            sumFrequencyFeatures: Array(28).fill(0),
-            chanLePatterns: Array(24).fill(0),
-            gapAnalysis: Array(30).fill(0)
-        };
+        return this.getDefaultFeatures();
     }
+}
+
+// ✅ THÊM HÀM FALLBACK
+getDefaultFeatures() {
+    return {
+        prizeCorrelationFeatures: Array(50).fill(0),
+        sumFrequencyFeatures: Array(28).fill(0),
+        chanLePatterns: Array(24).fill(0),
+        gapAnalysis: Array(30).fill(0)
+    };
 }
 
     // =================================================================
