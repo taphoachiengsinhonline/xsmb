@@ -35,8 +35,8 @@ exports.learn = async (req, res) => {
     }
 };
 
-const getAllPredictions = async (req, res) => {
-    try {
+exports.getAllPredictions = async (req, res) => {
+     try {
         const predictions = await NNPrediction.find()
             .sort({ ngayDuDoan: -1, createdAt: -1 })
             .lean();
