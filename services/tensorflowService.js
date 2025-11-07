@@ -824,17 +824,49 @@ class TensorFlowService {
     const latestDay = latestSequenceDays[latestSequenceDays.length - 1];
     const nextDayStr = DateTime.fromFormat(latestDay, 'dd/MM/yyyy').plus({ days: 1 }).toFormat('dd/MM/yyyy');
 
+    // ✅ THÊM THÔNG TIN MODEL VERSION VÀ TIMESTAMP
+    const predictionRecord = {
+      ngayDuDoan: nextDayStr,
+      ...prediction,
+      danhDauDaSo: false,
+      modelVersion: NN_MODEL_NAME,
+      createdAt: new Date(),
+      // ✅ LƯU CẢ XÁC SUẤT GỐC ĐỂ PHÂN TÍCH SAU NÀY
+      rawProbabilities: output,
+      confidenceScore: this.calculateConfidence(output)
+    };
+
     await NNPrediction.findOneAndUpdate(
       { ngayDuDoan: nextDayStr },
-      { ngayDuDoan: nextDayStr, ...prediction, danhDauDaSo: false },
+      predictionRecord,
       { upsert: true, new: true }
     );
 
+    console.log(`✅ Đã tạo dự đoán cho ${nextDayStr} với confidence: ${predictionRecord.confidenceScore}`);
+
     return {
       message: `TensorFlow LSTM đã tạo dự đoán cho ngày ${nextDayStr}.`,
-      ngayDuDoan: nextDayStr
+      ngayDuDoan: nextDayStr,
+      prediction: prediction,
+      confidence: predictionRecord.confidenceScore
     };
-  }
+}
+
+// ✅ THÊM PHƯƠNG THỨC TÍNH ĐỘ TIN CẬY
+calculateConfidence(output) {
+    if (!output || output.length === 0) return 0;
+    
+    // Tính độ tin cậy dựa trên sự chênh lệch giữa các xác suất
+    let confidence = 0;
+    for (let i = 0; i < 5; i++) {
+        const positionProbs = output.slice(i * 10, (i + 1) * 10);
+        const sorted = [...positionProbs].sort((a, b) => b - a);
+        const diff = sorted[0] - sorted[1]; // Chênh lệch giữa top1 và top2
+        confidence += diff;
+    }
+    
+    return Math.min(confidence / 5, 1.0);
+}
 
   decodeOutput(output) {
     const prediction = { pos1: [], pos2: [], pos3: [], pos4: [], pos5: [] };
