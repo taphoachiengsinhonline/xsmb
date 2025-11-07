@@ -93,15 +93,17 @@ class TensorFlowService {
   // PHÂN TÍCH LỖI TOÀN DIỆN - GIỮ NGUYÊN
   // =================================================================
   async analyzeHistoricalErrors() {
-    console.log('🔍 Bắt đầu phân tích lỗi toàn diện từ 90+ ngày dữ liệu...');
+    console.log('🔍 Bắt đầu phân tích lỗi toàn diện từ dữ liệu...');
     
     const results = await Result.find().sort({ 'ngay': 1 }).lean();
     const predictions = await NNPrediction.find().lean();
 
     if (results.length === 0 || predictions.length === 0) {
-      console.log('⚠️ Chưa đủ dữ liệu để phân tích lỗi');
-      return this.getDefaultErrorPatterns();
+        console.log('⚠️ Chưa đủ dữ liệu để phân tích lỗi');
+        return this.getDefaultErrorPatterns();
     }
+
+    console.log(`📊 Phân tích ${predictions.length} dự đoán...`);
 
     const groupedResults = {};
     results.forEach(r => {
@@ -1096,12 +1098,18 @@ calculateConfidence(output) {
     let confidence = 0;
     for (let i = 0; i < 5; i++) {
         const positionProbs = output.slice(i * 10, (i + 1) * 10);
-        const sorted = [...positionProbs].sort((a, b) => b - a);
-        const diff = sorted[0] - sorted[1];
-        confidence += diff;
+        const maxProb = Math.max(...positionProbs);
+        const sumProb = positionProbs.reduce((a, b) => a + b, 0);
+        
+        // ✅ CÔNG THỨC TÍNH CONFIDENCE TỐT HƠN
+        const positionConfidence = maxProb / (sumProb / positionProbs.length || 1);
+        confidence += positionConfidence;
     }
     
-    return Math.min(confidence / 5, 1.0);
+    const finalConfidence = confidence / 5;
+    console.log(`🎯 Confidence score: ${finalConfidence.toFixed(4)}`);
+    
+    return Math.min(finalConfidence, 1.0);
 }
 
   decodeOutput(output) {
