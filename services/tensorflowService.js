@@ -86,11 +86,11 @@ class TensorFlowService {
     this.advancedTrainer = new AdvancedTraining();
     this.inputNodes = 0;
     this.ensembleModels = [];
-    this.errorPatterns = null; // Lưu trữ phân tích lỗi
+    this.errorPatterns = null;
   }
 
   // =================================================================
-  // PHÂN TÍCH LỖI TOÀN DIỆN - CHẠY NGAY KHI CÓ DỮ LIỆU 90+ NGÀY
+  // PHÂN TÍCH LỖI TOÀN DIỆN - GIỮ NGUYÊN
   // =================================================================
   async analyzeHistoricalErrors() {
     console.log('🔍 Bắt đầu phân tích lỗi toàn diện từ 90+ ngày dữ liệu...');
@@ -112,8 +112,6 @@ class TensorFlowService {
     const errorAnalysis = {
       weakPositions: [],
       temporalWeaknesses: {},
-      featureMistakes: new Set(),
-      confidenceErrors: [],
       overallAccuracy: 0,
       totalAnalyzed: 0
     };
@@ -142,28 +140,6 @@ class TensorFlowService {
       }
 
       if (positionCorrect) correctPredictions++;
-
-      // PHÂN TÍCH THEO THỜI GIAN
-      const date = DateTime.fromFormat(pred.ngayDuDoan, 'dd/MM/yyyy');
-      const dayOfWeek = date.weekdayShort;
-      const month = date.monthShort;
-      
-      if (!errorAnalysis.temporalWeaknesses[dayOfWeek]) {
-        errorAnalysis.temporalWeaknesses[dayOfWeek] = { total: 0, errors: 0 };
-      }
-      errorAnalysis.temporalWeaknesses[dayOfWeek].total++;
-      if (!positionCorrect) {
-        errorAnalysis.temporalWeaknesses[dayOfWeek].errors++;
-      }
-
-      // PHÂN TÍCH THEO THÁNG
-      if (!errorAnalysis.temporalWeaknesses[month]) {
-        errorAnalysis.temporalWeaknesses[month] = { total: 0, errors: 0 };
-      }
-      errorAnalysis.temporalWeaknesses[month].total++;
-      if (!positionCorrect) {
-        errorAnalysis.temporalWeaknesses[month].errors++;
-      }
     }
 
     // TÍNH TOÁN KẾT QUẢ
@@ -181,15 +157,8 @@ class TensorFlowService {
       .map(([pos, count]) => ({
         position: pos,
         errorCount: count,
-        errorRate: count / totalPredictions,
-        weight: 1 + (count / totalPredictions) * 2 // Tỷ lệ sai càng cao -> weight càng lớn
+        errorRate: count / totalPredictions
       }));
-
-    // TÍNH TỶ LỆ LỖI THEO THỜI GIAN
-    for (const [key, data] of Object.entries(errorAnalysis.temporalWeaknesses)) {
-      data.errorRate = data.errors / data.total;
-      data.weight = 1 + data.errorRate; // Tỷ lệ lỗi cao -> weight cao
-    }
 
     console.log('📊 KẾT QUẢ PHÂN TÍCH LỖI:');
     console.log(`- Tổng số dự đoán đã phân tích: ${errorAnalysis.totalAnalyzed}`);
@@ -203,11 +172,11 @@ class TensorFlowService {
   getDefaultErrorPatterns() {
     return {
       weakPositions: [
-        { position: 'pos1', errorRate: 0.7, weight: 2.4 },
-        { position: 'pos2', errorRate: 0.6, weight: 2.2 },
-        { position: 'pos3', errorRate: 0.5, weight: 2.0 },
-        { position: 'pos4', errorRate: 0.4, weight: 1.8 },
-        { position: 'pos5', errorRate: 0.3, weight: 1.6 }
+        { position: 'pos1', errorRate: 0.7 },
+        { position: 'pos2', errorRate: 0.6 },
+        { position: 'pos3', errorRate: 0.5 },
+        { position: 'pos4', errorRate: 0.4 },
+        { position: 'pos5', errorRate: 0.3 }
       ],
       temporalWeaknesses: {},
       overallAccuracy: 0,
@@ -216,93 +185,93 @@ class TensorFlowService {
   }
 
   // =================================================================
-  // TÍNH TRỌNG SỐ THÔNG MINH CHO TỪNG MẪU HUẤN LUYỆN
+  // OVERSAMPLING THÔNG MINH - THAY THẾ CHO SAMPLE WEIGHTING
   // =================================================================
-  calculateSmartWeights(trainingData) {
-    console.log('🎯 Tính trọng số thông minh cho từng mẫu huấn luyện...');
+  applySmartOversampling(trainingData) {
+    console.log('🎯 Áp dụng Smart Oversampling...');
     
     if (!this.errorPatterns) {
-      console.log('⚠️ Chưa có phân tích lỗi, sử dụng weights mặc định');
-      return Array(trainingData.length).fill(1.0);
+      console.log('⚠️ Chưa có phân tích lỗi, không áp dụng oversampling');
+      return trainingData;
     }
 
-    const weights = trainingData.map((sample, index) => {
-      let weight = 1.0; // Weight mặc định
+    const oversampledData = [...trainingData];
+    const samplesToAdd = [];
 
-      try {
-        // 1. TĂNG TRỌNG SỐ CHO CÁC MẪU LIÊN QUAN ĐẾN VỊ TRÍ YẾU
-        this.errorPatterns.weakPositions.forEach(weakPos => {
-          if (weakPos.errorRate > 0.5) { // Chỉ xét các vị trí sai > 50%
-            weight += weakPos.weight * 0.3;
-          }
-        });
-
-        // 2. TĂNG TRỌNG SỐ CHO CÁC MẪU CÓ FEATURES ĐẶC BIỆT
-        const featureVector = sample.inputSequence.flat();
-        const hasExtremeValues = featureVector.some(val => Math.abs(val) > 0.8);
-        if (hasExtremeValues) {
-          weight += 0.4; // Các features cực trị thường quan trọng
-        }
-
-        // 3. TĂNG TRỌNG SỐ CHO CÁC MẪU CÓ PATTERN PHỨC TẠP
-        const featureComplexity = this.calculateFeatureComplexity(featureVector);
-        weight += featureComplexity * 0.2;
-
-        // 4. GIẢM TRỌNG SỐ CHO CÁC MẪU QUÁ ĐƠN GIẢN
-        const simpleFeatureCount = featureVector.filter(val => Math.abs(val) < 0.1).length;
-        if (simpleFeatureCount > featureVector.length * 0.8) {
-          weight *= 0.8; // Giảm weight cho mẫu quá đơn giản
-        }
-
-      } catch (error) {
-        console.warn(`⚠️ Lỗi tính weight cho sample ${index}:`, error.message);
-        weight = 1.0; // Fallback về weight mặc định
+    // TÌM CÁC MẪU LIÊN QUAN ĐẾN VỊ TRÍ YẾU VÀ THÊM VÀO
+    trainingData.forEach((sample, index) => {
+      let shouldOversample = false;
+      
+      // KIỂM TRA NẾU MẪU NÀY CÓ ĐẶC ĐIỂM CẦN ĐƯỢC TẬP TRUNG
+      const featureVector = sample.inputSequence.flat();
+      
+      // 1. CÁC MẪU CÓ FEATURES CỰC TRỊ (QUAN TRỌNG)
+      const hasExtremeValues = featureVector.some(val => Math.abs(val) > 0.8);
+      if (hasExtremeValues) {
+        shouldOversample = true;
       }
 
-      return Math.min(Math.max(weight, 0.5), 3.0); // Giới hạn weight từ 0.5 đến 3.0
+      // 2. CÁC MẪU CÓ PATTERN PHỨC TẠP
+      const featureComplexity = this.calculateFeatureComplexity(featureVector);
+      if (featureComplexity > 0.7) {
+        shouldOversample = true;
+      }
+
+      // 3. CÁC MẪU LIÊN QUAN ĐẾN VỊ TRÍ YẾU
+      this.errorPatterns.weakPositions.forEach(weakPos => {
+        if (weakPos.errorRate > 0.6) { // CHỈ XÉT CÁC VỊ TRÍ SAI > 60%
+          // Thêm mẫu này thêm 1 lần nữa để tập trung học
+          samplesToAdd.push(sample);
+        }
+      });
+
+      if (shouldOversample) {
+        samplesToAdd.push(sample); // Thêm 1 bản sao
+      }
     });
 
-    console.log(`✅ Đã tính weights cho ${weights.length} mẫu:`);
-    console.log(`- Weight trung bình: ${(weights.reduce((a, b) => a + b, 0) / weights.length).toFixed(2)}`);
-    console.log(`- Weight min: ${Math.min(...weights).toFixed(2)}, max: ${Math.max(...weights).toFixed(2)}`);
+    // THÊM CÁC MẪU ĐÃ CHỌN VÀO DỮ LIỆU HUẤN LUYỆN
+    oversampledData.push(...samplesToAdd);
 
-    return weights;
+    console.log(`✅ Đã áp dụng Smart Oversampling:`);
+    console.log(`- Dữ liệu gốc: ${trainingData.length} mẫu`);
+    console.log(`- Đã thêm: ${samplesToAdd.length} mẫu`);
+    console.log(`- Tổng sau oversampling: ${oversampledData.length} mẫu`);
+
+    return oversampledData;
   }
 
   calculateFeatureComplexity(featureVector) {
-    // Tính độ phức tạp của feature vector dựa trên variance
     const mean = featureVector.reduce((a, b) => a + b, 0) / featureVector.length;
     const variance = featureVector.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / featureVector.length;
-    return Math.min(variance * 10, 1.0); // Chuẩn hóa về 0-1
+    return Math.min(variance * 10, 1.0);
   }
 
   // =================================================================
-  // HUẤN LUYỆN VỚI SMART WEIGHTING
+  // HUẤN LUYỆN VỚI SMART OVERSAMPLING - SỬA LỖI
   // =================================================================
-  async trainModelWithSmartWeights(trainingData) {
-    console.log('🚀 Bắt đầu huấn luyện với Smart Weighting...');
+  async trainModelWithSmartOversampling(trainingData) {
+    console.log('🚀 Bắt đầu huấn luyện với Smart Oversampling...');
     
     // PHÂN TÍCH LỖI TRƯỚC KHI HUẤN LUYỆN
     await this.analyzeHistoricalErrors();
     
-    // TÍNH TRỌNG SỐ THÔNG MINH
-    const weights = this.calculateSmartWeights(trainingData);
+    // ÁP DỤNG OVERSAMPLING THÔNG MINH
+    const enhancedData = this.applySmartOversampling(trainingData);
     
-    const inputs = trainingData.map(d => d.inputSequence);
-    const targets = trainingData.map(d => d.targetArray);
+    const inputs = enhancedData.map(d => d.inputSequence);
+    const targets = enhancedData.map(d => d.targetArray);
 
     const inputTensor = tf.tensor3d(inputs, [inputs.length, SEQUENCE_LENGTH, this.inputNodes]);
     const targetTensor = tf.tensor2d(targets, [targets.length, OUTPUT_NODES]);
-    const weightTensor = tf.tensor1d(weights);
 
-    console.log('🔧 Bắt đầu training với smart weights...');
+    console.log('🔧 Bắt đầu training với dữ liệu đã được oversampling...');
     
     const history = await this.model.fit(inputTensor, targetTensor, {
       epochs: EPOCHS,
       batchSize: Math.min(BATCH_SIZE, inputs.length),
       validationSplit: 0.1,
-      verbose: 0, // ✅ TẮT TIẾN TRÌNH ĐỂ KHÔNG LỖI TICK
-      sampleWeight: weightTensor,
+      verbose: 0, // ✅ TẮT TIẾN TRÌNH
       callbacks: {
         onEpochEnd: (epoch, logs) => {
           if (isNaN(logs.loss)) {
@@ -318,48 +287,50 @@ class TensorFlowService {
     // GIẢI PHÓNG BỘ NHỚ
     inputTensor.dispose();
     targetTensor.dispose();
-    weightTensor.dispose();
 
-    console.log('✅ Huấn luyện với Smart Weighting hoàn tất!');
+    console.log('✅ Huấn luyện với Smart Oversampling hoàn tất!');
     return history;
   }
 
   // =================================================================
-  // CÁC PHƯƠNG THỨC GỐC - GIỮ NGUYÊN NHƯNG THÊM VERBOSE: 0
+  // PHƯƠNG THỨC CHÍNH - SỬA ĐỔI ĐỂ DÙNG SMART OVERSAMPLING
   // =================================================================
-  async runAdvancedTraining() {
-    console.log('🚀 Bắt đầu Advanced Training...');
-    
+  async runHistoricalTraining() {
+    console.log('🔔 [TensorFlow Service] Bắt đầu Huấn luyện Lịch sử với Smart Oversampling...');
+   
     const trainingData = await this.prepareTrainingData();
-    
-    const result = await this.advancedTrainer.trainWithAdvancedStrategies(
-      trainingData, 
-      ['ensemble', 'augmentation']
-    );
-    
-    if (result.type === 'ensemble') {
-      this.ensembleModels = result.models;
-      console.log(`✅ Đã train ${result.models.length} models cho ensemble`);
-    } else {
-      this.model = result.model;
-      await this.saveModel();
+    if (trainingData.length === 0 || trainingData.some(d => d.inputSequence.length !== SEQUENCE_LENGTH || d.inputSequence.flat().some(isNaN))) {
+      throw new Error('Dữ liệu training rỗng hoặc chứa giá trị không hợp lệ.');
     }
     
+    await this.buildModel(this.inputNodes);
+    
+    this.model.compile({
+      optimizer: tf.train.adam({learningRate: 0.0005}),
+      loss: 'binaryCrossentropy',
+      metrics: []
+    });
+    
+    console.log('✅ Model đã được compile. Bắt đầu quá trình training với Smart Oversampling...');
+    
+    // ✅ SỬ DỤNG SMART OVERSAMPLING THAY VÌ SMART WEIGHTING
+    await this.trainModelWithSmartOversampling(trainingData);
+   
+    await this.saveModel();
+    
     return {
-      message: 'Advanced training hoàn tất',
-      strategy: 'ensemble + augmentation',
-      modelsCount: result.models?.length || 1
+      message: `Huấn luyện với Smart Oversampling hoàn tất. Đã xử lý ${trainingData.length} chuỗi + oversampling, ${EPOCHS} epochs.`,
+      sequences: trainingData.length,
+      epochs: EPOCHS,
+      featureSize: this.inputNodes,
+      modelName: NN_MODEL_NAME,
+      smartOversampling: true
     };
   }
 
-  async advancedPredict(inputSequence) {
-    if (this.ensembleModels && this.ensembleModels.length > 0) {
-      return await this.advancedTrainer.ensemblePredict(inputSequence);
-    } else {
-      return await this.predict(inputSequence);
-    }
-  }
-
+  // =================================================================
+  // CÁC PHƯƠNG THỨC KHÁC GIỮ NGUYÊN
+  // =================================================================
   async buildModel(inputNodes) {
     console.log(`🏗️ Xây dựng model với ${inputNodes} features...`);
     this.inputNodes = inputNodes;
