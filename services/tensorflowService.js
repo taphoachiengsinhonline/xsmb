@@ -313,7 +313,7 @@ class TensorFlowService {
     
     console.log('✅ Model đã được compile. Bắt đầu quá trình training với Smart Oversampling...');
     
-    // ✅ SỬ DỤNG SMART OVERSAMPLING THAY VÌ SMART WEIGHTING
+    // ✅ SỬA LỖI: ĐỔI THÀNH trainModelWithSmartOversampling
     await this.trainModelWithSmartOversampling(trainingData);
    
     await this.saveModel();
@@ -326,7 +326,7 @@ class TensorFlowService {
       modelName: NN_MODEL_NAME,
       smartOversampling: true
     };
-  }
+}
 
   // =================================================================
   // CÁC PHƯƠNG THỨC KHÁC GIỮ NGUYÊN
@@ -462,7 +462,7 @@ class TensorFlowService {
     console.log('✅ Model đã được compile. Bắt đầu quá trình training với Smart Weighting...');
     
     // ✅ SỬ DỤNG SMART WEIGHTING THAY VÌ TRAINING THÔNG THƯỜNG
-    await this.trainModelWithSmartWeights(trainingData);
+    await this.trainModelWithSmartOversampling(trainingData);
    
     await this.saveModel();
     
