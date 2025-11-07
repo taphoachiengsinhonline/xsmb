@@ -12,6 +12,6 @@ router.post('/learn', nnController.learn);
 // Tạo dự đoán cho ngày tiếp theo bằng AI Tự học
 router.post('/predict-next-day', nnController.predictNextDay);
 router.get('/predictions', nnController.getAllPredictions);
-router.get('/predictionHistory', nnController.predictionHistory);
+router.get('/prediction-history', nnController.predictionHistory);
 
 module.exports = router;
