@@ -316,35 +316,143 @@ class TensorFlowService {
   // PHƯƠNG THỨC CHÍNH - SỬA ĐỔI ĐỂ DÙNG SMART OVERSAMPLING
   // =================================================================
   async runHistoricalTraining() {
-    console.log('🔔 [TensorFlow Service] Bắt đầu Huấn luyện Lịch sử với Smart Oversampling...');
-   
-    const trainingData = await this.prepareTrainingData();
-    if (trainingData.length === 0 || trainingData.some(d => d.inputSequence.length !== SEQUENCE_LENGTH || d.inputSequence.flat().some(isNaN))) {
-      throw new Error('Dữ liệu training rỗng hoặc chứa giá trị không hợp lệ.');
+    console.log('🔔 [TensorFlow Service] Bắt đầu Huấn luyện Lịch sử TUẦN TỰ...');
+    
+    const results = await Result.find().sort({ 'ngay': 1 }).lean();
+    if (results.length < SEQUENCE_LENGTH + 1) {
+        throw new Error(`Không đủ dữ liệu. Cần ít nhất ${SEQUENCE_LENGTH + 1} ngày.`);
     }
-    
-    await this.buildModel(this.inputNodes);
-    
-    this.model.compile({
-      optimizer: tf.train.adam({learningRate: 0.0005}),
-      loss: 'binaryCrossentropy',
-      metrics: []
+
+    const grouped = {};
+    results.forEach(r => {
+        if (!grouped[r.ngay]) grouped[r.ngay] = [];
+        grouped[r.ngay].push(r);
     });
+
+    const days = Object.keys(grouped).sort((a, b) => this.dateKey(a).localeCompare(this.dateKey(b)));
     
-    console.log('✅ Model đã được compile. Bắt đầu quá trình training với Smart Oversampling...');
+    // XÂY DỰNG MODEL
+    await this.buildModel(346); // 346 features
     
-    // ✅ SỬA LỖI: ĐỔI THÀNH trainModelWithSmartOversampling
-    await this.trainModelWithSmartOversampling(trainingData);
-   
+    let totalSequences = 0;
+    let trainingHistory = [];
+
+    // ✅ HỌC TUẦN TỰ TỪNG NGÀY
+    for (let currentDayIndex = SEQUENCE_LENGTH; currentDayIndex < days.length; currentDayIndex++) {
+        const currentDay = days[currentDayIndex];
+        const sequenceDays = days.slice(currentDayIndex - SEQUENCE_LENGTH, currentDayIndex);
+        
+        // CHUẨN BỊ DỮ LIỆU ĐẦU VÀO (chỉ dùng dữ liệu QUÁ KHỨ)
+        const previousDays = [];
+        const inputSequence = sequenceDays.map(day => {
+            const dayResults = grouped[day] || [];
+            const prevDays = previousDays.slice();
+            previousDays.push(dayResults);
+            
+            const basicFeatures = this.featureService.extractAllFeatures(dayResults, prevDays, day);
+            const advancedFeatures = this.advancedFeatureEngineer.extractPremiumFeatures(dayResults, prevDays);
+            
+            let finalFeatureVector = [...basicFeatures, ...Object.values(advancedFeatures).flat()];
+            
+            const EXPECTED_SIZE = 346;
+            if (finalFeatureVector.length !== EXPECTED_SIZE) {
+                if (finalFeatureVector.length > EXPECTED_SIZE) {
+                    finalFeatureVector = finalFeatureVector.slice(0, EXPECTED_SIZE);
+                } else {
+                    finalFeatureVector = [...finalFeatureVector, ...Array(EXPECTED_SIZE - finalFeatureVector.length).fill(0)];
+                }
+            }
+            
+            return finalFeatureVector;
+        });
+
+        // LẤY TARGET (kết quả thực tế của ngày HIỆN TẠI)
+        const targetGDB = (grouped[currentDay] || []).find(r => r.giai === 'ĐB');
+        if (!targetGDB?.so || String(targetGDB.so).length < 5) continue;
+
+        const targetGDBString = String(targetGDB.so).padStart(5, '0');
+        const targetArray = this.prepareTarget(targetGDBString);
+
+        // ✅ TẠO DỰ ĐOÁN TRƯỚC KHI HỌC
+        console.log(`🎯 Ngày ${currentDay}: Tạo dự đoán...`);
+        const predictionOutput = await this.predict(inputSequence);
+        const prediction = this.decodeOutput(predictionOutput);
+
+        // ✅ LƯU DỰ ĐOÁN VÀO DB (trước khi học)
+        const predictionRecord = {
+            ngayDuDoan: currentDay,
+            ...prediction,
+            danhDauDaSo: false, // Chưa học từ dự đoán này
+            modelVersion: NN_MODEL_NAME,
+            createdAt: new Date(),
+            confidenceScore: this.calculateConfidence(predictionOutput),
+            isTrainingPrediction: true
+        };
+
+        await NNPrediction.findOneAndUpdate(
+            { ngayDuDoan: currentDay },
+            predictionRecord,
+            { upsert: true, new: true }
+        );
+
+        // ✅ SO SÁNH VÀ HỌC TỪ DỰ ĐOÁN
+        console.log(`📊 Ngày ${currentDay}: So sánh dự đoán vs thực tế...`);
+        const actualStr = String(targetGDB.so).padStart(5, '0');
+        let correctCount = 0;
+        
+        for (let i = 0; i < 5; i++) {
+            const predictedDigits = prediction[`pos${i+1}`] || [];
+            if (predictedDigits.includes(actualStr[i])) {
+                correctCount++;
+            }
+        }
+        
+        const accuracy = correctCount / 5;
+        console.log(`🎯 Độ chính xác: ${(accuracy * 100).toFixed(1)}%`);
+
+        // ✅ HUẤN LUYỆN MODEL VỚI DỮ LIỆU HIỆN TẠI
+        const inputTensor = tf.tensor3d([inputSequence], [1, SEQUENCE_LENGTH, 346]);
+        const targetTensor = tf.tensor2d([targetArray], [1, OUTPUT_NODES]);
+
+        await this.model.fit(inputTensor, targetTensor, {
+            epochs: 1,
+            batchSize: 1,
+            verbose: 0
+        });
+
+        // GIẢI PHÓNG BỘ NHỚ
+        inputTensor.dispose();
+        targetTensor.dispose();
+
+        // ✅ ĐÁNH DẤU ĐÃ HỌC
+        await NNPrediction.updateOne(
+            { ngayDuDoan: currentDay },
+            { 
+                danhDauDaSo: true,
+                actualAccuracy: accuracy,
+                learnedAt: new Date()
+            }
+        );
+
+        totalSequences++;
+        
+        // HIỂN THỊ TIẾN TRÌNH
+        if (totalSequences % 10 === 0) {
+            console.log(`📈 Đã xử lý ${totalSequences}/${days.length - SEQUENCE_LENGTH} chuỗi...`);
+        }
+    }
+
     await this.saveModel();
     
+    // ✅ TẠO DỰ ĐOÁN CHO NGÀY TIẾP THEO
+    console.log('🔮 Tạo dự đoán cho ngày tiếp theo...');
+    const nextDayPrediction = await this.runNextDayPrediction();
+
     return {
-      message: `Huấn luyện với Smart Oversampling hoàn tất. Đã xử lý ${trainingData.length} chuỗi + oversampling, ${EPOCHS} epochs.`,
-      sequences: trainingData.length,
-      epochs: EPOCHS,
-      featureSize: this.inputNodes,
-      modelName: NN_MODEL_NAME,
-      smartOversampling: true
+        message: `Huấn luyện TUẦN TỰ hoàn tất. Đã xử lý ${totalSequences} chuỗi, tạo dự đoán cho ${nextDayPrediction.ngayDuDoan}.`,
+        sequences: totalSequences,
+        nextPrediction: nextDayPrediction.ngayDuDoan,
+        modelName: NN_MODEL_NAME
     };
 }
 
@@ -613,43 +721,47 @@ async autoGeneratePredictionsAfterTraining() {
 }
 
   async runLearning() {
-    console.log('🔔 [TensorFlow Service] Learning from new results...');
+    console.log('🔔 [TensorFlow Service] Learning from NEW predictions...');
     
     if (!this.model) {
-      const modelLoaded = await this.loadModel();
-      if (!modelLoaded) {
-        throw new Error('Model chưa được huấn luyện. Hãy chạy huấn luyện lịch sử trước.');
-      }
+        const modelLoaded = await this.loadModel();
+        if (!modelLoaded) {
+            throw new Error('Model chưa được huấn luyện. Hãy chạy huấn luyện lịch sử trước.');
+        }
     }
 
-    const predictionsToLearn = await NNPrediction.find({ danhDauDaSo: false }).lean();
+    // ✅ CHỈ LẤY DỰ ĐOÁN CHƯA ĐƯỢC HỌC VÀ ĐÃ CÓ KẾT QUẢ
+    const predictionsToLearn = await NNPrediction.find({ 
+        danhDauDaSo: false,
+        isTrainingPrediction: { $ne: true } // Không phải dự đoán trong training
+    }).lean();
+
     if (predictionsToLearn.length === 0) {
-      return { message: 'Không có dự đoán mới nào để học.' };
+        return { message: 'Không có dự đoán mới nào để học.' };
     }
 
-    const results = await Result.find().sort({ 'ngay': 1 }).lean();
+    const results = await Result.find().lean();
     const grouped = {};
     results.forEach(r => {
-      if (!grouped[r.ngay]) grouped[r.ngay] = [];
-      grouped[r.ngay].push(r);
+        if (!grouped[r.ngay]) grouped[r.ngay] = [];
+        grouped[r.ngay].push(r);
     });
 
-    const days = Object.keys(grouped).sort((a, b) => this.dateKey(a).localeCompare(this.dateKey(b)));
-    
     let learnedCount = 0;
-    const trainingData = [];
 
     for (const pred of predictionsToLearn) {
-      const targetDayStr = pred.ngayDuDoan;
-      const targetDayIndex = days.indexOf(targetDayStr);
+        const actualResult = (grouped[pred.ngayDuDoan] || []).find(r => r.giai === 'ĐB');
+        if (!actualResult?.so) continue;
 
-      if (targetDayIndex >= SEQUENCE_LENGTH) {
-        const actualResult = (grouped[targetDayStr] || []).find(r => r.giai === 'ĐB');
+        // TÌM DỮ LIỆU ĐẦU VÀO CHO DỰ ĐOÁN NÀY
+        const days = Object.keys(grouped).sort((a, b) => this.dateKey(a).localeCompare(this.dateKey(b)));
+        const predDayIndex = days.indexOf(pred.ngayDuDoan);
         
-        if (actualResult?.so && String(actualResult.so).length >= 5) {
-          const sequenceDays = days.slice(targetDayIndex - SEQUENCE_LENGTH, targetDayIndex);
-          const previousDays = [];
-          const inputSequence = sequenceDays.map(day => {
+        if (predDayIndex < SEQUENCE_LENGTH) continue;
+
+        const sequenceDays = days.slice(predDayIndex - SEQUENCE_LENGTH, predDayIndex);
+        const previousDays = [];
+        const inputSequence = sequenceDays.map(day => {
             const dayResults = grouped[day] || [];
             const prevDays = previousDays.slice();
             previousDays.push(dayResults);
@@ -661,61 +773,70 @@ async autoGeneratePredictionsAfterTraining() {
             
             const EXPECTED_SIZE = 346;
             if (finalFeatureVector.length !== EXPECTED_SIZE) {
-              if (finalFeatureVector.length > EXPECTED_SIZE) {
-                finalFeatureVector = finalFeatureVector.slice(0, EXPECTED_SIZE);
-              } else {
-                finalFeatureVector = [...finalFeatureVector, ...Array(EXPECTED_SIZE - finalFeatureVector.length).fill(0)];
-              }
+                if (finalFeatureVector.length > EXPECTED_SIZE) {
+                    finalFeatureVector = finalFeatureVector.slice(0, EXPECTED_SIZE);
+                } else {
+                    finalFeatureVector = [...finalFeatureVector, ...Array(EXPECTED_SIZE - finalFeatureVector.length).fill(0)];
+                }
             }
             
             return finalFeatureVector;
-          });
+        });
 
-          const totalValues = inputSequence.flat().length;
-          const expectedValues = SEQUENCE_LENGTH * 346;
-          
-          if (totalValues !== expectedValues) {
-            console.error(`❌ [Learning] Lỗi dimension: có ${totalValues} values, cần ${expectedValues} values`);
-            continue;
-          }
+        const targetGDBString = String(actualResult.so).padStart(5, '0');
+        const targetArray = this.prepareTarget(targetGDBString);
 
-          const targetGDBString = String(actualResult.so).padStart(5, '0');
-          const targetArray = this.prepareTarget(targetGDBString);
-          
-          trainingData.push({ inputSequence, targetArray });
-          learnedCount++;
+        // ✅ HỌC TỪ DỰ ĐOÁN SAI
+        const inputTensor = tf.tensor3d([inputSequence], [1, SEQUENCE_LENGTH, 346]);
+        const targetTensor = tf.tensor2d([targetArray], [1, OUTPUT_NODES]);
+
+        await this.model.fit(inputTensor, targetTensor, {
+            epochs: 3, // Học kỹ hơn từ dự đoán sai
+            batchSize: 1,
+            verbose: 0
+        });
+
+        inputTensor.dispose();
+        targetTensor.dispose();
+
+        // ✅ TÍNH ĐỘ CHÍNH XÁC VÀ CẬP NHẬT
+        const actualStr = String(actualResult.so).padStart(5, '0');
+        let correctCount = 0;
+        for (let i = 0; i < 5; i++) {
+            const predictedDigits = pred[`pos${i+1}`] || [];
+            if (predictedDigits.includes(actualStr[i])) {
+                correctCount++;
+            }
         }
-      }
-      await NNPrediction.updateOne({ _id: pred._id }, { danhDauDaSo: true });
+        const accuracy = correctCount / 5;
+
+        await NNPrediction.updateOne(
+            { _id: pred._id }, 
+            { 
+                danhDauDaSo: true,
+                actualAccuracy: accuracy,
+                learnedAt: new Date(),
+                learningCycles: (pred.learningCycles || 0) + 1
+            }
+        );
+
+        learnedCount++;
+        console.log(`✅ Đã học từ dự đoán ngày ${pred.ngayDuDoan}: ${(accuracy * 100).toFixed(1)}%`);
     }
 
-    if (trainingData.length > 0) {
-      console.log(`🎯 [Learning] Bắt đầu học từ ${trainingData.length} chuỗi dữ liệu mới`);
-      
-      const inputs = trainingData.map(d => d.inputSequence);
-      const targets = trainingData.map(d => d.targetArray);
-
-      const inputTensor = tf.tensor3d(inputs, [inputs.length, SEQUENCE_LENGTH, this.inputNodes]);
-      const targetTensor = tf.tensor2d(targets, [targets.length, OUTPUT_NODES]);
-
-      await this.model.fit(inputTensor, targetTensor, {
-        epochs: 3,
-        batchSize: Math.min(BATCH_SIZE, inputs.length),
-        validationSplit: 0.1,
-        verbose: 0 // ✅ TẮT TIẾN TRÌNH
-      });
-
-      inputTensor.dispose();
-      targetTensor.dispose();
-
-      await this.saveModel();
-      console.log(`✅ [Learning] Đã học xong từ ${learnedCount} kết quả mới`);
-    } else {
-      console.log('ℹ️ [Learning] Không có dữ liệu training hợp lệ để học');
+    if (learnedCount > 0) {
+        await this.saveModel();
+        
+        // ✅ TỰ ĐỘNG TẠO DỰ ĐOÁN MỚI
+        console.log('🔮 Tạo dự đoán mới sau khi học...');
+        await this.runNextDayPrediction();
     }
-    
-    return { message: `TensorFlow LSTM đã học xong. Đã xử lý ${learnedCount} kết quả mới.` };
-  }
+
+    return { 
+        message: `Đã học từ ${learnedCount} dự đoán mới và tạo dự đoán tiếp theo.`,
+        learnedCount: learnedCount
+    };
+}
 
   // =================================================================
   // CÁC PHƯƠNG THỨC CÒN LẠI - GIỮ NGUYÊN
@@ -972,12 +1093,11 @@ async autoGeneratePredictionsAfterTraining() {
 calculateConfidence(output) {
     if (!output || output.length === 0) return 0;
     
-    // Tính độ tin cậy dựa trên sự chênh lệch giữa các xác suất
     let confidence = 0;
     for (let i = 0; i < 5; i++) {
         const positionProbs = output.slice(i * 10, (i + 1) * 10);
         const sorted = [...positionProbs].sort((a, b) => b - a);
-        const diff = sorted[0] - sorted[1]; // Chênh lệch giữa top1 và top2
+        const diff = sorted[0] - sorted[1];
         confidence += diff;
     }
     
