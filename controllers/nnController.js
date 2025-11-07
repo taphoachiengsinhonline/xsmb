@@ -35,13 +35,78 @@ exports.learn = async (req, res) => {
     }
 };
 
-exports.getAllPredictions = async (req, res) => {
+const getAllPredictions = async (req, res) => {
     try {
-        const predictions = await NNPrediction.find().sort({ 'ngayDuDoan': -1 }).lean();
-        res.json(predictions);
-    } catch (err) {
-        console.error('Error in nn getAllPredictions controller:', err);
-        res.status(500).json({ message: 'Lỗi server' });
+        const predictions = await NNPrediction.find()
+            .sort({ ngayDuDoan: -1, createdAt: -1 })
+            .lean();
+
+        // Lấy kết quả thực tế để so sánh
+        const results = await Result.find().lean();
+        
+        const enhancedPredictions = predictions.map(pred => {
+            const actualResult = results.find(r => r.ngay === pred.ngayDuDoan && r.giai === 'ĐB');
+            let accuracy = null;
+            let resultDigits = null;
+
+            if (actualResult?.so) {
+                resultDigits = String(actualResult.so).padStart(5, '0').split('');
+                
+                // Tính độ chính xác
+                let correctPositions = 0;
+                for (let i = 0; i < 5; i++) {
+                    const predictedDigits = pred[`pos${i+1}`] || [];
+                    if (Array.isArray(predictedDigits) && predictedDigits.includes(resultDigits[i])) {
+                        correctPositions++;
+                    }
+                }
+                accuracy = correctPositions / 5;
+            }
+
+            return {
+                ...pred,
+                accuracy: accuracy,
+                actualResult: resultDigits,
+                hasActualResult: !!actualResult,
+                // Đánh dấu loại dự đoán
+                predictionType: pred.isHistorical ? 'historical' : 'future'
+            };
+        });
+
+        res.json(enhancedPredictions);
+    } catch (error) {
+        console.error('Lỗi lấy lịch sử dự đoán:', error);
+        res.status(500).json({ 
+            error: 'Không thể lấy lịch sử dự đoán',
+            details: error.message 
+        });
+    }
+};
+
+// API TẠO DỰ ĐOÁN HÀNG LOẠT
+const generateBatchPredictions = async (req, res) => {
+    try {
+        const { days = 10 } = req.body;
+        const tensorflowService = new TensorFlowService();
+        
+        // Load model trước
+        const modelLoaded = await tensorflowService.loadModel();
+        if (!modelLoaded) {
+            return res.status(400).json({ error: 'Model chưa được huấn luyện' });
+        }
+
+        const generatedCount = await tensorflowService.autoGeneratePredictionsAfterTraining();
+        
+        res.json({
+            message: `Đã tạo ${generatedCount} dự đoán mới`,
+            generatedCount: generatedCount
+        });
+    } catch (error) {
+        console.error('Lỗi tạo dự đoán hàng loạt:', error);
+        res.status(500).json({ 
+            error: 'Không thể tạo dự đoán',
+            details: error.message 
+        });
     }
 };
 
