@@ -192,54 +192,89 @@ class TripleGroupAnalysisService {
         }
     }
 
+    // Thay thế toàn bộ hàm cũ bằng hàm này
+// file: services/tripleGroupAnalysisService.js
+
     combineAndScorePredictions(analysisData) {
-    const scores = {
-        tram: Array(10).fill(0),
-        chuc: Array(10).fill(0),
-        donvi: Array(10).fill(0)
-    };
-
-    // 1. Chạy phân tích tần suất (trọng số cao)
-    const freqPred = this.selectByFrequency(analysisData.combined.frequency);
-    if (freqPred) {
-        freqPred.tram.forEach(d => scores.tram[d] += 1.5);
-        freqPred.chuc.forEach(d => scores.chuc[d] += 1.5);
-        freqPred.donvi.forEach(d => scores.donvi[d] += 1.5);
-    }
-
-    // 2. Chạy phân tích từ "bộ não học hỏi" (trọng số rất cao)
-    const learningPred = this.selectByLearning();
-    if (learningPred) {
-        learningPred.tram.forEach(d => scores.tram[d] += 2.0);
-        learningPred.chuc.forEach(d => scores.chuc[d] += 2.0);
-        learningPred.donvi.forEach(d => scores.donvi[d] += 2.0);
-    }
-
-    // 3. (Sẽ thêm phân tích mẫu hình ở GĐ2)
-
-    // 4. Logic "làm nguội": Giảm điểm của số vừa về hôm qua
-    if (analysisData.latestGDB && analysisData.latestGDB.length === 5) {
-        const lastThree = analysisData.latestGDB.slice(-3);
-        scores.tram[lastThree[0]] *= 0.5; // Giảm 50% điểm
-        scores.chuc[lastThree[1]] *= 0.5;
-        scores.donvi[lastThree[2]] *= 0.5;
-    }
+        const scores = {
+            tram: Array(10).fill(0),
+            chuc: Array(10).fill(0),
+            donvi: Array(10).fill(0)
+        };
     
-    // Hàm helper để chọn top 5 từ điểm số
-    const getTop5 = (scoreArray) => {
-        return scoreArray
+        // --- Chiến lược 1: Phân tích tần suất (trọng số cao) ---
+        const freqPred = this.selectByFrequency(analysisData.combined.frequency);
+        if (freqPred) {
+            // Kiểm tra an toàn: Đảm bảo freqPred.tram là một mảng trước khi gọi forEach
+            if (Array.isArray(freqPred.tram)) {
+                freqPred.tram.forEach(d => { if(scores.tram[d] !== undefined) scores.tram[d] += 1.5; });
+            }
+            if (Array.isArray(freqPred.chuc)) {
+                freqPred.chuc.forEach(d => { if(scores.chuc[d] !== undefined) scores.chuc[d] += 1.5; });
+            }
+            if (Array.isArray(freqPred.donvi)) {
+                freqPred.donvi.forEach(d => { if(scores.donvi[d] !== undefined) scores.donvi[d] += 1.5; });
+            }
+        }
+    
+        // --- Chiến lược 2: "Bộ não học hỏi" (trọng số rất cao) ---
+        const learningPred = this.selectByLearning();
+        
+        // SỬA LỖI QUAN TRỌNG TẠI ĐÂY:
+        // Kiểm tra an toàn: Đảm bảo learningPred không phải là null VÀ các thuộc tính bên trong nó là mảng
+        if (learningPred) {
+            if (Array.isArray(learningPred.tram)) {
+                learningPred.tram.forEach(d => { if(scores.tram[d] !== undefined) scores.tram[d] += 2.0; });
+            }
+            if (Array.isArray(learningPred.chuc)) {
+                learningPred.chuc.forEach(d => { if(scores.chuc[d] !== undefined) scores.chuc[d] += 2.0; });
+            }
+            if (Array.isArray(learningPred.donvi)) {
+                learningPred.donvi.forEach(d => { if(scores.donvi[d] !== undefined) scores.donvi[d] += 2.0; });
+            }
+        }
+    
+        // --- Chiến lược 3: Phân tích mẫu hình Chẵn/Lẻ (Phần này đã an toàn) ---
+        const lastGDBStr = String(analysisData.latestGDB);
+        const lastDayPattern = (lastGDBStr.length >= 3) ? getChanLe(lastGDBStr.slice(-3)) : null;
+        
+        if (lastDayPattern && analysisData.combined.patterns?.evenOddTransitions?.[lastDayPattern]) {
+            const nextPatterns = analysisData.combined.patterns.evenOddTransitions[lastDayPattern];
+            const mostLikelyPattern = Object.entries(nextPatterns).sort((a, b) => b[1] - a[1])[0];
+            
+            if (mostLikelyPattern) {
+                const [pattern, _] = mostLikelyPattern;
+                if (pattern && pattern.length === 3) {
+                    const [tramType, chucType, donviType] = pattern.split('');
+                    for (let i = 0; i < 10; i++) {
+                        if ((i % 2 === 1 && tramType === 'L') || (i % 2 === 0 && tramType === 'C')) scores.tram[i] += 1.0;
+                        if ((i % 2 === 1 && chucType === 'L') || (i % 2 === 0 && chucType === 'C')) scores.chuc[i] += 1.0;
+                        if ((i % 2 === 1 && donviType === 'L') || (i % 2 === 0 && donviType === 'C')) scores.donvi[i] += 1.0;
+                    }
+                }
+            }
+        }
+        
+        // --- Logic bổ sung: "Làm nguội" số vừa về (Phần này đã an toàn) ---
+        if (lastGDBStr.length >= 3) {
+            const lastThree = lastGDBStr.slice(-3);
+            if (scores.tram[lastThree[0]] !== undefined) scores.tram[lastThree[0]] *= 0.5;
+            if (scores.chuc[lastThree[1]] !== undefined) scores.chuc[lastThree[1]] *= 0.5;
+            if (scores.donvi[lastThree[2]] !== undefined) scores.donvi[lastThree[2]] *= 0.5;
+        }
+        
+        const getTop5 = (scoreArray) => scoreArray
             .map((score, digit) => ({ digit: digit.toString(), score }))
             .sort((a, b) => b.score - a.score)
             .slice(0, 5)
             .map(item => item.digit);
-    };
-
-    return {
-        tram: getTop5(scores.tram),
-        chuc: getTop5(scores.chuc),
-        donvi: getTop5(scores.donvi),
-    };
-}
+    
+        return {
+            tram: getTop5(scores.tram),
+            chuc: getTop5(scores.chuc),
+            donvi: getTop5(scores.donvi),
+        };
+    }
     
     // =================================================================
     // TẠO DỰ ĐOÁN ĐA DẠNG - SỬA LỖI QUAN TRỌNG
