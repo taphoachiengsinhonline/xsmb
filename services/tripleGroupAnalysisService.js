@@ -432,8 +432,7 @@ class TripleGroupAnalysisService {
             accuracy: performanceObject[digit].accuracy
         }));
     }
-}
-/**
+    /**
  * Reset và huấn luyện lại toàn bộ hệ thống
  */
 async resetAndRetrain() {
@@ -461,5 +460,7 @@ async resetAndRetrain() {
         console.error('❌ Lỗi reset:', error);
         return { success: false, message: 'Lỗi reset: ' + error.message };
     }
+}
+
 }
 module.exports = TripleGroupAnalysisService;
