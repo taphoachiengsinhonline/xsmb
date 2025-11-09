@@ -38,12 +38,15 @@ class TripleGroupAnalysisService {
             // Tạo dự đoán với độ đa dạng cao
             const prediction = await this.createDiversePrediction(analysisData, targetDate);
             
-            // Lưu vào cache và database
-            this.analysisCache.set(cacheKey, prediction);
-            await this.savePrediction(prediction);
+            // SỬA LỖI Ở ĐÂY: Lưu kết quả trả về từ savePrediction
+            const savedPrediction = await this.savePrediction(prediction);
+            
+            this.analysisCache.set(cacheKey, savedPrediction);
             
             console.log(`✅ [Service] Đã tạo dự đoán ĐA DẠNG cho ${targetDate}`);
-            return prediction;
+            
+            // Trả về document đã được lưu vào DB (có _id)
+            return savedPrediction;
             
         } catch (error) {
             console.error(`❌ [Service] Lỗi tạo dự đoán:`, error);
@@ -603,10 +606,11 @@ class TripleGroupAnalysisService {
         }
         
         try {
-            await TripleGroupPrediction.findOneAndUpdate(
+            // SỬA LỖI Ở ĐÂY: Thêm "return await"
+            return await TripleGroupPrediction.findOneAndUpdate(
                 { ngayDuDoan: predictionData.ngayDuDoan },
                 predictionData,
-                { upsert: true, new: true }
+                { upsert: true, new: true } // new: true là rất quan trọng, nó đảm bảo trả về document mới
             );
         } catch (error) {
             console.error('❌ [Service] Lỗi lưu dự đoán:', error);
@@ -622,9 +626,8 @@ class TripleGroupAnalysisService {
     }
 
     async generateHistoricalPredictions() {
-        console.log('🕐 [Service] Bắt đầu tạo dự đoán lịch sử (PHIÊN BẢN CẢI TIẾN)...');
+        console.log('🕐 [Service] Tạo dự đoán lịch sử (PHIÊN BẢN CUỐI CÙNG - TỰ ĐỘNG CẬP NHẬT)...');
         
-        // Lấy tất cả kết quả một lần để tối ưu
         const allResults = await Result.find().lean();
         if (allResults.length < 8) throw new Error('Không đủ dữ liệu lịch sử');
 
@@ -634,67 +637,65 @@ class TripleGroupAnalysisService {
             groupedByDate[r.ngay].push(r);
         });
         
-        const sortedDates = Object.keys(groupedByDate).sort((a, b) => {
-            const dateA = this.parseDateString(a);
-            const dateB = this.parseDateString(b);
-            return dateA - dateB;
-        });
+        const sortedDates = Object.keys(groupedByDate).sort((a, b) => this.parseDateString(a) - this.parseDateString(b));
         
         let createdCount = 0;
         let updatedCount = 0;
         const totalDaysToProcess = sortedDates.length - 7;
 
+        // Bắt đầu từ ngày thứ 8 để có đủ 7 ngày lịch sử
         for (let i = 7; i < sortedDates.length; i++) {
             const targetDate = sortedDates[i];
+            
+            // Bỏ qua ngày cuối cùng nếu nó chưa có kết quả ĐB
+            const finalResultCheck = allResults.find(r => r.ngay === targetDate && r.giai === 'ĐB');
+            if (!finalResultCheck) {
+                 console.log(`...[Service] Bỏ qua ngày ${targetDate} vì chưa có kết quả cuối cùng.`);
+                 continue;
+            }
+
             try {
-                // Bước 1: Tạo dự đoán như cũ
-                const prediction = await this.generateTripleGroupPrediction(targetDate);
+                // Bước 1: Tạo và nhận về dự đoán đã được lưu
+                const savedPrediction = await this.generateTripleGroupPrediction(targetDate);
                 createdCount++;
 
-                // =================================================================
-                // BƯỚC 2 (MỚI): TỰ ĐỘNG CẬP NHẬT KẾT QUẢ THỰC TẾ NGAY LẬP TỨC
-                // =================================================================
-                const result = allResults.find(r => r.ngay === targetDate && r.giai === 'ĐB');
+                // Bước 2: Cập nhật kết quả thực tế vào bản ghi vừa tạo
+                const gdbStr = String(finalResultCheck.so).padStart(5, '0');
+                const lastThree = gdbStr.slice(-3);
                 
-                if (result?.so) {
-                    const gdbStr = String(result.so).padStart(5, '0');
-                    const lastThree = gdbStr.slice(-3);
-                    
-                    if (lastThree.length === 3) {
-                        const isCorrect = 
-                            Array.isArray(prediction.topTram) && prediction.topTram.includes(lastThree[0]) &&
-                            Array.isArray(prediction.topChuc) && prediction.topChuc.includes(lastThree[1]) &&
-                            Array.isArray(prediction.topDonVi) && prediction.topDonVi.includes(lastThree[2]);
+                if (lastThree.length === 3) {
+                    const isCorrect = 
+                        Array.isArray(savedPrediction.topTram) && savedPrediction.topTram.includes(lastThree[0]) &&
+                        Array.isArray(savedPrediction.topChuc) && savedPrediction.topChuc.includes(lastThree[1]) &&
+                        Array.isArray(savedPrediction.topDonVi) && savedPrediction.topDonVi.includes(lastThree[2]);
 
-                        // Cập nhật lại bản ghi dự đoán vừa tạo với kết quả thực tế
-                        await TripleGroupPrediction.updateOne(
-                            { _id: prediction._id }, // Giả sử prediction trả về có _id
-                            {
-                                $set: { // Sử dụng $set để an toàn hơn
-                                    actualResult: {
-                                        tram: lastThree[0],
-                                        chuc: lastThree[1],
-                                        donvi: lastThree[2],
-                                        isCorrect: isCorrect,
-                                        updatedAt: new Date()
-                                    }
+                    // Cập nhật lại chính bản ghi đó
+                    await TripleGroupPrediction.updateOne(
+                        { _id: savedPrediction._id }, 
+                        {
+                            $set: {
+                                actualResult: {
+                                    tram: lastThree[0],
+                                    chuc: lastThree[1],
+                                    donvi: lastThree[2],
+                                    isCorrect: isCorrect,
+                                    updatedAt: new Date()
                                 }
                             }
-                        );
-                        updatedCount++;
-                    }
+                        }
+                    );
+                    updatedCount++;
                 }
-                // =================================================================
-
+                
                 if (createdCount % 20 === 0) {
-                    console.log(`...[Service] Đã tạo ${createdCount}/${totalDaysToProcess} dự đoán`);
+                    console.log(`...[Service] Đã xử lý ${createdCount}/${totalDaysToProcess} ngày...`);
                 }
             } catch (error) {
-                console.error(`❌ [Service] Lỗi tạo dự đoán cho ${targetDate}:`, error.message);
+                console.error(`❌ [Service] Lỗi xử lý ngày ${targetDate}:`, error.message);
             }
         }
 
-        console.log(`🎉 [Service] Hoàn thành! Đã tạo ${createdCount} và cập nhật ${updatedCount} dự đoán.`);
+        console.log(`🎉 [Service] Hoàn thành! Đã tạo ${createdCount} và cập nhật ${updatedCount} dự đoán lịch sử.`);
         return { created: createdCount, updated: updatedCount, total: totalDaysToProcess };
     }
 
