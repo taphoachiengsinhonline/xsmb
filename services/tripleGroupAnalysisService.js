@@ -3,6 +3,11 @@ const TripleGroupLearningState = require('../models/TripleGroupLearningState');
 const Result = require('../models/Result');
 const { DateTime } = require('luxon');
 
+function getChanLe(numberStr) {
+  if (!numberStr || String(numberStr).length !== 3) return '';
+  return String(numberStr).split('').map(d => (parseInt(d, 10) % 2 === 0 ? 'C' : 'L')).join('');
+}
+
 class TripleGroupAnalysisService {
     constructor() {
         this.learningState = null;
