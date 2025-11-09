@@ -168,54 +168,80 @@ class TripleGroupAnalysisService {
     }
 
     createPredictionFromAnalysis(analysis, targetDate, useLearning = false) {
-        let topTram, topChuc, topDonVi;
-        if (useLearning && this.learningState && this.learningState.totalPredictionsAnalyzed > 0) {
-            topTram = this.selectNumbersByWeightedScore(analysis.frequency.tram, this.learningState.tram, 5);
-            topChuc = this.selectNumbersByWeightedScore(analysis.frequency.chuc, this.learningState.chuc, 5);
-            topDonVi = this.selectNumbersByWeightedScore(analysis.frequency.donvi, this.learningState.donvi, 5);
-        } else {
-            topTram = this.selectNumbersByFrequency(analysis.frequency.tram, 5);
-            topChuc = this.selectNumbersByFrequency(analysis.frequency.chuc, 5);
-            topDonVi = this.selectNumbersByFrequency(analysis.frequency.donvi, 5);
-        }
-        return {
-            ngayDuDoan: targetDate,
-            ngayPhanTich: new Date().toISOString().split('T')[0],
-            topTram, topChuc, topDonVi,
-            analysisData: {
-                totalDaysAnalyzed: analysis.totalDays,
-                latestGDB: analysis.latestGDB,
-                hotNumbers: analysis.trends.hotNumbers,
-                coldNumbers: analysis.trends.coldNumbers
-            },
-            confidence: this.calculateConfidence(analysis, useLearning)
-        };
+    // PHÂN TÍCH ĐA CHIỀU: ngắn hạn (7 ngày) + trung hạn (30 ngày)
+    const shortTermFreq = this.analyzeDigitFrequency(analysis.results, 7);
+    const mediumTermFreq = this.analyzeDigitFrequency(analysis.results, 30);
+    
+    let topTram, topChuc, topDonVi;
+    
+    if (useLearning && this.learningState && this.learningState.totalPredictionsAnalyzed > 10) {
+        // Kết hợp nhiều yếu tố
+        topTram = this.selectNumbersByMultipleFactors(shortTermFreq.tram, mediumTermFreq.tram, this.learningState.tram, 5);
+        topChuc = this.selectNumbersByMultipleFactors(shortTermFreq.chuc, mediumTermFreq.chuc, this.learningState.chuc, 5);
+        topDonVi = this.selectNumbersByMultipleFactors(shortTermFreq.donvi, mediumTermFreq.donvi, this.learningState.donvi, 5);
+    } else {
+        // Ưu tiên xu hướng ngắn hạn
+        topTram = this.selectNumbersByFrequency(shortTermFreq.tram, 5);
+        topChuc = this.selectNumbersByFrequency(shortTermFreq.chuc, 5);
+        topDonVi = this.selectNumbersByFrequency(shortTermFreq.donvi, 5);
     }
     
+    return {
+        ngayDuDoan: targetDate,
+        ngayPhanTich: new Date().toISOString().split('T')[0],
+        topTram, topChuc, topDonVi,
+        analysisData: {
+            totalDaysAnalyzed: analysis.totalDays,
+            latestGDB: analysis.latestGDB,
+            shortTermHot: this.getHotNumbers(shortTermFreq),
+            mediumTermHot: this.getHotNumbers(mediumTermFreq)
+        },
+        confidence: this.calculateDynamicConfidence(analysis, useLearning, shortTermFreq, mediumTermFreq)
+    };
+}
+    
     analyzeRealData(results) {
-        if (!results || results.length === 0) throw new Error('Không có dữ liệu kết quả để phân tích');
-        const latestGDB = results.filter(r => r.giai === 'ĐB').sort((a, b) => this.dateKey(b.ngay).localeCompare(this.dateKey(a.ngay)))[0];
-        return {
-            totalDays: new Set(results.map(r => r.ngay)).size,
-            latestGDB: latestGDB ? latestGDB.so : 'N/A',
-            frequency: this.analyzeDigitFrequency(results),
-            trends: this.analyzeTrends(results)
-        };
-    }
+    if (!results || results.length === 0) throw new Error('Không có dữ liệu kết quả để phân tích');
+    const latestGDB = results.filter(r => r.giai === 'ĐB').sort((a, b) => this.dateKey(b.ngay).localeCompare(this.dateKey(a.ngay)))[0];
+    return {
+        totalDays: new Set(results.map(r => r.ngay)).size,
+        latestGDB: latestGDB ? latestGDB.so : 'N/A',
+        results: results, // THÊM DÒNG NÀY - truyền toàn bộ results để phân tích chi tiết
+        frequency: this.analyzeDigitFrequency(results),
+        trends: this.analyzeTrends(results)
+    };
+}
 
-    analyzeDigitFrequency(results) {
-        const frequency = { tram: Array(10).fill(0), chuc: Array(10).fill(0), donvi: Array(10).fill(0) };
-        const gdbResults = results.filter(r => r.giai === 'ĐB' && r.so);
-        gdbResults.forEach(result => {
-            const lastThree = String(result.so).padStart(5, '0').slice(-3);
-            if (lastThree.length === 3) {
-                frequency.tram[parseInt(lastThree[0])]++;
-                frequency.chuc[parseInt(lastThree[1])]++;
-                frequency.donvi[parseInt(lastThree[2])]++;
-            }
-        });
-        return frequency;
-    }
+   analyzeDigitFrequency(results, daysBack = 30) {
+    const frequency = { tram: Array(10).fill(0), chuc: Array(10).fill(0), donvi: Array(10).fill(0) };
+    
+    // Lấy danh sách ngày duy nhất và sắp xếp (mới nhất đầu tiên)
+    const uniqueDates = [...new Set(results.map(r => r.ngay))];
+    uniqueDates.sort((a, b) => this.dateKey(b).localeCompare(this.dateKey(a)));
+    
+    // Chỉ lấy N ngày gần nhất
+    const recentDates = uniqueDates.slice(0, daysBack);
+    const recentDateSet = new Set(recentDates);
+    
+    // Lọc kết quả gần đây
+    const recentGDBResults = results.filter(r => 
+        r.giai === 'ĐB' && r.so && recentDateSet.has(r.ngay)
+    );
+    
+    // Thêm trọng số thời gian (ngày càng gần càng quan trọng)
+    recentGDBResults.forEach((result, index) => {
+        const weight = (daysBack - index) / daysBack; // Trọng số giảm dần
+        const lastThree = String(result.so).padStart(5, '0').slice(-3);
+        if (lastThree.length === 3) {
+            frequency.tram[parseInt(lastThree[0])] += weight;
+            frequency.chuc[parseInt(lastThree[1])] += weight;
+            frequency.donvi[parseInt(lastThree[2])] += weight;
+        }
+    });
+    
+    console.log(`📊 Phân tích ${recentGDBResults.length} kết quả GĐB gần nhất`);
+    return frequency;
+}
 
     analyzeTrends(results) {
         const allGDB = results.filter(r => r.giai === 'ĐB').sort((a, b) => this.dateKey(b.ngay).localeCompare(this.dateKey(a.ngay))).slice(0, 30);
@@ -268,14 +294,57 @@ class TripleGroupAnalysisService {
         return scores.sort((a, b) => b.score - a.score).slice(0, count).map(item => item.digit);
     }
 
-    calculateConfidence(analysis, useLearning = false) {
-        let confidence = 50;
-        if (analysis.totalDays >= 30) confidence += 10;
-        if (analysis.totalDays >= 60) confidence += 5;
-        if (useLearning && this.learningState && this.learningState.totalPredictionsAnalyzed > 20) confidence += 20;
-        return Math.min(confidence, 95);
+    selectNumbersByMultipleFactors(shortTermFreq, mediumTermFreq, learnedPerformance, count) {
+    const scores = [];
+    const WEIGHT_SHORT_TERM = 0.5;   // Trọng số xu hướng ngắn hạn
+    const WEIGHT_MEDIUM_TERM = 0.3;  // Trọng số xu hướng trung hạn  
+    const WEIGHT_ACCURACY = 0.2;     // Trọng số độ chính xác học được
+    
+    for (let i = 0; i < 10; i++) {
+        const digit = i.toString();
+        const shortTermScore = shortTermFreq[i] || 0;
+        const mediumTermScore = mediumTermFreq[i] || 0;
+        const learnedData = learnedPerformance.find(p => p.digit === digit);
+        const accuracyScore = learnedData ? learnedData.accuracy : 0;
+        
+        const weightedScore = 
+            (shortTermScore * WEIGHT_SHORT_TERM) +
+            (mediumTermScore * WEIGHT_MEDIUM_TERM) + 
+            (accuracyScore * WEIGHT_ACCURACY);
+            
+        scores.push({ digit, score: weightedScore });
     }
+    
+    return scores.sort((a, b) => b.score - a.score).slice(0, count).map(item => item.digit);
+}
 
+    getHotNumbers(frequencyArray) {
+    return frequencyArray
+        .map((freq, digit) => ({ digit: digit.toString(), freq }))
+        .sort((a, b) => b.freq - a.freq)
+        .slice(0, 5)
+        .map(item => item.digit);
+}
+    
+
+    calculateDynamicConfidence(analysis, useLearning = false, shortTermFreq, mediumTermFreq) {
+    let confidence = 50;
+    
+    // Độ tin cậy tăng nếu có nhiều dữ liệu phân tích
+    if (analysis.totalDays >= 30) confidence += 10;
+    if (analysis.totalDays >= 60) confidence += 5;
+    
+    // Độ tin cậy tăng nếu sử dụng học máy
+    if (useLearning && this.learningState && this.learningState.totalPredictionsAnalyzed > 20) confidence += 20;
+    
+    // Độ tin cậy tăng nếu có sự tương đồng giữa xu hướng ngắn hạn và trung hạn
+    const shortTermHot = this.getHotNumbers(shortTermFreq);
+    const mediumTermHot = this.getHotNumbers(mediumTermFreq);
+    const commonHot = shortTermHot.filter(num => mediumTermHot.includes(num));
+    confidence += commonHot.length * 5;
+    
+    return Math.min(confidence, 95);
+}
     async getNextPredictionDate() {
         const allDates = await Result.distinct('ngay');
         if (allDates.length === 0) throw new Error('Không có dữ liệu kết quả nào trong CSDL.');
@@ -364,5 +433,33 @@ class TripleGroupAnalysisService {
         }));
     }
 }
-
+/**
+ * Reset và huấn luyện lại toàn bộ hệ thống
+ */
+async resetAndRetrain() {
+    console.log('🔄 [Service] Reset và huấn luyện lại Triple Group Analysis...');
+    
+    try {
+        // Xóa learning state cũ
+        await TripleGroupLearningState.deleteOne({ modelName: 'TripleGroupV1' });
+        this.learningState = null;
+        
+        console.log('✅ Đã xóa learning state cũ');
+        
+        // Tạo lại historical predictions với logic mới
+        await this.generateHistoricalPredictions();
+        
+        console.log('✅ Đã tạo lại dự đoán lịch sử');
+        
+        // Học từ lịch sử mới
+        await this.learnFromHistory();
+        
+        console.log('✅ Đã học từ lịch sử mới');
+        
+        return { success: true, message: 'Reset và huấn luyện lại thành công' };
+    } catch (error) {
+        console.error('❌ Lỗi reset:', error);
+        return { success: false, message: 'Lỗi reset: ' + error.message };
+    }
+}
 module.exports = TripleGroupAnalysisService;
