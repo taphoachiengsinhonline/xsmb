@@ -196,28 +196,33 @@ exports.getPredictionByDate = async (req, res) => {
 };
 
 /**
- * Cập nhật kết quả thực tế cho tất cả dự đoán
+ * Cập nhật kết quả thực tế cho tất cả dự đoán - PHIÊN BẢN ĐÃ SỬA LỖI
  */
 exports.updateActualResults = async (req, res) => {
     try {
         console.log('🔄 [Controller] Cập nhật kết quả thực tế cho tất cả dự đoán...');
         
+        // Lấy tất cả kết quả và dự đoán
         const allResults = await Result.find().lean();
-        const predictions = await TripleGroupPrediction.find({ 
-            $or: [
-                { 'actualResult': { $exists: false } },
-                { 'actualResult': null }
-            ]
-        }).lean();
+        const predictions = await TripleGroupPrediction.find({}).lean(); // Lấy tất cả dự đoán
 
-        console.log(`📝 [Controller] Tìm thấy ${predictions.length} dự đoán cần cập nhật`);
+        console.log(`📝 [Controller] Tìm thấy ${predictions.length} dự đoán cần kiểm tra`);
 
         let updatedCount = 0;
         let errorCount = 0;
+        let noResultCount = 0;
 
         for (const prediction of predictions) {
             try {
-                const result = allResults.find(r => r.ngay === prediction.ngayDuDoan && r.giai === 'ĐB');
+                // 🔧 SỬA LỖI: Chuẩn hóa định dạng ngày để so sánh
+                const predictionDate = prediction.ngayDuDoan;
+                
+                // Tìm kết quả thực tế - sử dụng so sánh trực tiếp
+                const result = allResults.find(r => {
+                    const resultDate = r.ngay;
+                    // So sánh trực tiếp chuỗi ngày
+                    return resultDate === predictionDate && r.giai === 'ĐB';
+                });
                 
                 if (result?.so) {
                     const gdbStr = String(result.so).padStart(5, '0');
@@ -229,15 +234,18 @@ exports.updateActualResults = async (req, res) => {
                             Array.isArray(prediction.topChuc) && prediction.topChuc.includes(lastThree[1]) &&
                             Array.isArray(prediction.topDonVi) && prediction.topDonVi.includes(lastThree[2]);
 
+                        // 🔧 SỬA LỖI: Cập nhật ngay cả khi actualResult đã tồn tại
                         await TripleGroupPrediction.updateOne(
                             { _id: prediction._id },
                             {
-                                actualResult: {
-                                    tram: lastThree[0],
-                                    chuc: lastThree[1],
-                                    donvi: lastThree[2],
-                                    isCorrect: isCorrect,
-                                    updatedAt: new Date()
+                                $set: {
+                                    actualResult: {
+                                        tram: lastThree[0],
+                                        chuc: lastThree[1],
+                                        donvi: lastThree[2],
+                                        isCorrect: isCorrect,
+                                        updatedAt: new Date()
+                                    }
                                 }
                             }
                         );
@@ -247,6 +255,9 @@ exports.updateActualResults = async (req, res) => {
                             console.log(`📊 [Controller] Đã cập nhật ${updatedCount} dự đoán...`);
                         }
                     }
+                } else {
+                    noResultCount++;
+                    console.log(`❌ Không tìm thấy kết quả cho ngày: ${predictionDate}`);
                 }
             } catch (error) {
                 console.error(`❌ [Controller] Lỗi cập nhật cho ${prediction.ngayDuDoan}:`, error.message);
@@ -254,13 +265,14 @@ exports.updateActualResults = async (req, res) => {
             }
         }
 
-        console.log(`✅ [Controller] Hoàn thành cập nhật: ${updatedCount} thành công, ${errorCount} lỗi`);
+        console.log(`✅ [Controller] Hoàn thành cập nhật: ${updatedCount} thành công, ${noResultCount} không có kết quả, ${errorCount} lỗi`);
 
         res.json({
             success: true,
             message: `Đã cập nhật ${updatedCount} kết quả thực tế`,
             stats: {
                 updated: updatedCount,
+                noResult: noResultCount,
                 errors: errorCount,
                 totalProcessed: predictions.length
             },
