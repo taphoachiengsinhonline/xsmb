@@ -504,13 +504,13 @@ class TensorFlowService {
   }
 
   decodeOutput(output) {
-    console.log('🔍 [Debug] Raw output for decoding:', output.slice(0, 50));
+    console.log('🔍 [Debug] Raw output for decoding:', output.slice(0, 10));
     
     const prediction = { pos1: [], pos2: [], pos3: [], pos4: [], pos5: [] };
     
     for (let i = 0; i < 5; i++) {
-        const startIdx = i * 50;
-        const endIdx = (i + 1) * 50;
+        const startIdx = i * 10;
+        const endIdx = (i + 1) * 10;
         const positionOutput = output.slice(startIdx, endIdx);
         
         // ✅ VALIDATE VÀ LÀM SẠCH DỮ LIỆU
@@ -628,9 +628,9 @@ class TensorFlowService {
             generatedCount++;
             console.log(`✅ Đã tạo dự đoán lịch sử cho: ${day}`);
 
-            if (generatedCount >= 10) {
-                break;
-            }
+            //if (generatedCount >= 10) {
+             //   break;
+            //}
 
         } catch (error) {
             console.error(`❌ Lỗi tạo dự đoán cho ${day}:`, error.message);
