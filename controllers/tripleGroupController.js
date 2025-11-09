@@ -597,4 +597,28 @@ exports.healthCheck = async (req, res) => {
     }
 };
 
+/**
+ * Reset và huấn luyện lại toàn bộ hệ thống
+ */
+exports.resetAndRetrain = async (req, res) => {
+    try {
+        console.log('🔄 [Controller] Reset và huấn luyện lại...');
+        
+        const result = await tripleGroupService.resetAndRetrain();
+        
+        res.json({
+            success: result.success,
+            message: result.message,
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        console.error('❌ [Controller] Lỗi resetAndRetrain:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Lỗi khi reset: ' + error.message,
+            timestamp: new Date().toISOString()
+        });
+    }
+};
+
 module.exports = exports;
