@@ -192,58 +192,82 @@ class TripleGroupAnalysisService {
         }
     }
 
+    combineAndScorePredictions(analysisData) {
+    const scores = {
+        tram: Array(10).fill(0),
+        chuc: Array(10).fill(0),
+        donvi: Array(10).fill(0)
+    };
+
+    // 1. Chạy phân tích tần suất (trọng số cao)
+    const freqPred = this.selectByFrequency(analysisData.combined.frequency);
+    if (freqPred) {
+        freqPred.tram.forEach(d => scores.tram[d] += 1.5);
+        freqPred.chuc.forEach(d => scores.chuc[d] += 1.5);
+        freqPred.donvi.forEach(d => scores.donvi[d] += 1.5);
+    }
+
+    // 2. Chạy phân tích từ "bộ não học hỏi" (trọng số rất cao)
+    const learningPred = this.selectByLearning();
+    if (learningPred) {
+        learningPred.tram.forEach(d => scores.tram[d] += 2.0);
+        learningPred.chuc.forEach(d => scores.chuc[d] += 2.0);
+        learningPred.donvi.forEach(d => scores.donvi[d] += 2.0);
+    }
+
+    // 3. (Sẽ thêm phân tích mẫu hình ở GĐ2)
+
+    // 4. Logic "làm nguội": Giảm điểm của số vừa về hôm qua
+    if (analysisData.latestGDB && analysisData.latestGDB.length === 5) {
+        const lastThree = analysisData.latestGDB.slice(-3);
+        scores.tram[lastThree[0]] *= 0.5; // Giảm 50% điểm
+        scores.chuc[lastThree[1]] *= 0.5;
+        scores.donvi[lastThree[2]] *= 0.5;
+    }
+    
+    // Hàm helper để chọn top 5 từ điểm số
+    const getTop5 = (scoreArray) => {
+        return scoreArray
+            .map((score, digit) => ({ digit: digit.toString(), score }))
+            .sort((a, b) => b.score - a.score)
+            .slice(0, 5)
+            .map(item => item.digit);
+    };
+
+    return {
+        tram: getTop5(scores.tram),
+        chuc: getTop5(scores.chuc),
+        donvi: getTop5(scores.donvi),
+    };
+}
+    
     // =================================================================
     // TẠO DỰ ĐOÁN ĐA DẠNG - SỬA LỖI QUAN TRỌNG
     // =================================================================
     async createDiversePrediction(analysisData, targetDate) {
-        console.log("🎲 [Service] Tạo dự đoán ĐA DẠNG...");
+    console.log("🎲 [Service] Tạo dự đoán TỔNG HỢP...");
 
-        // Kết hợp nhiều phương pháp chọn số
-        const methods = [
-            () => this.selectByFrequency(analysisData.recent.frequency),
-            () => this.selectByFrequency(analysisData.weekly.frequency),
-            () => this.selectByPattern(analysisData.combined.patterns),
-            () => this.selectByLearning(), // Sử dụng AI learning
-            () => this.selectRandomWithBias(analysisData.combined.frequency) // Thêm yếu tố ngẫu nhiên
-        ];
+    // THAY ĐỔI LỚN: Gọi hàm tổng hợp mới
+    const finalPrediction = this.combineAndScorePredictions(analysisData);
 
-        // Tạo nhiều bộ dự đoán và kết hợp
-        const allPredictions = [];
-        for (let i = 0; i < 3; i++) { // Tạo 3 bộ dự đoán
-            const method = methods[Math.floor(Math.random() * methods.length)];
-            const prediction = method();
-            if (prediction) allPredictions.push(prediction);
-        }
-
-        // Kết hợp các bộ dự đoán
-        const finalPrediction = this.combinePredictions(allPredictions);
-        
-        // Đảm bảo tính đa dạng
-        this.ensureDiversity(finalPrediction);
-
-        return {
-            ngayDuDoan: targetDate,
-            ngayPhanTich: DateTime.now().toFormat('dd/MM/yyyy'), // "09/11/2025"
-            topTram: finalPrediction.tram,
-            topChuc: finalPrediction.chuc,
-            topDonVi: finalPrediction.donvi,
-            analysisData: {
-                totalDaysAnalyzed: analysisData.totalDays,
-                latestGDB: analysisData.latestGDB,
-                analysisMethods: allPredictions.length,
-                confidence: this.calculateDynamicConfidence(analysisData),
-                periodBreakdown: {
-                    recent: analysisData.recent.sampleSize,
-                    weekly: analysisData.weekly.sampleSize,
-                    monthly: analysisData.monthly.sampleSize
-                }
-            },
+    // Giữ nguyên phần còn lại của hàm
+    return {
+        ngayDuDoan: targetDate,
+        ngayPhanTich: DateTime.now().toFormat('dd/MM/yyyy'),
+        topTram: finalPrediction.tram,
+        topChuc: finalPrediction.chuc,
+        topDonVi: finalPrediction.donvi,
+        analysisData: {
+            totalDaysAnalyzed: analysisData.totalDays,
+            latestGDB: analysisData.latestGDB,
+            analysisMethods: 2, // Hiện tại có 2 phương pháp chính
             confidence: this.calculateDynamicConfidence(analysisData),
-            predictionType: 'diverse_analysis',
-            createdAt: new Date()
-        };
-    }
-
+        },
+        confidence: this.calculateDynamicConfidence(analysisData),
+        predictionType: 'combined_analysis', // Đổi tên
+        createdAt: new Date()
+    };
+}
     // =================================================================
     // CÁC PHƯƠNG PHÁP CHỌN SỐ ĐA DẠNG
     // =================================================================
@@ -728,19 +752,21 @@ class TripleGroupAnalysisService {
     }
 
     // Các hàm AI learning (giữ nguyên)
-    selectNumbersByLearning(position, count) {
-        if (!this.learningState || !this.learningState[position]) {
-            return this.generateRandomNumbers(count);
-        }
-
-        const stats = this.learningState[position];
-        const scoredNumbers = stats.map(stat => ({
-            digit: stat.digit,
-            score: (stat.accuracy || 0) + (stat.totalAppearances || 0) * 0.1
-        })).sort((a, b) => b.score - a.score);
-
-        return scoredNumbers.slice(0, count).map(item => item.digit);
+    selectNumbersByLearning(position, count = 5) { // Thêm count default
+    if (!this.learningState || !this.learningState[position] || this.learningState.totalPredictionsAnalyzed < 20) {
+        return null; // Chỉ sử dụng khi đã học đủ
     }
+
+    const stats = this.learningState[position];
+    const scoredNumbers = stats.map(stat => ({
+        digit: stat.digit,
+        // LOGIC MỚI: Tăng cường ảnh hưởng của độ chính xác
+        // và thêm "phần thưởng" cho các số ít xuất hiện nhưng trúng (hiệu quả cao)
+        score: (stat.accuracy || 0) * 1.5 + ((stat.correctPicks || 0) / (stat.totalAppearances || 1)) * 50
+    })).sort((a, b) => b.score - a.score);
+
+    return scoredNumbers.slice(0, count).map(item => item.digit);
+}
 
     analyzePatterns(gdbResults) {
         // Phân tích mẫu hình cơ bản
