@@ -9,13 +9,14 @@ const tripleGroupService = new TripleGroupAnalysisService();
  */
 exports.generatePrediction = async (req, res) => {
     try {
-        console.log('🎯 [Controller] Bắt đầu tạo dự đoán Triple Group...');
+        console.log('🎯 [Controller] Bắt đầu tạo dự đoán Triple Group (BỎ QUA CACHE)...');
         
-        const prediction = await tripleGroupService.generateTripleGroupPrediction();
+        // SỬA Ở ĐÂY: Thêm tham số 'true' để buộc tính toán lại
+        const prediction = await tripleGroupService.generateTripleGroupPrediction(null, true); 
         
         res.json({
             success: true,
-            message: 'Dự đoán Triple Group đã được tạo thành công',
+            message: 'Dự đoán Triple Group đã được TẠO MỚI thành công',
             prediction: prediction,
             timestamp: new Date().toISOString()
         });
@@ -28,6 +29,7 @@ exports.generatePrediction = async (req, res) => {
         });
     }
 };
+
 
 /**
  * Tạo dự đoán với học hỏi từ lịch sử
