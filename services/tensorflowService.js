@@ -522,7 +522,7 @@ class TensorFlowService {
         // ✅ SẮP XẾP VÀ LỌC CHỈ LẤY 3 SỐ TỐT NHẤT
         const digitsWithValues = validOutput
             .sort((a, b) => b.value - a.value)
-            .slice(0, 3)
+            .slice(0, 5)
             .filter(item => item.value > 0.1)
             .map(item => item.digit);
             
