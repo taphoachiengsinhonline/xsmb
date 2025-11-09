@@ -504,13 +504,13 @@ class TensorFlowService {
   }
 
   decodeOutput(output) {
-    console.log('🔍 [Debug] Raw output for decoding:', output.slice(0, 10));
+    console.log('🔍 [Debug] Raw output for decoding:', output.slice(0, 50));
     
     const prediction = { pos1: [], pos2: [], pos3: [], pos4: [], pos5: [] };
     
     for (let i = 0; i < 5; i++) {
-        const startIdx = i * 10;
-        const endIdx = (i + 1) * 10;
+        const startIdx = i * 50;
+        const endIdx = (i + 1) * 50;
         const positionOutput = output.slice(startIdx, endIdx);
         
         // ✅ VALIDATE VÀ LÀM SẠCH DỮ LIỆU
@@ -519,7 +519,7 @@ class TensorFlowService {
             value: isNaN(val) || !isFinite(val) ? 0 : Math.max(0, val)
         }));
         
-        // ✅ SẮP XẾP VÀ LỌC CHỈ LẤY 3 SỐ TỐT NHẤT
+        // ✅ SẮP XẾP VÀ LỌC CHỈ LẤY 5 SỐ TỐT NHẤT
         const digitsWithValues = validOutput
             .sort((a, b) => b.value - a.value)
             .slice(0, 5)
