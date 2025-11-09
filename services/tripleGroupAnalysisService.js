@@ -220,7 +220,7 @@ class TripleGroupAnalysisService {
 
         return {
             ngayDuDoan: targetDate,
-            ngayPhanTich: new Date().toISOString(),
+            ngayPhanTich: DateTime.now().toFormat('dd/MM/yyyy'), // "09/11/2025"
             topTram: finalPrediction.tram,
             topChuc: finalPrediction.chuc,
             topDonVi: finalPrediction.donvi,
