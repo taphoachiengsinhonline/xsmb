@@ -29,57 +29,62 @@ class AdvancedFeatureEngineer {
             console.warn('⚠️ currentDayResults không hợp lệ');
             return this.getDefaultFeatures();
         }
-
         const resultsMap = new Map(currentDayResults.map(r => [r.giai, r]));
-        
+       
         // ✅ VALIDATE VÀ NORMALIZE TỪNG NHÓM FEATURES
         const normalizeFeatures = (features, size, name) => {
             if (!Array.isArray(features)) {
                 console.warn(`⚠️ ${name} không phải mảng:`, features);
                 return Array(size).fill(0);
             }
-            
+           
             return features.map(val => {
                 const cleanVal = (isNaN(val) || val === null || val === undefined || !isFinite(val)) ? 0 : val;
                 return Math.max(0, Math.min(1, cleanVal)); // CLAMP VỀ [0,1]
             }).slice(0, size); // ĐẢM BẢO ĐÚNG KÍCH THƯỚC
         };
-
+        const resultsMap = new Map(currentDayResults.map(r => [r.giai, r]));
         const prizeCorrelationFeatures = normalizeFeatures(
             this._extractPrizeCorrelationFeatures(resultsMap), 50, 'Prize Correlation'
         );
-        
+       
         const sumFrequencyFeatures = normalizeFeatures(
             this._extractSumFrequencyFeatures(currentDayResults), 28, 'Sum Frequency'
         );
-        
+       
         const chanLePatterns = normalizeFeatures(
             this._extractChanLePatterns(currentDayResults), 24, 'ChanLe Patterns'
         );
-        
+       
         const gapAnalysis = normalizeFeatures(
             this._extractGapAnalysis(previousDaysResults), 30, 'Gap Analysis'
         );
 
+        // THÊM MỚI: Triple Group Features
+        const tripleFeatures = normalizeFeatures(
+            this._extractTripleGroupFeatures(previousDaysResults), 2, 'Triple Group'
+        );
+
         return {
             prizeCorrelationFeatures,
-            sumFrequencyFeatures, 
+            sumFrequencyFeatures,
             chanLePatterns,
-            gapAnalysis
+            gapAnalysis,
+            tripleFeatures  // THÊM MỚI
         };
     } catch (error) {
         console.error('❌ Lỗi trong extractPremiumFeatures:', error);
         return this.getDefaultFeatures();
     }
 }
-
 // ✅ THÊM HÀM FALLBACK
 getDefaultFeatures() {
     return {
         prizeCorrelationFeatures: Array(50).fill(0),
         sumFrequencyFeatures: Array(28).fill(0),
         chanLePatterns: Array(24).fill(0),
-        gapAnalysis: Array(30).fill(0)
+        gapAnalysis: Array(30).fill(0),
+        tripleFeatures: Array(2).fill(0)  // THÊM MỚI
     };
 }
 
