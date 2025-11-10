@@ -337,10 +337,11 @@ class TensorFlowService {
             });
           } else if (epoch % 5 === 0) {
             console.log(`📈 Epoch ${epoch + 1}: Loss = ${logs.loss.toFixed(4)}, Val Loss = ${logs.val_loss?.toFixed(4) || 'N/A'}`);
+            callbacks: tf.callbacks.earlyStopping({ monitor: 'val_loss', patience: 10 })
           }
         }
       }
-        callbacks: tf.callbacks.earlyStopping({ monitor: 'val_loss', patience: 10 })
+        
     });
 
     inputTensor.dispose();
@@ -505,34 +506,21 @@ class TensorFlowService {
   }
 
   decodeOutput(output) {
-    console.log('🔍 [Debug] Raw output for decoding:', output.slice(0, 10));
-    
-    const prediction = { pos1: [], pos2: [], pos3: [], pos4: [], pos5: [] };
-    
-    for (let i = 0; i < 5; i++) {
-        const startIdx = i * 10;
-        const endIdx = (i + 1) * 10;
-        const positionOutput = output.slice(startIdx, endIdx);
-        
-        // ✅ VALIDATE VÀ LÀM SẠCH DỮ LIỆU
-        const validOutput = positionOutput.map((val, idx) => ({
-            digit: String(idx),
-            value: isNaN(val) || !isFinite(val) ? 0 : Math.max(0, val)
-        }));
-        
-        // ✅ SẮP XẾP VÀ LỌC CHỈ LẤY 5 SỐ TỐT NHẤT
-        const digitsWithValues = validOutput
-            .sort((a, b) => b.value - a.value)
-            .slice(0, 5)
-            .filter(item => item.value > 0.1)
-            .map(item => item.digit);
-            
-        prediction[`pos${i + 1}`] = digitsWithValues.length > 0 ? digitsWithValues : ['0','1','2'];
+  const prediction = { pos1: [], pos2: [], pos3: [], pos4: [], pos5: [] };
+  for (let i = 0; i < 5; i++) {
+    const positionOutput = output.slice(i * 10, (i + 1) * 10);
+    let candidates = positionOutput.map((val, idx) => ({ digit: String(idx), value: Math.max(0, val) }))
+      .filter(item => item.value > 0.2) // Threshold cao hơn
+      .sort((a, b) => b.value - a.value);
+    if (candidates.length < 3) {
+      // Fallback random nếu không đủ
+      const remaining = Array.from({length: 10}, (_, j) => j.toString()).filter(d => !candidates.some(c => c.digit === d));
+      candidates = [...candidates, ...remaining.sort(() => Math.random() - 0.5).slice(0, 3 - candidates.length)];
     }
-    
-    console.log('🔍 [Debug] Final prediction:', prediction);
-    return prediction;
+    prediction[`pos${i + 1}`] = candidates.slice(0, 5).map(item => item.digit);
   }
+  return prediction;
+}
 
   // =================================================================
   // TỰ ĐỘNG TẠO DỰ ĐOÁN SAU HUẤN LUYỆN
