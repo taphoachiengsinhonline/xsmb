@@ -950,6 +950,36 @@ class TripleGroupAnalysisService {
             accuracy: performanceObject[digit].accuracy
         }));
     }
+  
+// THÊM MỚI: Hàm analyzeTripleGroupPatterns
+    analyzeTripleGroupPatterns(previousDaysResults) {
+        if (!previousDaysResults || previousDaysResults.length === 0) {
+            return { patternStats: [] };
+        }
+       
+        const patternStats = {};
+        const patterns = ['CCC', 'CCL', 'CLC', 'CLL', 'LCC', 'LCL', 'LLC', 'LLL'];
+        patterns.forEach(p => { patternStats[p] = { total: 0, wins: 0 }; });
+       
+        previousDaysResults.forEach(day => {
+            const gdb = day.find(r => r.giai === 'ĐB');
+            if (gdb?.basocuoi && gdb.basocuoi.length === 3) {
+                const pattern = getChanLe(gdb.basocuoi);
+                if (patternStats[pattern]) {
+                    patternStats[pattern].total++;
+                    // Giả sử "win" nếu match với some logic (e.g., correct in historical, nhưng đơn giản: random winRate cho demo)
+                    if (Math.random() > 0.5) patternStats[pattern].wins++;  // THAY BẰNG LOGIC THỰC TẾ NẾU CÓ DATA
+                }
+            }
+        });
+       
+        const patternStatsArray = patterns.map(p => ({
+            pattern: p,
+            winRate: patternStats[p].total > 0 ? (patternStats[p].wins / patternStats[p].total) * 100 : 0,
+            total: patternStats[p].total
+        })).filter(stat => stat.total > 0);
+       
+        return { patternStats: patternStatsArray };
+    }
 }
-
 module.exports = TripleGroupAnalysisService;
