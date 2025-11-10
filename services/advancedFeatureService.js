@@ -259,31 +259,36 @@ getDefaultFeatures() {
     }
 
     _extractTripleGroupFeatures(previousDaysResults) {
-    try {
-        const tripleGroupService = new TripleGroupAnalysisService();
-        const analysis = tripleGroupService.analyzeTripleGroupPatterns();
-        
-        const features = [];
-        
-        // Thêm features từ phân tích nhóm
-        if (analysis.patternStats && analysis.patternStats.length > 0) {
-            // Tỷ lệ thắng trung bình của các pattern
-            const avgWinRate = analysis.patternStats.reduce((sum, stat) => sum + stat.winRate, 0) / analysis.patternStats.length;
-            features.push(avgWinRate / 100);
+        try {
+            const tripleGroupService = new TripleGroupAnalysisService();
+            const analysis = tripleGroupService.analyzeTripleGroupPatterns(previousDaysResults);  // THÊM MỚI: Truyền previousDaysResults nếu cần
             
-            // Số lượng pattern có tỷ lệ thắng > 60%
-            const highWinPatterns = analysis.patternStats.filter(stat => stat.winRate > 60).length;
-            features.push(highWinPatterns / 20); // Chuẩn hóa
-        } else {
-            features.push(0, 0);
+            const features = [];
+            const patterns = ['CCC', 'CCL', 'CLC', 'CLL', 'LCC', 'LCL', 'LLC', 'LLL'];  // 8 patterns
+            const patternFreq = Array(8).fill(0);
+            
+            // Tính frequency của từng pattern từ previous GDB
+            previousDaysResults.forEach(day => {
+                const gdb = day.find(r => r.giai === 'ĐB');
+                if (gdb?.basocuoi && gdb.basocuoi.length === 3) {
+                    const pattern = getChanLe(gdb.basocuoi);
+                    const index = patterns.indexOf(pattern);
+                    if (index !== -1) {
+                        patternFreq[index]++;
+                    }
+                }
+            });
+            
+            const total = patternFreq.reduce((sum, f) => sum + f, 0);
+            const normalizedFreq = total > 0 ? patternFreq.map(f => f / total) : Array(8).fill(0);
+            
+            features.push(...normalizedFreq);
+            
+            return features;  // 8 features
+        } catch (error) {
+            console.warn('⚠️ Lỗi trong triple group features:', error.message);
+            return Array(8).fill(0);
         }
-        
-        return features;
-    } catch (error) {
-        console.warn('⚠️ Lỗi trong triple group features, sử dụng giá trị mặc định');
-        return [0, 0];
-    }
     }
 }
-
 module.exports = AdvancedFeatureEngineer;
