@@ -340,6 +340,7 @@ class TensorFlowService {
           }
         }
       }
+        callbacks: tf.callbacks.earlyStopping({ monitor: 'val_loss', patience: 10 })
     });
 
     inputTensor.dispose();
