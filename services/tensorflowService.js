@@ -337,7 +337,7 @@ class TensorFlowService {
             });
           } else if (epoch % 5 === 0) {
             console.log(`📈 Epoch ${epoch + 1}: Loss = ${logs.loss.toFixed(4)}, Val Loss = ${logs.val_loss?.toFixed(4) || 'N/A'}`);
-            callbacks: tf.callbacks.earlyStopping({ monitor: 'val_loss', patience: 10 })
+            callbacks: tf.callbacks.earlyStopping({ monitor: 'val_loss', patience: 10 });
           }
         }
       }
