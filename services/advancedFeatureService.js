@@ -29,8 +29,7 @@ class AdvancedFeatureEngineer {
             console.warn('⚠️ currentDayResults không hợp lệ');
             return this.getDefaultFeatures();
         }
-        const resultsMap = new Map(currentDayResults.map(r => [r.giai, r]));
-       
+        
         // ✅ VALIDATE VÀ NORMALIZE TỪNG NHÓM FEATURES
         const normalizeFeatures = (features, size, name) => {
             if (!Array.isArray(features)) {
