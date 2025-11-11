@@ -5,6 +5,7 @@ const NNState = require('../models/NNState');
 const AdvancedFeatureEngineer = require('./advancedFeatureService');
 const FeatureEngineeringService = require('./featureEngineeringService');
 const AdvancedTraining = require('./advancedTrainingService');
+const TripleGroupAnalysisService = require('./tripleGroupAnalysisService');
 const { Storage } = require('@google-cloud/storage');
 const { DateTime } = require('luxon');
 
@@ -145,6 +146,8 @@ class TensorFlowService {
 
     let totalPredictions = 0;
     let correctPredictions = 0;
+    const positionAcc = Array(5).fill(0);
+    let positionCounts = Array(5).fill(0);
 
     // PHÂN TÍCH TỪNG DỰ ĐOÁN
     for (const pred of predictions) {
@@ -164,6 +167,10 @@ class TensorFlowService {
           errorAnalysis.weakPositions.push(`pos${i+1}`);
           positionCorrect = false;
         }
+
+        // THÊM VÀO ĐÂY: Logic đếm per position
+        positionCounts[i]++;
+        if (predictedDigits.includes(actualStr[i])) positionAcc[i]++;
       }
 
       if (positionCorrect) correctPredictions++;
@@ -172,6 +179,9 @@ class TensorFlowService {
     // TÍNH TOÁN KẾT QUẢ
     errorAnalysis.overallAccuracy = totalPredictions > 0 ? correctPredictions / totalPredictions : 0;
     errorAnalysis.totalAnalyzed = totalPredictions;
+
+    // THÊM VÀO ĐÂY: Tính positionAccuracy
+    errorAnalysis.positionAccuracy = positionAcc.map((acc, i) => acc / positionCounts[i]);
 
     // XÁC ĐỊNH VỊ TRÍ YẾU NHẤT
     const positionStats = {};
@@ -195,7 +205,6 @@ class TensorFlowService {
     this.errorPatterns = errorAnalysis;
     return errorAnalysis;
   }
-
   getDefaultErrorPatterns() {
     return {
       weakPositions: [
@@ -781,7 +790,10 @@ class TensorFlowService {
       const targetDayString = days[i + SEQUENCE_LENGTH];
       
       const inputSequence = [];
-      let sequenceValid = true;
+        if (Math.random() < 0.3) { // 30% chance
+  inputSequence = this.augmentSequence(inputSequence);
+}
+     let sequenceValid = true;
 
       for(let j = 0; j < SEQUENCE_LENGTH; j++) {
         const currentDayForFeature = grouped[sequenceDaysStrings[j]] || [];
@@ -977,6 +989,13 @@ class TensorFlowService {
 
     const output = await this.predict(inputSequence);
     const prediction = this.decodeOutput(output);
+      const tripleService = new TripleGroupAnalysisService();
+const triplePred = await tripleService.generateTripleGroupPrediction(nextDayStr);
+if (triplePred) {
+  prediction.pos3 = triplePred.topTram.filter(d => prediction.pos3.includes(d)); // Ví dụ filter pos3-5
+  prediction.pos4 = triplePred.topChuc.filter(d => prediction.pos4.includes(d));
+  prediction.pos5 = triplePred.topDonVi.filter(d => prediction.pos5.includes(d));
+}
 
     const latestDay = latestSequenceDays[latestSequenceDays.length - 1];
     const nextDayStr = DateTime.fromFormat(latestDay, 'dd/MM/yyyy').plus({ days: 1 }).toFormat('dd/MM/yyyy');
@@ -1035,6 +1054,12 @@ class TensorFlowService {
     
     return Math.min(finalConfidence, 1.0);
   }
+
+augmentSequence(sequence) {
+  return sequence.map(dayFeatures => 
+    dayFeatures.map(feature => feature + (Math.random() - 0.5) * 0.05) // Small noise
+  );
+}
 }
 
 module.exports = TensorFlowService;
