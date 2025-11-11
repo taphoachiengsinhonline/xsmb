@@ -580,7 +580,7 @@ class TensorFlowService {
                 
                 let finalFeatureVector = [...basicFeatures, ...Object.values(advancedFeatures).flat()];
                 
-                const EXPECTED_SIZE = 346;
+                const EXPECTED_SIZE = 348;
                 if (finalFeatureVector.length !== EXPECTED_SIZE) {
                     if (finalFeatureVector.length > EXPECTED_SIZE) {
                         finalFeatureVector = finalFeatureVector.slice(0, EXPECTED_SIZE);
@@ -691,7 +691,7 @@ class TensorFlowService {
             
             let finalFeatureVector = [...basicFeatures, ...Object.values(advancedFeatures).flat()];
             
-            const EXPECTED_SIZE = 346;
+            const EXPECTED_SIZE = 348;
             if (finalFeatureVector.length !== EXPECTED_SIZE) {
                 if (finalFeatureVector.length > EXPECTED_SIZE) {
                     finalFeatureVector = finalFeatureVector.slice(0, EXPECTED_SIZE);
@@ -706,7 +706,7 @@ class TensorFlowService {
         const targetGDBString = String(actualResult.so).padStart(5, '0');
         const targetArray = this.prepareTarget(targetGDBString);
 
-        const inputTensor = tf.tensor3d([inputSequence], [1, SEQUENCE_LENGTH, 346]);
+        const inputTensor = tf.tensor3d([inputSequence], [1, SEQUENCE_LENGTH, 348]);
         const targetTensor = tf.tensor2d([targetArray], [1, OUTPUT_NODES]);
 
         await this.model.fit(inputTensor, targetTensor, {
@@ -805,7 +805,7 @@ class TensorFlowService {
           break;
         }
         
-        const EXPECTED_SIZE = 346;
+        const EXPECTED_SIZE = 348;
         if (finalFeatureVector.length !== EXPECTED_SIZE) {
           if (finalFeatureVector.length > EXPECTED_SIZE) {
             finalFeatureVector = finalFeatureVector.slice(0, EXPECTED_SIZE);
@@ -956,7 +956,7 @@ class TensorFlowService {
       
       let finalFeatureVector = [...basicFeatures, ...Object.values(advancedFeatures).flat()];
       
-      const EXPECTED_SIZE = 346;
+      const EXPECTED_SIZE = 348;
       if (finalFeatureVector.length !== EXPECTED_SIZE) {
         if (finalFeatureVector.length > EXPECTED_SIZE) {
           finalFeatureVector = finalFeatureVector.slice(0, EXPECTED_SIZE);
@@ -969,7 +969,7 @@ class TensorFlowService {
     });
 
     const totalValues = inputSequence.flat().length;
-    const expectedValues = SEQUENCE_LENGTH * 346;
+    const expectedValues = SEQUENCE_LENGTH * 348;
     
     if (totalValues !== expectedValues) {
       throw new Error(`Lỗi dimension: có ${totalValues} values, cần ${expectedValues} values`);
