@@ -767,56 +767,50 @@ class TensorFlowService {
   // CHUẨN BỊ DỮ LIỆU TRAINING
   // =================================================================
   async prepareTrainingData() {
-    console.log('📝 Bắt đầu chuẩn bị dữ liệu huấn luyện...');
+    console.log('Bắt đầu chuẩn bị dữ liệu huấn luyện...');
     const results = await Result.find().sort({ 'ngay': 1 }).lean();
-    
-    console.log(`📊 Tổng số bản ghi trong DB: ${results.length}`);
-
+   
+    console.log(`Tổng số bản ghi trong DB: ${results.length}`);
     if (results.length < SEQUENCE_LENGTH + 1) {
       throw new Error(`Không đủ dữ liệu. Cần ít nhất ${SEQUENCE_LENGTH + 1} ngày.`);
     }
-
     const grouped = {};
     results.forEach(r => {
       if (!grouped[r.ngay]) grouped[r.ngay] = [];
       grouped[r.ngay].push(r);
     });
-
     const days = Object.keys(grouped).sort((a, b) => this.dateKey(a).localeCompare(this.dateKey(b)));
     const trainingData = [];
-
     for (let i = 0; i < days.length - SEQUENCE_LENGTH; i++) {
       const sequenceDaysStrings = days.slice(i, i + SEQUENCE_LENGTH);
       const targetDayString = days[i + SEQUENCE_LENGTH];
-      
-      const inputSequence = [];
+     
+      let inputSequence = []; // SỬA: dùng let thay vì const
         if (Math.random() < 0.3) { // 30% chance
   inputSequence = this.augmentSequence(inputSequence);
 }
      let sequenceValid = true;
-
       for(let j = 0; j < SEQUENCE_LENGTH; j++) {
         const currentDayForFeature = grouped[sequenceDaysStrings[j]] || [];
         const dateStr = sequenceDaysStrings[j];
-        
+       
         const previousDaysForBasicFeatures = days.slice(0, i + j).map(day => grouped[day] || []);
         const previousDaysForAdvancedFeatures = previousDaysForBasicFeatures.slice().reverse();
-
         const basicFeatures = this.featureService.extractAllFeatures(currentDayForFeature, previousDaysForBasicFeatures, dateStr);
         const advancedFeatures = this.advancedFeatureEngineer.extractPremiumFeatures(currentDayForFeature, previousDaysForAdvancedFeatures);
-        
+       
         let finalFeatureVector = [...basicFeatures, ...Object.values(advancedFeatures).flat()];
-        
-        const hasInvalid = finalFeatureVector.some(val => 
+       
+        const hasInvalid = finalFeatureVector.some(val =>
           isNaN(val) || val === null || val === undefined || !isFinite(val) || Math.abs(val) > 1000
         );
-        
+       
         if (hasInvalid) {
-          console.warn(`⚠️ Dữ liệu không hợp lệ ở ngày ${dateStr}`);
+          console.warn(`Dữ liệu không hợp lệ ở ngày ${dateStr}`);
           sequenceValid = false;
           break;
         }
-        
+       
         const EXPECTED_SIZE = 348;
         if (finalFeatureVector.length !== EXPECTED_SIZE) {
           if (finalFeatureVector.length > EXPECTED_SIZE) {
@@ -825,40 +819,34 @@ class TensorFlowService {
             finalFeatureVector = [...finalFeatureVector, ...Array(EXPECTED_SIZE - finalFeatureVector.length).fill(0)];
           }
         }
-        
+       
         inputSequence.push(finalFeatureVector);
       }
-
       if (!sequenceValid) continue;
-
       const targetGDB = (grouped[targetDayString] || []).find(r => r.giai === 'ĐB');
       if (targetGDB?.so && String(targetGDB.so).length >= 5) {
         const targetGDBString = String(targetGDB.so).padStart(5, '0');
         const targetArray = this.prepareTarget(targetGDBString);
-
         const invalidTargets = targetArray.filter(val => isNaN(val) || val === null || val === undefined);
         if (invalidTargets.length > 0) continue;
-
         trainingData.push({ inputSequence, targetArray });
       }
     }
-
     if (trainingData.length > 0) {
-      console.log('🔍 KIỂM TRA DỮ LIỆU CUỐI CÙNG:');
+      console.log('KIỂM TRA DỮ LIỆU CUỐI CÙNG:');
       const sampleInput = trainingData[0].inputSequence.flat();
       const sampleTarget = trainingData[0].targetArray;
-      
+     
       console.log(`- Input range: ${Math.min(...sampleInput)} to ${Math.max(...sampleInput)}`);
       console.log(`- Target range: ${Math.min(...sampleTarget)} to ${Math.max(...sampleTarget)}`);
       console.log(`- NaN trong input: ${sampleInput.filter(v => isNaN(v)).length}`);
       console.log(`- NaN trong target: ${sampleTarget.filter(v => isNaN(v)).length}`);
-      
+     
       this.inputNodes = trainingData[0].inputSequence[0].length;
-      console.log(`✅ Đã chuẩn bị ${trainingData.length} chuỗi dữ liệu hợp lệ`);
+      console.log(`Đã chuẩn bị ${trainingData.length} chuỗi dữ liệu hợp lệ`);
     } else {
-      throw new Error("❌ Không có dữ liệu training hợp lệ sau khi kiểm tra.");
+      throw new Error("Không có dữ liệu training hợp lệ sau khi kiểm tra.");
     }
-
     return trainingData;
   }
 
@@ -931,43 +919,38 @@ class TensorFlowService {
   // =================================================================
   // DỰ ĐOÁN NGÀY TIẾP THEO
   // =================================================================
-  async runNextDayPrediction() {
-    console.log('🔔 [TensorFlow Service] Generating next day prediction...');
-    
+   async runNextDayPrediction() {
+    console.log('[TensorFlow Service] Generating next day prediction...');
+   
     if (!this.model) {
       const modelLoaded = await this.loadModel();
       if (!modelLoaded) {
         throw new Error('Model chưa được huấn luyện. Hãy chạy huấn luyện trước.');
       }
     }
-
     const results = await Result.find().lean();
     if (results.length < SEQUENCE_LENGTH) {
       throw new Error(`Không đủ dữ liệu. Cần ít nhất ${SEQUENCE_LENGTH} ngày.`);
     }
-
     const grouped = {};
     results.forEach(r => {
       if (!grouped[r.ngay]) grouped[r.ngay] = [];
       grouped[r.ngay].push(r);
     });
-
     const days = Object.keys(grouped).sort((a, b) => this.dateKey(a).localeCompare(this.dateKey(b)));
     const latestSequenceDays = days.slice(-SEQUENCE_LENGTH);
-
-    console.log(`🔍 Chuẩn bị dữ liệu dự đoán từ ${latestSequenceDays.length} ngày gần nhất`);
-
+    console.log(`Chuẩn bị dữ liệu dự đoán từ ${latestSequenceDays.length} ngày gần nhất`);
     const previousDays = [];
     const inputSequence = latestSequenceDays.map(day => {
       const dayResults = grouped[day] || [];
       const prevDays = previousDays.slice();
       previousDays.push(dayResults);
-      
+     
       const basicFeatures = this.featureService.extractAllFeatures(dayResults, prevDays, day);
       const advancedFeatures = this.advancedFeatureEngineer.extractPremiumFeatures(dayResults, prevDays);
-      
+     
       let finalFeatureVector = [...basicFeatures, ...Object.values(advancedFeatures).flat()];
-      
+     
       const EXPECTED_SIZE = 348;
       if (finalFeatureVector.length !== EXPECTED_SIZE) {
         if (finalFeatureVector.length > EXPECTED_SIZE) {
@@ -976,17 +959,15 @@ class TensorFlowService {
           finalFeatureVector = [...finalFeatureVector, ...Array(EXPECTED_SIZE - finalFeatureVector.length).fill(0)];
         }
       }
-      
+     
       return finalFeatureVector;
     });
-
     const totalValues = inputSequence.flat().length;
     const expectedValues = SEQUENCE_LENGTH * 348;
-    
+   
     if (totalValues !== expectedValues) {
       throw new Error(`Lỗi dimension: có ${totalValues} values, cần ${expectedValues} values`);
     }
-
     const output = await this.predict(inputSequence);
     const prediction = this.decodeOutput(output);
       const tripleService = new TripleGroupAnalysisService();
@@ -996,10 +977,8 @@ if (triplePred) {
   prediction.pos4 = triplePred.topChuc.filter(d => prediction.pos4.includes(d));
   prediction.pos5 = triplePred.topDonVi.filter(d => prediction.pos5.includes(d));
 }
-
     const latestDay = latestSequenceDays[latestSequenceDays.length - 1];
     const nextDayStr = DateTime.fromFormat(latestDay, 'dd/MM/yyyy').plus({ days: 1 }).toFormat('dd/MM/yyyy');
-
     const predictionRecord = {
       ngayDuDoan: nextDayStr,
       ...prediction,
@@ -1009,15 +988,12 @@ if (triplePred) {
       rawProbabilities: output,
       confidenceScore: this.calculateConfidence(output)
     };
-
     await NNPrediction.findOneAndUpdate(
       { ngayDuDoan: nextDayStr },
       predictionRecord,
       { upsert: true, new: true }
     );
-
-    console.log(`✅ Đã tạo dự đoán cho ${nextDayStr} với confidence: ${predictionRecord.confidenceScore}`);
-
+    console.log(`Đã tạo dự đoán cho ${nextDayStr} với confidence: ${predictionRecord.confidenceScore}`);
     return {
       message: `TensorFlow LSTM đã tạo dự đoán cho ngày ${nextDayStr}.`,
       ngayDuDoan: nextDayStr,
