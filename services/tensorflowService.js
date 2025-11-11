@@ -183,7 +183,7 @@ class TensorFlowService {
     this.errorPatterns = errorAnalysis;
     return errorAnalysis;
   }
-}
+
   getDefaultErrorPatterns() {
     return {
       weakPositions: [
