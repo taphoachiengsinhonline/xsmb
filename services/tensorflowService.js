@@ -920,87 +920,89 @@ class TensorFlowService {
   // DỰ ĐOÁN NGÀY TIẾP THEO
   // =================================================================
    async runNextDayPrediction() {
-    console.log('[TensorFlow Service] Generating next day prediction...');
-   
-    if (!this.model) {
-      const modelLoaded = await this.loadModel();
-      if (!modelLoaded) {
-        throw new Error('Model chưa được huấn luyện. Hãy chạy huấn luyện trước.');
-      }
+  console.log('🔔 [TensorFlow Service] Generating next day prediction...');
+ 
+  if (!this.model) {
+    const modelLoaded = await this.loadModel();
+    if (!modelLoaded) {
+      throw new Error('Model chưa được huấn luyện. Hãy chạy huấn luyện trước.');
     }
-    const results = await Result.find().lean();
-    if (results.length < SEQUENCE_LENGTH) {
-      throw new Error(`Không đủ dữ liệu. Cần ít nhất ${SEQUENCE_LENGTH} ngày.`);
-    }
-    const grouped = {};
-    results.forEach(r => {
-      if (!grouped[r.ngay]) grouped[r.ngay] = [];
-      grouped[r.ngay].push(r);
-    });
-    const days = Object.keys(grouped).sort((a, b) => this.dateKey(a).localeCompare(this.dateKey(b)));
-    const latestSequenceDays = days.slice(-SEQUENCE_LENGTH);
-    console.log(`Chuẩn bị dữ liệu dự đoán từ ${latestSequenceDays.length} ngày gần nhất`);
-    const previousDays = [];
-    const inputSequence = latestSequenceDays.map(day => {
-      const dayResults = grouped[day] || [];
-      const prevDays = previousDays.slice();
-      previousDays.push(dayResults);
-     
-      const basicFeatures = this.featureService.extractAllFeatures(dayResults, prevDays, day);
-      const advancedFeatures = this.advancedFeatureEngineer.extractPremiumFeatures(dayResults, prevDays);
-     
-      let finalFeatureVector = [...basicFeatures, ...Object.values(advancedFeatures).flat()];
-     
-      const EXPECTED_SIZE = 348;
-      if (finalFeatureVector.length !== EXPECTED_SIZE) {
-        if (finalFeatureVector.length > EXPECTED_SIZE) {
-          finalFeatureVector = finalFeatureVector.slice(0, EXPECTED_SIZE);
-        } else {
-          finalFeatureVector = [...finalFeatureVector, ...Array(EXPECTED_SIZE - finalFeatureVector.length).fill(0)];
-        }
-      }
-     
-      return finalFeatureVector;
-    });
-    const totalValues = inputSequence.flat().length;
-    const expectedValues = SEQUENCE_LENGTH * 348;
-   
-    if (totalValues !== expectedValues) {
-      throw new Error(`Lỗi dimension: có ${totalValues} values, cần ${expectedValues} values`);
-    }
-    const output = await this.predict(inputSequence);
-    const prediction = this.decodeOutput(output);
-      const tripleService = new TripleGroupAnalysisService();
-const triplePred = await tripleService.generateTripleGroupPrediction(nextDayStr);
-if (triplePred) {
-  prediction.pos3 = triplePred.topTram.filter(d => prediction.pos3.includes(d)); // Ví dụ filter pos3-5
-  prediction.pos4 = triplePred.topChuc.filter(d => prediction.pos4.includes(d));
-  prediction.pos5 = triplePred.topDonVi.filter(d => prediction.pos5.includes(d));
-}
-    const latestDay = latestSequenceDays[latestSequenceDays.length - 1];
-    const nextDayStr = DateTime.fromFormat(latestDay, 'dd/MM/yyyy').plus({ days: 1 }).toFormat('dd/MM/yyyy');
-    const predictionRecord = {
-      ngayDuDoan: nextDayStr,
-      ...prediction,
-      danhDauDaSo: false,
-      modelVersion: NN_MODEL_NAME,
-      createdAt: new Date(),
-      rawProbabilities: output,
-      confidenceScore: this.calculateConfidence(output)
-    };
-    await NNPrediction.findOneAndUpdate(
-      { ngayDuDoan: nextDayStr },
-      predictionRecord,
-      { upsert: true, new: true }
-    );
-    console.log(`Đã tạo dự đoán cho ${nextDayStr} với confidence: ${predictionRecord.confidenceScore}`);
-    return {
-      message: `TensorFlow LSTM đã tạo dự đoán cho ngày ${nextDayStr}.`,
-      ngayDuDoan: nextDayStr,
-      prediction: prediction,
-      confidence: predictionRecord.confidenceScore
-    };
   }
+  const results = await Result.find().lean();
+  if (results.length < SEQUENCE_LENGTH) {
+    throw new Error(`Không đủ dữ liệu. Cần ít nhất ${SEQUENCE_LENGTH} ngày.`);
+  }
+  const grouped = {};
+  results.forEach(r => {
+    if (!grouped[r.ngay]) grouped[r.ngay] = [];
+    grouped[r.ngay].push(r);
+  });
+  const days = Object.keys(grouped).sort((a, b) => this.dateKey(a).localeCompare(this.dateKey(b)));
+  const latestSequenceDays = days.slice(-SEQUENCE_LENGTH);
+  console.log(`🔍 Chuẩn bị dữ liệu dự đoán từ ${latestSequenceDays.length} ngày gần nhất`);
+  const previousDays = [];
+  const inputSequence = latestSequenceDays.map(day => {
+    const dayResults = grouped[day] || [];
+    const prevDays = previousDays.slice();
+    previousDays.push(dayResults);
+   
+    const basicFeatures = this.featureService.extractAllFeatures(dayResults, prevDays, day);
+    const advancedFeatures = this.advancedFeatureEngineer.extractPremiumFeatures(dayResults, prevDays);
+   
+    let finalFeatureVector = [...basicFeatures, ...Object.values(advancedFeatures).flat()];
+   
+    const EXPECTED_SIZE = 348;
+    if (finalFeatureVector.length !== EXPECTED_SIZE) {
+      if (finalFeatureVector.length > EXPECTED_SIZE) {
+        finalFeatureVector = finalFeatureVector.slice(0, EXPECTED_SIZE);
+      } else {
+        finalFeatureVector = [...finalFeatureVector, ...Array(EXPECTED_SIZE - finalFeatureVector.length).fill(0)];
+      }
+    }
+   
+    return finalFeatureVector;
+  });
+  const totalValues = inputSequence.flat().length;
+  const expectedValues = SEQUENCE_LENGTH * 348;
+ 
+  if (totalValues !== expectedValues) {
+    throw new Error(`Lỗi dimension: có ${totalValues} values, cần ${expectedValues} values`);
+  }
+  const output = await this.predict(inputSequence);
+  const prediction = this.decodeOutput(output);
+  const latestDay = latestSequenceDays[latestSequenceDays.length - 1];
+  const nextDayStr = DateTime.fromFormat(latestDay, 'dd/MM/yyyy').plus({ days: 1 }).toFormat('dd/MM/yyyy');
+
+  // Hybrid với Triple Group (sau khi có nextDayStr)
+  const tripleService = new TripleGroupAnalysisService();
+  const triplePred = await tripleService.generateTripleGroupPrediction(nextDayStr);
+  if (triplePred) {
+    prediction.pos3 = triplePred.topTram.filter(d => prediction.pos3.includes(d)); // Ví dụ filter pos3-5
+    prediction.pos4 = triplePred.topChuc.filter(d => prediction.pos4.includes(d));
+    prediction.pos5 = triplePred.topDonVi.filter(d => prediction.pos5.includes(d));
+  }
+  const predictionRecord = {
+    ngayDuDoan: nextDayStr,
+    ...prediction,
+    danhDauDaSo: false,
+    modelVersion: NN_MODEL_NAME,
+    createdAt: new Date(),
+    rawProbabilities: output,
+    confidenceScore: this.calculateConfidence(output)
+  };
+  await NNPrediction.findOneAndUpdate(
+    { ngayDuDoan: nextDayStr },
+    predictionRecord,
+    { upsert: true, new: true }
+  );
+  console.log(`✅ Đã tạo dự đoán cho ${nextDayStr} với confidence: ${predictionRecord.confidenceScore}`);
+  return {
+    message: `TensorFlow LSTM đã tạo dự đoán cho ngày ${nextDayStr}.`,
+    ngayDuDoan: nextDayStr,
+    prediction: prediction,
+    confidence: predictionRecord.confidenceScore
+  };
+}
 
   // =================================================================
   // TÍNH ĐỘ TIN CẬY
