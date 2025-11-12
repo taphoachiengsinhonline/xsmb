@@ -1,27 +1,28 @@
-const TripleGroupAnalysisService = require('../services/tripleGroupAnalysisService');
+//const TripleGroupAnalysisService = require('../services/tripleGroupAnalysisService');
+const AdvancedPatternAnalysisService = require('../services/advancedPatternAnalysisService');
 const TripleGroupPrediction = require('../models/TripleGroupPrediction');
 const Result = require('../models/Result');
 
-const tripleGroupService = new TripleGroupAnalysisService();
-
+//const tripleGroupService = new TripleGroupAnalysisService();
+const advancedPatternService = new AdvancedPatternAnalysisService();
 /**
  * Tạo dự đoán mới cho ngày tiếp theo
  */
 exports.generatePrediction = async (req, res) => {
     try {
-        console.log('🎯 [Controller] Bắt đầu tạo dự đoán Triple Group (BỎ QUA CACHE)...');
+        console.log('🎯 [Controller] Bắt đầu tạo dự đoán bằng PHƯƠNG PHÁP NÂNG CAO...');
         
-        // SỬA Ở ĐÂY: Thêm tham số 'true' để buộc tính toán lại
-        const prediction = await tripleGroupService.generateTripleGroupPrediction(null, true); 
+        // SỬA ĐỔI: Gọi service mới
+        const prediction = await advancedPatternService.generatePrediction();
         
         res.json({
             success: true,
-            message: 'Dự đoán Triple Group đã được TẠO MỚI thành công',
+            message: 'Dự đoán theo phương pháp Nâng Cao đã được tạo thành công',
             prediction: prediction,
             timestamp: new Date().toISOString()
         });
     } catch (error) {
-        console.error('❌ [Controller] Lỗi generatePrediction:', error);
+        console.error('❌ [Controller] Lỗi generatePrediction (Nâng cao):', error);
         res.status(500).json({
             success: false,
             message: 'Lỗi khi tạo dự đoán: ' + error.message,
@@ -34,27 +35,26 @@ exports.generatePrediction = async (req, res) => {
 /**
  * Tạo dự đoán với học hỏi từ lịch sử
  */
-exports.generatePredictionWithLearning = async (req, res) => {
+exports.generateHistoricalPredictions = async (req, res) => {
     try {
-        console.log('🧠 [Controller] Tạo dự đoán với học hỏi...');
+        console.log('🕐 [Controller] Bắt đầu tạo dự đoán lịch sử (PHƯƠNG PHÁP NÂNG CAO)...');
         
-        const prediction = await tripleGroupService.generatePredictionWithLearning();
-        
+        // Logic tạo lịch sử sẽ phức tạp hơn, cần lặp qua các ngày và gọi generatePrediction(targetDate)
+        // Tạm thời để đơn giản, chúng ta chỉ gọi cho ngày tiếp theo
+        const prediction = await advancedPatternService.generatePrediction();
+
         res.json({
             success: true,
-            message: 'Dự đoán Triple Group đã được tạo với học hỏi từ lịch sử',
-            prediction: prediction,
-            learning: {
-                learnedFromHistory: true,
-                historicalDataUsed: true
-            },
+            message: `(DEMO) Đã tạo 1 dự đoán lịch sử thành công`,
+            created: 1,
+            total: 1,
             timestamp: new Date().toISOString()
         });
     } catch (error) {
-        console.error('❌ [Controller] Lỗi generatePredictionWithLearning:', error);
+        console.error('❌ [Controller] Lỗi generateHistoricalPredictions (Nâng cao):', error);
         res.status(500).json({
             success: false,
-            message: 'Lỗi khi tạo dự đoán với học hỏi: ' + error.message,
+            message: 'Lỗi khi tạo dự đoán lịch sử: ' + error.message,
             timestamp: new Date().toISOString()
         });
     }
