@@ -67,11 +67,221 @@ const MAX_TRUST_SCORE = 5.0;
  * PHẦN 1: CÁC MODULE PHÂN TÍCH RIÊNG LẺ
  * ================================================================= */
 
-const runMethodGoc = (prevDayResults) => {
-  const counts = { tram: {}, chuc: {}, donvi: {} }; const chiTietGoc = [];
-  prevDayResults.forEach((r, idx) => { const num = String(r.so).padStart(3, '0').slice(-3); const [tram, chuc, donvi] = num.split(''); if (tram) counts.tram[tram] = (counts.tram[tram] || 0) + 1; if (chuc) counts.chuc[chuc] = (counts.chuc[chuc] || 0) + 1; if (donvi) counts.donvi[donvi] = (counts.donvi[donvi] || 0) + 1; chiTietGoc.push({ number: r.so, positionInPrize: idx, tram, chuc, donvi, weight: 1 }); });
-  const generatePrediction = (initialCounts) => { const allDigits=['0','1','2','3','4','5','6','7','8','9']; const allCounts=allDigits.map(d=>({k:d,v:initialCounts[d]||0})); const top5Hot=[...allCounts].sort((a,b)=>b.v-a.v).slice(0,5).map(o=>o.k); const top5Cold=[...allCounts].sort((a,b)=>a.v-b.v).slice(0,5).map(o=>o.k); const keeperSet=allDigits.filter(d=>!top5Cold.includes(d)); const intersection=top5Hot.filter(d=>keeperSet.includes(d)); const remainingKeepers=keeperSet.filter(d=>!intersection.includes(d)); return [...intersection,...remainingKeepers].slice(0,5); };
-  return { topTram: generatePrediction(counts.tram), topChuc: generatePrediction(counts.chuc), topDonVi: generatePrediction(counts.donvi), chiTietGoc };
+const PRIZE_ORDER = ['ĐB','G1','G2a','G2b','G3a','G3b','G3c','G3d','G3e','G3f','G4a','G4b','G4c','G4d','G5a','G5b','G5c','G5d','G5e','G5f','G6a','G6b','G6c','G7a','G7b','G7c','G7d'];
+
+const GROUP_STRUCTURE = {
+    LARGE_1: {
+        SMALL_1A: ['ĐB', 'G1', 'G2a'],
+        SMALL_1B: ['G2b', 'G3a', 'G3b'],
+        SMALL_1C: ['G3c', 'G3d', 'G3e'],
+    },
+    LARGE_2: {
+        SMALL_2A: ['G3f', 'G4a', 'G4b'],
+        SMALL_2B: ['G4c', 'G4d', 'G5a'],
+        SMALL_2C: ['G5b', 'G5c', 'G5d'],
+    },
+    LARGE_3: {
+        SMALL_3A: ['G5e', 'G5f', 'G6a'],
+        SMALL_3B: ['G6b', 'G6c', 'G7a'],
+        SMALL_3C: ['G7b', 'G7c', 'G7d'],
+    }
+};
+
+/**
+ * Truy vết lịch sử cho một vị trí cụ thể của GĐB.
+ * @param {number} positionIndex - Vị trí của số trong GĐB (0-4).
+ * @param {Array<string>} days - Danh sách các ngày đã sắp xếp.
+ * @param {object} groupedResults - Dữ liệu kết quả được nhóm theo ngày.
+ * @param {number} lookback - Số ngày xem lại.
+ * @returns {Map<string, Array<object>>} - Map chứa thông tin truy vết cho mỗi ngày.
+ */
+const performHistoricalTraceback = (positionIndex, days, groupedResults, lookback = 7) => {
+    const tracebackData = new Map();
+    const relevantDays = days.slice(0, lookback + 1);
+
+    for (let i = 0; i < relevantDays.length - 1; i++) {
+        const todayStr = relevantDays[i];
+        const yesterdayStr = relevantDays[i+1];
+
+        const todayResults = groupedResults[todayStr] || [];
+        const yesterdayResults = groupedResults[yesterdayStr] || [];
+
+        const todayDB = todayResults.find(r => r.giai === 'ĐB');
+        if (!todayDB || !todayDB.so || String(todayDB.so).length < 5) continue;
+        
+        const targetDigit = String(todayDB.so).padStart(5,'0')[positionIndex];
+        const hits = [];
+
+        for (const prizeResult of yesterdayResults) {
+            const numStr = String(prizeResult.so || '');
+            for (let digitIdx = 0; digitIdx < numStr.length; digitIdx++) {
+                if (numStr[digitIdx] === targetDigit) {
+                    hits.push({
+                        prize: prizeResult.giai,
+                        positionInPrize: digitIdx,
+                        digit: targetDigit
+                    });
+                }
+            }
+        }
+        tracebackData.set(todayStr, hits);
+    }
+    return tracebackData;
+};
+
+/**
+ * Tính điểm xu hướng cho một nhóm nhỏ.
+ * @param {Array<object>} hits - Các lần "ăn" của nhóm nhỏ.
+ * @returns {number} - Tổng điểm xu hướng.
+ */
+const findPatternScore = (hits) => {
+    let score = 0;
+    if (!hits || hits.length === 0) return 0;
+
+    const prizeIndices = hits.map(h => PRIZE_ORDER.indexOf(h.prize));
+
+    // 1. Điểm Tần suất & Gần đây: Hit gần đây có điểm cao hơn
+    score += hits.length * 1.5; // Mỗi hit được 1.5 điểm
+    if (hits.some(h => h.dayIndex === 0)) score += 2; // Hit ngày gần nhất
+    if (hits.some(h => h.dayIndex === 1)) score += 1;
+
+    // 2. Điểm Tiến triển: Kiểm tra xem "cầu" có đi lên các giải cao hơn không
+    for (let i = 0; i < prizeIndices.length - 1; i++) {
+        if (prizeIndices[i] < prizeIndices[i+1]) {
+            score += 1; // Hướng lên GĐB
+        }
+    }
+
+    // 3. Điểm Chu kỳ (đơn giản hóa): kiểm tra có lặp lại không
+    const uniqueDays = new Set(hits.map(h => h.dayIndex));
+    if (uniqueDays.size > 1 && hits.length / uniqueDays.size > 1.2) {
+        score += 2; // Có sự lặp lại
+    }
+
+    return score;
+}
+
+/**
+ * Phân tích một nhóm lớn để tìm ra các số tiềm năng.
+ * @param {string} largeGroupName - Tên nhóm lớn (vd: 'LARGE_1').
+ * @param {Map} tracebackData - Dữ liệu truy vết.
+ * @param {Array<string>} days - Danh sách ngày.
+ * @returns {Array<string>} - Các số được giữ lại.
+ */
+const analyzeLargeGroup = (largeGroupName, tracebackData, days) => {
+    const smallGroups = GROUP_STRUCTURE[largeGroupName];
+    const smallGroupScores = {};
+    const smallGroupDigits = {};
+
+    // 1. Thu thập dữ liệu và tính điểm cho từng nhóm nhỏ
+    for (const smallGroupName in smallGroups) {
+        const prizesInSmallGroup = smallGroups[smallGroupName];
+        smallGroupScores[smallGroupName] = 0;
+        const digits = new Set();
+        const hits = [];
+        
+        tracebackData.forEach((dayHits, dayStr) => {
+            const dayIndex = days.indexOf(dayStr);
+            dayHits.forEach(hit => {
+                if (prizesInSmallGroup.includes(hit.prize)) {
+                    digits.add(hit.digit);
+                    hits.push({ ...hit, dayIndex });
+                }
+            });
+        });
+        smallGroupDigits[smallGroupName] = [...digits].sort();
+        smallGroupScores[smallGroupName] = findPatternScore(hits);
+    }
+    
+    // 2. Chọn nhóm nhỏ "sáng" nhất dựa trên điểm số
+    const bestSmallGroup = Object.keys(smallGroupScores).reduce((a, b) => smallGroupScores[a] > smallGroupScores[b] ? a : b);
+    let keeperDigits = new Set(smallGroupDigits[bestSmallGroup]);
+
+    // 3. Áp dụng logic đặc biệt cho Nhóm 3
+    if (largeGroupName === 'LARGE_3') {
+        const allDigitsInGroup3 = [].concat(...Object.values(smallGroupDigits));
+        const digitCounts = allDigitsInGroup3.reduce((acc, digit) => {
+            acc[digit] = (acc[digit] || 0) + 1;
+            return acc;
+        }, {});
+
+        const excludedByCount = Object.keys(digitCounts).filter(d => digitCounts[d] === 3);
+        const initialKeepers = Object.keys(digitCounts).filter(d => digitCounts[d] <= 2);
+        
+        // Giao giữa tập số còn lại và tập số của nhóm "sáng" nhất
+        const finalKeepers = initialKeepers.filter(d => keeperDigits.has(d));
+        return finalKeepers;
+    }
+
+    return [...keeperDigits];
+};
+
+
+/**
+ * Hàm chính để phân tích cho 1 vị trí GĐB
+ */
+const analyzeSinglePosition = (positionIndex, days, groupedResults) => {
+    // 1. Truy vết lịch sử
+    const tracebackData = performHistoricalTraceback(positionIndex, days, groupedResults, 7);
+
+    // 2. Phân tích từng nhóm lớn
+    const keepersG1 = analyzeLargeGroup('LARGE_1', tracebackData, days);
+    const keepersG2 = analyzeLargeGroup('LARGE_2', tracebackData, days);
+    const keepersG3 = analyzeLargeGroup('LARGE_3', tracebackData, days);
+    
+    // 3. Tổng hợp kết quả từ 3 nhóm lớn
+    const combined = [...keepersG1, ...keepersG2, ...keepersG3];
+    const combinedCounts = combined.reduce((acc, digit) => {
+        acc[digit] = (acc[digit] || 0) + 1;
+        return acc;
+    }, {});
+
+    let candidateDigits = Object.keys(combinedCounts).filter(d => combinedCounts[d] >= 2);
+
+    // 4. Lọc cuối cùng nếu vẫn còn > 5 số
+    if (candidateDigits.length > 5) {
+        const latestResults = groupedResults[days[0]] || [];
+        const ganPrizes = {
+            'G7b': latestResults.find(r => r.giai === 'G7b')?.so || '',
+            'G7a': latestResults.find(r => r.giai === 'G7a')?.so || '',
+            'G7d': latestResults.find(r => r.giai === 'G7d')?.so || '',
+            'G6b': latestResults.find(r => r.giai === 'G6b')?.so || ''
+        };
+        const exclusionDigits = new Set(Object.values(ganPrizes).join('').split(''));
+        candidateDigits = candidateDigits.filter(d => !exclusionDigits.has(d));
+    }
+
+    return candidateDigits.slice(0, 5);
+};
+
+
+
+// =================================================================
+// HÀM runMethodGoc ĐÃ ĐƯỢC VIẾT LẠI HOÀN TOÀN
+// =================================================================
+const runMethodGoc = (prevDayResults, days, groupedResults) => {
+    // prevDayResults không còn được dùng trực tiếp, thay vào đó là groupedResults và days
+    // để hàm có cái nhìn toàn cảnh về lịch sử.
+    
+    console.log("🔬 Running Advanced 'Method Goc' Analysis...");
+
+    // Phân tích cho 3 vị trí cuối của GĐB
+    // Vị trí 2: Hàng Trăm
+    const topTram = analyzeSinglePosition(2, days, groupedResults);
+    // Vị trí 3: Hàng Chục
+    const topChuc = analyzeSinglePosition(3, days, groupedResults);
+    // Vị trí 4: Hàng Đơn vị
+    const topDonVi = analyzeSinglePosition(4, days, groupedResults);
+
+    // Ghi chú: Logic mới này quá phức tạp để tạo ra chi tiết `chiTietGoc` như
+    // phương pháp cũ (vốn chỉ đếm số đơn giản). Do đó, chúng ta sẽ trả về
+    // kết quả dự đoán cuối cùng.
+    return { 
+      topTram: topTram.length > 0 ? topTram : ['0','1','2','3','4'], // Fallback
+      topChuc: topChuc.length > 0 ? topChuc : ['2','3','4','5','6'], // Fallback
+      topDonVi: topDonVi.length > 0 ? topDonVi : ['5','6','7','8','9'], // Fallback
+      chiTietGoc: [] // Bỏ trống vì logic đã thay đổi
+    };
 };
 const runMethodDeep30Day = (endDateIndex, days, groupedResults, prevDayGDB) => {
     const LOOKBACK_DAYS = 30; const TIME_DECAY_FACTOR = 0.98; const SCORE_WEIGHTS = { TIME_DECAY_FREQUENCY: 1.5, GAP: 1.0, PATTERN: 2.0 }; const allDigits=['0','1','2','3','4','5','6','7','8','9'];
@@ -342,6 +552,7 @@ exports.generateTripleGroupPrediction = async (req, res) => {
         });
     }
 };
+
 
 
 
