@@ -38,53 +38,61 @@ exports.generatePrediction = async (req, res) => {
 exports.generateHistoricalPredictions = async (req, res) => {
     try {
         console.log('🕐 [Controller] Bắt đầu tạo dự đoán lịch sử (PHƯƠNG PHÁP NÂNG CAO)...');
+
+        // 1. Lấy tất cả các ngày duy nhất có kết quả trong DB
+        const allResultDates = await Result.distinct('ngay');
+        if (allResultDates.length < 8) { // Cần ít nhất vài ngày để có dữ liệu phân tích
+            return res.status(400).json({ success: false, message: 'Không đủ dữ liệu lịch sử để tạo dự đoán.' });
+        }
         
-        // Logic tạo lịch sử sẽ phức tạp hơn, cần lặp qua các ngày và gọi generatePrediction(targetDate)
-        // Tạm thời để đơn giản, chúng ta chỉ gọi cho ngày tiếp theo
-        const prediction = await advancedPatternService.generatePrediction();
+        // 2. Sắp xếp các ngày theo thứ tự từ cũ đến mới
+        const sortedDates = allResultDates.sort((a, b) => {
+            const dateA = new Date(a.split('/').reverse().join('-'));
+            const dateB = new Date(b.split('/').reverse().join('-'));
+            return dateA - dateB;
+        });
+
+        let createdCount = 0;
+        let errorCount = 0;
+        
+        console.log(`[Controller] Sẽ xử lý ${sortedDates.length} ngày...`);
+
+        // 3. Lặp qua từng ngày để tạo dự đoán
+        // Bỏ qua vài ngày đầu tiên vì chúng không có đủ lịch sử phía trước
+        for (let i = 7; i < sortedDates.length; i++) {
+            const targetDate = sortedDates[i];
+            try {
+                // Gọi service mới để tạo dự đoán cho ngày cụ thể này
+                console.log(`... Đang tạo cho ngày: ${targetDate}`);
+                await advancedPatternService.generatePrediction(targetDate);
+                createdCount++;
+            } catch (innerError) {
+                console.error(`❌ [Controller] Lỗi khi xử lý ngày ${targetDate}:`, innerError.message);
+                errorCount++;
+            }
+        }
+
+        const successMessage = `Đã tạo ${createdCount} dự đoán lịch sử thành công. Gặp lỗi ở ${errorCount} ngày.`;
+        console.log(`✅ [Controller] Hoàn thành. ${successMessage}`);
 
         res.json({
             success: true,
-            message: `(DEMO) Đã tạo 1 dự đoán lịch sử thành công`,
-            created: 1,
-            total: 1,
+            message: successMessage,
+            created: createdCount,
+            errors: errorCount,
+            total: sortedDates.length,
             timestamp: new Date().toISOString()
         });
     } catch (error) {
-        console.error('❌ [Controller] Lỗi generateHistoricalPredictions (Nâng cao):', error);
+        console.error('❌ [Controller] Lỗi nghiêm trọng trong generateHistoricalPredictions:', error);
         res.status(500).json({
             success: false,
-            message: 'Lỗi khi tạo dự đoán lịch sử: ' + error.message,
+            message: 'Lỗi server khi tạo dự đoán lịch sử: ' + error.message,
             timestamp: new Date().toISOString()
         });
     }
 };
 
-/**
- * Tạo dự đoán cho toàn bộ lịch sử
- */
-exports.generateHistoricalPredictions = async (req, res) => {
-    try {
-        console.log('🕐 [Controller] Bắt đầu tạo dự đoán lịch sử...');
-        
-        const result = await tripleGroupService.generateHistoricalPredictions();
-        
-        res.json({
-            success: true,
-            message: `Đã tạo ${result.created} dự đoán lịch sử thành công`,
-            created: result.created,
-            total: result.total,
-            timestamp: new Date().toISOString()
-        });
-    } catch (error) {
-        console.error('❌ [Controller] Lỗi generateHistoricalPredictions:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Lỗi khi tạo dự đoán lịch sử: ' + error.message,
-            timestamp: new Date().toISOString()
-        });
-    }
-};
 
 /**
  * Lấy danh sách dự đoán với phân trang và lọc
