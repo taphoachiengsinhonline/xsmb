@@ -441,7 +441,8 @@ exports.trainHistoricalPredictions = async (req, res) => {
             const trustScores = prevPrediction?.diemTinCay || {};
             ALL_METHODS.forEach(m => { if (trustScores[m] === undefined) trustScores[m] = INITIAL_TRUST_SCORE; });
             const prevDayResults = grouped[prevDayStr] || []; const prevDayGDB = prevDayResults.find(r => r.giai === 'ĐB');
-            const allMethodResults = { [METHOD_GOC]: runMethodGoc(prevDayResults), [METHOD_DEEP_30_DAY]: runMethodDeep30Day(i, days, grouped, prevDayGDB), [METHOD_GDB_14_DAY]: runMethodGDB14Day(i, days, grouped), [METHOD_TONG_CHAM]: runMethodTongCham(i, days, grouped), [METHOD_BAC_NHO]: runMethodBacNho(i, days, grouped, prevDayResults), [METHOD_CHAN_LE]: runMethodChanLe(i, days, grouped, prevDayGDB), };
+            const allMethodResults = {
+            [METHOD_GOC]: runMethodGoc(prevDayResults, days.slice(0, i), grouped), [METHOD_DEEP_30_DAY]: runMethodDeep30Day(i, days, grouped, prevDayGDB), [METHOD_GDB_14_DAY]: runMethodGDB14Day(i, days, grouped), [METHOD_TONG_CHAM]: runMethodTongCham(i, days, grouped), [METHOD_BAC_NHO]: runMethodBacNho(i, days, grouped, prevDayResults), [METHOD_CHAN_LE]: runMethodChanLe(i, days, grouped, prevDayGDB), };
             const finalPrediction = runMetaLearner(allMethodResults, trustScores);
             const intersectionAnalysis = runIntersectionAnalysis(allMethodResults);
             const groupExclusionAnalysis = runGroupExclusionAnalysis(prevPrediction, prevDayGDB, allMethodResults);
@@ -552,6 +553,7 @@ exports.generateTripleGroupPrediction = async (req, res) => {
         });
     }
 };
+
 
 
 
