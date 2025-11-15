@@ -33,33 +33,42 @@ class PatternAnalysisService {
      * @returns {Promise<object|null>} - Một object chứa dự đoán cho 5 vị trí hoặc null nếu có lỗi.
      */
     async getTransformerPrediction() {
-        try {
-            // Chuẩn bị dữ liệu lịch sử 90 ngày gần nhất để gửi đi
-            // Flatten the results to a simple list of objects, theo yêu cầu của Python service
-            const historyData = this.sortedDates.slice(0, 90).flatMap(date => {
-                return this.resultsByDate.get(date) || [];
-            });
-            
-            // Nếu không đủ dữ liệu thì không gọi
-            if (historyData.length < 27 * 7) { // Yêu cầu ít nhất 7 ngày
-                console.warn('⚠️ [Transformer AI] Không đủ dữ liệu lịch sử để gọi, bỏ qua.');
-                return null;
-            }
+    try {
+        // --- THAY ĐỔI LỚN Ở ĐÂY ---
+        // 1. Lấy dữ liệu 90 ngày
+        const historyDays = this.sortedDates.slice(0, 90);
+        
+        // 2. Tự tiền xử lý dữ liệu ngay tại Node.js
+        console.log(`[Node.js Preprocessing] Chuẩn bị chuỗi text từ ${historyDays.length} ngày...`);
+        let inputText = '';
+        for (const date of historyDays.reverse()) { // Xử lý từ cũ -> mới
+            const dayResults = this.resultsByDate.get(date) || [];
+            // Nối tất cả các số của ngày đó thành một chuỗi
+            inputText += dayResults.map(r => String(r.so || '')).join('');
+        }
+        
+        if (inputText.length < 100) { // Kiểm tra đơn giản
+             console.warn('⚠️ [Transformer AI] Dữ liệu sau tiền xử lý quá ngắn, bỏ qua.');
+             return null;
+        }
 
-            console.log(`🤖 [Transformer AI] Đang gửi ${historyData.length} bản ghi lịch sử đến service...`);
+        console.log(`🤖 [Transformer AI] Đang gửi chuỗi text (dài ${inputText.length} ký tự) đến service...`);
 
-            const response = await axios.post(TRANSFORMER_AI_SERVICE_URL, {
-                history: historyData 
-            }, { timeout: 15000 }); // Thêm timeout 15 giây
+        // 3. Gửi đi chuỗi text đã được xử lý
+        const response = await axios.post(TRANSFORMER_AI_SERVICE_URL, {
+            // Thay vì `history: historyData`, gửi `input_text`
+            input_text: inputText 
+        }, { timeout: 30000 }); // Tăng timeout lên 30 giây
 
-            if (response.data && response.data.success) {
-                console.log('✅ [Transformer AI] Nhận dự đoán thành công!');
-                return response.data.prediction; // Trả về object вида { hangChucNgan: 5, ... }
-            } else {
-                console.error('❌ [Transformer AI] Service trả về lỗi:', response.data.message);
-                return null;
-            }
-        } catch (error) {
+        // ... phần còn lại giữ nguyên
+        if (response.data && response.data.success) {
+            console.log('✅ [Transformer AI] Nhận dự đoán thành công!');
+            return response.data.prediction;
+        } else {
+            console.error('❌ [Transformer AI] Service trả về lỗi:', response.data.message);
+            return null;
+        }
+    } catch (error) {
             console.error('❌ [Transformer AI] Lỗi nghiêm trọng khi gọi Python service:', error.message);
             return null;
         }
