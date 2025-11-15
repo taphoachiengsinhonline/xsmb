@@ -7,7 +7,7 @@ const path = require('path');
 // --- CẤU HÌNH ---
 // Xây dựng đường dẫn tuyệt đối đến file kqxs.html
 // Giả sử file crawlService.js và kqxs.html đều nằm trong cùng thư mục `services`
-const HTML_FILE_PATH = path.resolve(__dirname, 'kqxs.html');
+const HTML_FILE_PATH = path.resolve(__dirname, '22.07.2022den21.05.2023.html');
 
 // --- SCHEMA & MODEL (Đồng bộ hóa với 'Result') ---
 const resultSchema = new mongoose.Schema({
@@ -198,3 +198,4 @@ module.exports = {
 if (require.main === module) {
   runOnceAndExit();
 }
+
