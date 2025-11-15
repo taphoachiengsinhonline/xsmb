@@ -1,4 +1,6 @@
 // File: services/PatternAnalysisService.js
+// File: services/PatternAnalysisService.js
+const axios = require('axios'); // THÊM MỚI: Thư viện để gọi API
 const Result = require('../models/Result');
 const PatternPrediction = require('../models/PatternPrediction');
 const PatternKnowledge = require('../models/PatternKnowledge');
@@ -12,6 +14,9 @@ const WEIGHT_DECREASE_FACTOR = 0.90;
 const MIN_WEIGHT = 0.2;
 const MAX_WEIGHT = 5.0;
 
+// THÊM MỚI: URL của AI Service Transformer bạn vừa deploy
+const TRANSFORMER_AI_SERVICE_URL = 'https://my-transformer-service-production.up.railway.app/predict';
+
 class PatternAnalysisService {
     constructor() {
         this.resultsByDate = new Map();
@@ -19,30 +24,125 @@ class PatternAnalysisService {
         this.knowledge = new Map();
         this.prizeToGroupMap = this.createPrizeToGroupMap();
     }
-
+    
+    // =================================================================
+    // HÀM MỚI: GỌI AI SERVICE TRANSFORMER
+    // =================================================================
     /**
-     * =================================================================
-     * CÁC HÀM API CHÍNH (Được gọi từ Controller)
-     * =================================================================
+     * Gửi yêu cầu đến AI Service Python để lấy dự đoán từ mô hình Transformer.
+     * @returns {Promise<object|null>} - Một object chứa dự đoán cho 5 vị trí hoặc null nếu có lỗi.
      */
+    async getTransformerPrediction() {
+        try {
+            // Chuẩn bị dữ liệu lịch sử 90 ngày gần nhất để gửi đi
+            // Flatten the results to a simple list of objects, theo yêu cầu của Python service
+            const historyData = this.sortedDates.slice(0, 90).flatMap(date => {
+                return this.resultsByDate.get(date) || [];
+            });
+            
+            // Nếu không đủ dữ liệu thì không gọi
+            if (historyData.length < 27 * 7) { // Yêu cầu ít nhất 7 ngày
+                console.warn('⚠️ [Transformer AI] Không đủ dữ liệu lịch sử để gọi, bỏ qua.');
+                return null;
+            }
 
+            console.log(`🤖 [Transformer AI] Đang gửi ${historyData.length} bản ghi lịch sử đến service...`);
+
+            const response = await axios.post(TRANSFORMER_AI_SERVICE_URL, {
+                history: historyData 
+            }, { timeout: 15000 }); // Thêm timeout 15 giây
+
+            if (response.data && response.data.success) {
+                console.log('✅ [Transformer AI] Nhận dự đoán thành công!');
+                return response.data.prediction; // Trả về object вида { hangChucNgan: 5, ... }
+            } else {
+                console.error('❌ [Transformer AI] Service trả về lỗi:', response.data.message);
+                return null;
+            }
+        } catch (error) {
+            console.error('❌ [Transformer AI] Lỗi nghiêm trọng khi gọi Python service:', error.message);
+            return null;
+        }
+    }
+
+    // =================================================================
+    // HÀM LÕI ĐƯỢC NÂNG CẤP ĐỂ TÍCH HỢP TRANSFORMER
+    // =================================================================
+    /**
+     * Hàm lõi để tạo dự đoán cho một ngày CỤ THỂ, đã được nâng cấp để kết hợp 2 AI.
+     * @private
+     */
+    async _generatePredictionForDate(targetDate) {
+        console.log(`[PatternAI] Generating HYBRID prediction for: ${targetDate}...`);
+        
+        // Tải dữ liệu và kiến thức cho lần chạy này
+        const serviceForDate = new PatternAnalysisService();
+        await serviceForDate.loadDataAndKnowledge(9999);
+        const dateIndex = serviceForDate.sortedDates.indexOf(targetDate);
+        if (dateIndex > -1) {
+            serviceForDate.sortedDates = serviceForDate.sortedDates.slice(dateIndex + 1);
+        }
+
+        // BƯỚC 1: Lấy dự đoán từ AI Transformer (chỉ gọi 1 lần)
+        const transformerPrediction = await serviceForDate.getTransformerPrediction();
+
+        const predictions = {};
+        const positions = ['hangChucNgan', 'hangNgan', 'hangTram', 'hangChuc', 'hangDonVi'];
+
+        for (let i = 0; i < positions.length; i++) {
+            const positionKey = positions[i];
+            
+            // BƯỚC 2: Lấy dự đoán từ AI Phân tích Mẫu hình (như cũ)
+            const patternPrediction = await serviceForDate.runAnalysisPipelineForPosition(i);
+            
+            // BƯỚC 3: KẾT HỢP KẾT QUẢ (Ensemble Method)
+            if (transformerPrediction && transformerPrediction[positionKey] !== undefined) {
+                const transformerDigit = String(transformerPrediction[positionKey]);
+                
+                // Logic kết hợp: Ưu tiên đưa số của Transformer lên đầu danh sách
+                // và đảm bảo không bị trùng lặp.
+                const combinedDigits = [
+                    transformerDigit,
+                    ...patternPrediction.promisingDigits.filter(d => d !== transformerDigit)
+                ];
+                
+                patternPrediction.promisingDigits = combinedDigits.slice(0, 5);
+                // Đặt số của Transformer làm "hot digit" để nhấn mạnh
+                patternPrediction.hotDigit = transformerDigit;
+                
+                // Thêm ghi chú vào analysisDetails
+                patternPrediction.analysisDetails.transformerSuggestion = transformerDigit;
+            }
+
+            predictions[positionKey] = patternPrediction;
+        }
+
+        return await PatternPrediction.findOneAndUpdate(
+            { ngayDuDoan: targetDate },
+            { ngayDuDoan: targetDate, ...predictions, hasActualResult: false },
+            { upsert: true, new: true }
+        );
+    }
+        
+    // =================================================================
+    // CÁC HÀM CŨ - Giữ nguyên không thay đổi
+    // (Bao gồm resetAndRebuildAll, learnAndPredictForward, generateHistoricalPredictions, learnFromResults, etc.)
+    // =================================================================
+    
     /**
      * +++ HÀM MỚI: Reset, Huấn luyện lại từ đầu và Tạo dự đoán mới +++
      */
     async resetAndRebuildAll() {
         console.log('💥 [PatternAI] BẮT ĐẦU QUÁ TRÌNH RESET VÀ HUẤN LUYỆN LẠI TOÀN BỘ!');
         
-        // Bước 1: Xóa toàn bộ dự đoán cũ của model này
         console.log('[PatternAI] Bước 1/3: Đang xóa dữ liệu dự đoán cũ...');
         await PatternPrediction.deleteMany({});
         console.log('[PatternAI] Xóa thành công!');
 
-        // Bước 2: Chạy lại Backtest lịch sử
         console.log('[PatternAI] Bước 2/3: Bắt đầu quá trình Backtest lịch sử...');
         const backtestResult = await this.generateHistoricalPredictions();
         console.log(`[PatternAI] Backtest hoàn tất, đã tạo ${backtestResult.created} bản ghi.`);
 
-        // Bước 3: Tạo dự đoán cho ngày tiếp theo
         console.log('[PatternAI] Bước 3/3: Bắt đầu tạo dự đoán cho ngày tiếp theo...');
         const nextDayPrediction = await this.generatePredictionForNextDay();
         console.log(`[PatternAI] Đã tạo dự đoán cho ngày ${nextDayPrediction.ngayDuDoan}.`);
@@ -60,13 +160,11 @@ class PatternAnalysisService {
     async learnAndPredictForward() {
         console.log('📚 [PatternAI] Bắt đầu quy trình: HỌC & DỰ ĐOÁN TIẾN TỚI...');
         
-        // Bước 1: Học từ các kết quả mới nhất
         console.log('[PatternAI] Bước 1/2: Đang học hỏi từ kết quả mới...');
         await this.learnFromResults();
         
-        // Bước 2: Tìm và lấp đầy các ngày chưa có dự đoán
         console.log('[PatternAI] Bước 2/2: Tìm và tạo dự đoán cho các ngày còn thiếu...');
-        await this.loadDataAndKnowledge(ANALYSIS_LOOKBACK_DAYS + 10); // Tải lại dữ liệu mới nhất
+        await this.loadDataAndKnowledge(ANALYSIS_LOOKBACK_DAYS + 10);
 
         const lastPrediction = await PatternPrediction.findOne().sort({ ngayDuDoan: -1 });
         const lastResultDateStr = this.sortedDates[0];
@@ -83,7 +181,6 @@ class PatternAnalysisService {
         if (startDate >= endDate) {
             console.log('[PatternAI] Dữ liệu dự đoán đã được cập nhật. Chỉ tạo cho ngày mai.');
         } else {
-             // Lặp để lấp đầy các ngày ở giữa
             while(startDate < endDate) {
                 startDate = startDate.plus({ days: 1 });
                 const targetDate = startDate.toFormat('dd/MM/yyyy');
@@ -93,41 +190,11 @@ class PatternAnalysisService {
             }
         }
 
-        // Luôn tạo cho ngày tiếp theo
         const finalPrediction = await this.generatePredictionForNextDay();
         predictionsMade.push(finalPrediction);
 
         console.log(`✅ [PatternAI] Quy trình hoàn tất. Đã tạo ${predictionsMade.length} dự đoán mới.`);
         return predictionsMade;
-    }
-
-    /**
-     * Hàm lõi để tạo dự đoán cho một ngày CỤ THỂ
-     * @private
-     */
-    async _generatePredictionForDate(targetDate) {
-        console.log(`[PatternAI] Generating for specific date: ${targetDate}...`);
-        
-        // Tải lại kiến thức và dữ liệu CÓ SẴN TRƯỚC ngày targetDate
-        const serviceForDate = new PatternAnalysisService();
-        await serviceForDate.loadDataAndKnowledge(9999);
-        const dateIndex = serviceForDate.sortedDates.indexOf(targetDate);
-        if (dateIndex > -1) {
-            // Cắt dữ liệu, chỉ giữ lại những gì xảy ra TRƯỚC ngày targetDate
-            serviceForDate.sortedDates = serviceForDate.sortedDates.slice(dateIndex + 1);
-        }
-
-        const predictions = {};
-        const positions = ['hangChucNgan', 'hangNgan', 'hangTram', 'hangChuc', 'hangDonVi'];
-        for (let i = 0; i < positions.length; i++) {
-            predictions[positions[i]] = await serviceForDate.runAnalysisPipelineForPosition(i);
-        }
-
-        return await PatternPrediction.findOneAndUpdate(
-            { ngayDuDoan: targetDate },
-            { ngayDuDoan: targetDate, ...predictions, hasActualResult: false },
-            { upsert: true, new: true }
-        );
     }
         
     /**
@@ -135,9 +202,7 @@ class PatternAnalysisService {
      */
     async generateHistoricalPredictions() {
         console.log('🏛️ [PatternAI] Bắt đầu quá trình Backtest Lịch sử...');
-        
         await this.loadDataAndKnowledge(9999); 
-        
         const historicalDates = [...this.sortedDates].reverse(); 
         
         let createdCount = 0;
@@ -146,34 +211,11 @@ class PatternAnalysisService {
 
         for (let i = ANALYSIS_LOOKBACK_DAYS; i < historicalDates.length; i++) {
             const targetDate = historicalDates[i];
-            
             const actualGDBResult = (this.resultsByDate.get(targetDate) || []).find(r => r.giai === 'ĐB');
             if (!actualGDBResult || !actualGDBResult.so) continue;
 
-            console.log(`\n⏳ Backtesting for date: ${targetDate}...`);
-
-            const timeMachineService = new PatternAnalysisService();
-            const dataForThisRun = historicalDates.slice(0, i); 
-            timeMachineService.sortedDates = [...dataForThisRun].reverse();
-            timeMachineService.resultsByDate = this.resultsByDate;
-            timeMachineService.knowledge = this.knowledge; 
-
-            const predictions = {};
-            const positions = ['hangChucNgan', 'hangNgan', 'hangTram', 'hangChuc', 'hangDonVi'];
-            
-            for (let j = 0; j < positions.length; j++) {
-                predictions[positions[j]] = await timeMachineService.runAnalysisPipelineForPosition(j);
-            }
-
-            await PatternPrediction.findOneAndUpdate(
-                { ngayDuDoan: targetDate },
-                { 
-                    ngayDuDoan: targetDate, 
-                    ...predictions,
-                    hasActualResult: true 
-                },
-                { upsert: true, new: true }
-            );
+            // Chạy hàm tạo dự đoán cho ngày cụ thể (đã bao gồm gọi Transformer)
+            await this._generatePredictionForDate(targetDate);
             createdCount++;
             
             if (createdCount % 20 === 0) {
@@ -239,38 +281,17 @@ class PatternAnalysisService {
         console.log(`✅ [PatternAI] Học hỏi hoàn tất! Đã xử lý ${learnedCount} dự đoán.`);
     }
 
-    /**
-     * =================================================================
-     * PIPELINE PHÂN TÍCH CỐT LÕI VÀ CÁC BƯỚC THỰC THI
-     * =================================================================
-     */
-
-    /**
-     * Pipeline các bước phân tích cho một vị trí GĐB cụ thể
-     */
+    // Phần còn lại của file giữ nguyên
     async runAnalysisPipelineForPosition(gdbPositionIndex) {
-        // 1. Tìm các "dấu vết" lịch sử
         const historicalTraces = this.findHistoricalTraces(gdbPositionIndex);
-
-        // 2. Phát hiện các mẫu hình từ dấu vết
         const detectedPatterns = this.detectPatterns(historicalTraces);
-
-        // 3. Chấm điểm các mẫu hình dựa trên "trí nhớ" (knowledge base)
         const scoredPatterns = this.scorePatterns(detectedPatterns);
-
-        // 4. Đánh giá "sức mạnh" của từng nhóm nhỏ
         const subgroupStrengths = this.evaluateSubgroupStrength(scoredPatterns);
-
-        // 5. Lọc số dựa trên logic các nhóm lớn
         const { g1_digits, g2_digits, g3_digits } = this.filterByGroupLogic(subgroupStrengths);
-        
-        // 6. Giao (intersect) và áp dụng bộ lọc loại trừ cơ bản
         const primaryDigits = this.finalIntersectionAndFiltering({ g1_digits, g2_digits, g3_digits });
         const filteredPrimaryDigits = this.applyAdvancedExclusion(primaryDigits);
-        
         let finalDigits = filteredPrimaryDigits;
 
-        // 7. LOGIC FALLBACK THÔNG MINH: Nếu không đủ 5 số
         if (finalDigits.length < 5) {
             const initialPool = [...new Set([...g1_digits, ...g2_digits, ...g3_digits])];
             const scoredPool = initialPool.map(digit => {
@@ -293,7 +314,6 @@ class PatternAnalysisService {
             finalDigits = [...finalDigits, ...fallbackDigits];
         }
 
-        // 8. Tìm số "hot" nhất từ dàn cuối cùng
         const hotDigit = this.findHotDigit(finalDigits.slice(0, 5), scoredPatterns);
 
         return {
@@ -305,11 +325,10 @@ class PatternAnalysisService {
         };
     }
 
-    // --- CÁC HÀM LÕI ---
-
     async loadDataAndKnowledge(limitDays) {
         console.log(`[PatternAI] Đang tải ${limitDays} ngày dữ liệu...`);
         const results = await Result.find().sort({ 'ngay': -1 }).limit(limitDays * 27).lean();
+        this.resultsByDate.clear();
         results.forEach(r => {
             if (!this.resultsByDate.has(r.ngay)) this.resultsByDate.set(r.ngay, []);
             this.resultsByDate.get(r.ngay).push(r);
@@ -359,61 +378,32 @@ class PatternAnalysisService {
      detectPatterns(traces) {
         const patterns = [];
         const traceArray = [...traces.entries()];
-
-        // --- LOGIC GỐC: STREAK, DIAGONAL, CYCLE ---
         for (let i = 0; i < traceArray.length - 1; i++) {
             const [currentDate, currentData] = traceArray[i];
-            for (const ct of currentData.traces) { // ct = current trace
+            for (const ct of currentData.traces) {
                 for (let j = i + 1; j < traceArray.length; j++) {
                     const [prevDate, prevData] = traceArray[j];
-                    for (const pt of prevData.traces) { // pt = previous trace
-                        
-                        // Mẫu gốc 1: Streak (Chuỗi)
+                    for (const pt of prevData.traces) {
                         if (ct.prize === pt.prize && ct.position === pt.position) {
                             patterns.push({ type: 'streak', key: `${ct.prize}_p${ct.position}`, length: j - i + 1, lastDate: currentDate });
                         }
-
-                        // Mẫu gốc 2: Diagonal Prize (Đường chéo giải)
                         const prizeIndexDiff = PRIZE_ORDER.indexOf(ct.prize) - PRIZE_ORDER.indexOf(pt.prize);
                         if (prizeIndexDiff === 1 && ct.position === pt.position) {
                             patterns.push({ type: 'diagonal_prize', key: `${pt.prize}_to_${ct.prize}`, length: 2, lastDate: currentDate });
                         }
-
-                        // --- LOGIC MỚI BẮT ĐẦU TỪ ĐÂY ---
-
-                        // Mẫu mới 1: Symmetry Patterns (Mẫu Đối xứng)
-                        // Tìm vị trí đối xứng của giải hiện tại trong danh sách 27 giải
                         const currentPrizeIndex = PRIZE_ORDER.indexOf(ct.prize);
                         const symmetricPrizeIndex = PRIZE_ORDER.length - 1 - currentPrizeIndex;
                         const symmetricPrize = PRIZE_ORDER[symmetricPrizeIndex];
-                        // Nếu giải trước đó là giải đối xứng và cùng vị trí -> phát hiện mẫu
                         if (pt.prize === symmetricPrize && ct.position === pt.position) {
-                            patterns.push({ 
-                                type: 'symmetry', 
-                                key: `${ct.prize}_sym_${pt.prize}_p${ct.position}`, 
-                                length: 2, 
-                                lastDate: currentDate 
-                            });
+                            patterns.push({ type: 'symmetry', key: `${ct.prize}_sym_${pt.prize}_p${ct.position}`, length: 2, lastDate: currentDate });
                         }
-
-                        // Mẫu mới 2: Intra-prize Patterns (Mẫu di chuyển trong giải)
-                        // Nếu cùng giải, nhưng khác vị trí -> con số đã "nhảy" vị trí
                         if (ct.prize === pt.prize && ct.position !== pt.position) {
-                           patterns.push({
-                                type: 'intra_prize_move',
-                                key: `${ct.prize}_p${pt.position}_to_p${ct.position}`,
-                                length: 2,
-                                lastDate: currentDate
-                           });
+                           patterns.push({ type: 'intra_prize_move', key: `${ct.prize}_p${pt.position}_to_p${ct.position}`, length: 2, lastDate: currentDate });
                         }
-                        
-                        // --- KẾT THÚC LOGIC MỚI ---
                     }
                 }
             }
         }
-
-        // Mẫu gốc 3: Cycle (Chu kỳ) - Logic này vẫn giữ nguyên
         for (let i = 0; i < traceArray.length; i++) {
             const [date1, data1] = traceArray[i];
             for (let j = i + 2; j < traceArray.length; j++) {
@@ -428,30 +418,17 @@ class PatternAnalysisService {
                 }
             }
         }
-
-        // --- LOGIC MỚI: FREQUENCY PATTERNS (MẪU TẦN SUẤT) ---
-        // Mẫu này phân tích toàn bộ lịch sử trace, không theo cặp như các mẫu trên
         const digitFrequency = new Map();
         traceArray.forEach(([date, data]) => {
             digitFrequency.set(data.digit, (digitFrequency.get(data.digit) || 0) + 1);
         });
-
-        // Tìm các số có tần suất cao
         const sortedFrequency = [...digitFrequency.entries()].sort((a, b) => b[1] - a[1]);
         if (sortedFrequency.length > 0) {
-            // Lấy ra 2 số có tần suất cao nhất để coi là "hot"
             for (let i = 0; i < Math.min(2, sortedFrequency.length); i++) {
                 const [digit, count] = sortedFrequency[i];
-                patterns.push({
-                    type: 'frequency_hot',
-                    key: `digit_${digit}_hot`, // Key này đặc biệt, chỉ định một con số
-                    digit: digit, // Lưu lại con số "hot"
-                    length: count, // Dùng độ dài là tần suất để tính điểm
-                    lastDate: traceArray[0][0] // Ngày gần nhất
-                });
+                patterns.push({ type: 'frequency_hot', key: `digit_${digit}_hot`, digit: digit, length: count, lastDate: traceArray[0][0] });
             }
         }
-
         return this.consolidatePatterns(patterns);
     }
     
@@ -468,7 +445,6 @@ class PatternAnalysisService {
     evaluateSubgroupStrength(scoredPatterns) {
         const strengths = {};
         Object.values(GROUPS).forEach(g => Object.keys(g.subgroups).forEach(sg => strengths[sg] = 0));
-
         for (const p of scoredPatterns) {
             const nextStep = this.getNextStep(p);
             if (nextStep) {
@@ -488,21 +464,17 @@ class PatternAnalysisService {
                 (subgroupStrengths[current] > subgroupStrengths[strongest]) ? current : strongest
             );
         };
-
         const strongestG1 = findStrongestSubgroup('G1');
         const strongestG2 = findStrongestSubgroup('G2');
         const g1_digits = this.getDigitsForSubgroup(strongestG1);
         const g2_digits = this.getDigitsForSubgroup(strongestG2);
-
         const g3a_digits = this.getDigitsForSubgroup('G3A');
         const g3b_digits = this.getDigitsForSubgroup('G3B');
         const g3c_digits = this.getDigitsForSubgroup('G3C');
         const excludedDigits = g3a_digits.filter(d => g3b_digits.includes(d) && g3c_digits.includes(d));
-        
         const strongestG3 = findStrongestSubgroup('G3');
         const strongestG3_digits = this.getDigitsForSubgroup(strongestG3);
         const g3_digits = strongestG3_digits.filter(d => !excludedDigits.includes(d));
-        
         return { g1_digits, g2_digits, g3_digits };
     }
     
@@ -516,6 +488,7 @@ class PatternAnalysisService {
     }
     
     applyAdvancedExclusion(digits) {
+        if (this.sortedDates.length === 0) return digits;
         const lastDayResults = this.resultsByDate.get(this.sortedDates[0]) || [];
         const g7b = lastDayResults.find(r => r.giai === 'G7b');
         const excluded = new Set();
@@ -526,10 +499,10 @@ class PatternAnalysisService {
     findHotDigit(digits, scoredPatterns) {
         if (!digits || digits.length === 0) return null;
         const digitScores = digits.reduce((acc, d) => ({ ...acc, [d]: 0 }), {});
-
         for (const p of scoredPatterns) {
             const nextStep = this.getNextStep(p);
             if (nextStep) {
+                if (this.sortedDates.length === 0) continue;
                 const lastDayResults = this.resultsByDate.get(this.sortedDates[0]) || [];
                 const result = lastDayResults.find(r => r.giai === nextStep.prize);
                 if (result && result.so) {
@@ -544,7 +517,6 @@ class PatternAnalysisService {
         return Object.keys(digitScores).reduce((a, b) => digitScores[a] > digitScores[b] ? a : b, digits[0]);
     }
     
-    // --- CÁC HÀM TIỆN ÍCH ---
     async generatePredictionForNextDay() {
         await this.loadDataAndKnowledge(ANALYSIS_LOOKBACK_DAYS + 5);
         if (this.sortedDates.length === 0) throw new Error("Không đủ dữ liệu.");
@@ -558,6 +530,7 @@ class PatternAnalysisService {
         if (!groupKey) return [];
         const prizes = GROUPS[groupKey].subgroups[subgroupKey].prizes;
         const digits = new Set();
+        if (this.sortedDates.length === 0) return [];
         const lastDayResults = this.resultsByDate.get(this.sortedDates[0]) || [];
         for (const p of prizes) {
             const result = lastDayResults.find(r => r.giai === p);
@@ -584,35 +557,21 @@ class PatternAnalysisService {
         const parts = pattern.key.split('_');
         const prizeKey = parts[0];
         const lastPrizeIndex = PRIZE_ORDER.indexOf(prizeKey);
-
         if (lastPrizeIndex === -1) {
-            // Xử lý các mẫu không có giải trong key, ví dụ như 'frequency_hot'
-            if (pattern.type === 'frequency_hot') {
-                // Mẫu tần suất không gợi ý một GIẢI cụ thể, nó gợi ý một CON SỐ.
-                // Chúng ta sẽ không trả về prize ở đây, nhưng điểm số của mẫu này
-                // sẽ được dùng ở các bước sau để tăng trọng số cho con số "hot".
-                return null;
-            }
+            if (pattern.type === 'frequency_hot') return null;
             return null;
         }
-        
         if (lastPrizeIndex >= PRIZE_ORDER.length - 1) return null;
-
-        // Xử lý các mẫu dựa trên vị trí/giải
         switch (pattern.type) {
             case 'streak':
             case 'cycle':
-            case 'intra_prize_move': // Nếu nó di chuyển trong giải, giả định nó sẽ ở lại giải đó
+            case 'intra_prize_move':
                 return { prize: PRIZE_ORDER[lastPrizeIndex] };
-            
             case 'diagonal_prize':
                 return { prize: PRIZE_ORDER[lastPrizeIndex + 1] };
-
             case 'symmetry':
-                // Nếu mẫu là đối xứng, giả định nó sẽ lặp lại ở phía đối xứng
                 const symmetricIndex = PRIZE_ORDER.length - 1 - lastPrizeIndex;
                 return { prize: PRIZE_ORDER[symmetricIndex] };
-
             default:
                 return null;
         }
@@ -635,7 +594,6 @@ class PatternAnalysisService {
         const current = this.knowledge.get(key) || { 
             patternKey: key, type, weight: 1.0, hitCount: 0, missCount: 0 
         };
-        
         if (isHit) {
             current.weight = Math.min(MAX_WEIGHT, current.weight * WEIGHT_INCREASE_FACTOR);
             current.hitCount++;
