@@ -356,26 +356,102 @@ class PatternAnalysisService {
         return historicalTraces;
     }
 
-    detectPatterns(traces) {
+     detectPatterns(traces) {
         const patterns = [];
         const traceArray = [...traces.entries()];
 
+        // --- LOGIC GỐC: STREAK, DIAGONAL, CYCLE ---
         for (let i = 0; i < traceArray.length - 1; i++) {
-            const [currentDate, currentTraceData] = traceArray[i];
-            const [prevDate, prevTraceData] = traceArray[i + 1];
+            const [currentDate, currentData] = traceArray[i];
+            for (const ct of currentData.traces) { // ct = current trace
+                for (let j = i + 1; j < traceArray.length; j++) {
+                    const [prevDate, prevData] = traceArray[j];
+                    for (const pt of prevData.traces) { // pt = previous trace
+                        
+                        // Mẫu gốc 1: Streak (Chuỗi)
+                        if (ct.prize === pt.prize && ct.position === pt.position) {
+                            patterns.push({ type: 'streak', key: `${ct.prize}_p${ct.position}`, length: j - i + 1, lastDate: currentDate });
+                        }
 
-            for (const ct of currentTraceData.traces) {
-                for (const pt of prevTraceData.traces) {
-                    if (ct.prize === pt.prize && ct.position === pt.position) {
-                        patterns.push({ type: 'streak', key: `${ct.prize}_p${ct.position}`, length: 2, lastDate: currentDate });
-                    }
-                    const prizeIndexDiff = PRIZE_ORDER.indexOf(ct.prize) - PRIZE_ORDER.indexOf(pt.prize);
-                    if (prizeIndexDiff === 1 && ct.position === pt.position) {
-                        patterns.push({ type: 'diagonal_prize', key: `${pt.prize}_to_${ct.prize}`, length: 2, lastDate: currentDate });
+                        // Mẫu gốc 2: Diagonal Prize (Đường chéo giải)
+                        const prizeIndexDiff = PRIZE_ORDER.indexOf(ct.prize) - PRIZE_ORDER.indexOf(pt.prize);
+                        if (prizeIndexDiff === 1 && ct.position === pt.position) {
+                            patterns.push({ type: 'diagonal_prize', key: `${pt.prize}_to_${ct.prize}`, length: 2, lastDate: currentDate });
+                        }
+
+                        // --- LOGIC MỚI BẮT ĐẦU TỪ ĐÂY ---
+
+                        // Mẫu mới 1: Symmetry Patterns (Mẫu Đối xứng)
+                        // Tìm vị trí đối xứng của giải hiện tại trong danh sách 27 giải
+                        const currentPrizeIndex = PRIZE_ORDER.indexOf(ct.prize);
+                        const symmetricPrizeIndex = PRIZE_ORDER.length - 1 - currentPrizeIndex;
+                        const symmetricPrize = PRIZE_ORDER[symmetricPrizeIndex];
+                        // Nếu giải trước đó là giải đối xứng và cùng vị trí -> phát hiện mẫu
+                        if (pt.prize === symmetricPrize && ct.position === pt.position) {
+                            patterns.push({ 
+                                type: 'symmetry', 
+                                key: `${ct.prize}_sym_${pt.prize}_p${ct.position}`, 
+                                length: 2, 
+                                lastDate: currentDate 
+                            });
+                        }
+
+                        // Mẫu mới 2: Intra-prize Patterns (Mẫu di chuyển trong giải)
+                        // Nếu cùng giải, nhưng khác vị trí -> con số đã "nhảy" vị trí
+                        if (ct.prize === pt.prize && ct.position !== pt.position) {
+                           patterns.push({
+                                type: 'intra_prize_move',
+                                key: `${ct.prize}_p${pt.position}_to_p${ct.position}`,
+                                length: 2,
+                                lastDate: currentDate
+                           });
+                        }
+                        
+                        // --- KẾT THÚC LOGIC MỚI ---
                     }
                 }
             }
         }
+
+        // Mẫu gốc 3: Cycle (Chu kỳ) - Logic này vẫn giữ nguyên
+        for (let i = 0; i < traceArray.length; i++) {
+            const [date1, data1] = traceArray[i];
+            for (let j = i + 2; j < traceArray.length; j++) {
+                const [date2, data2] = traceArray[j];
+                const dayDiff = Math.round(DateTime.fromFormat(date1, 'dd/MM/yyyy').diff(DateTime.fromFormat(date2, 'dd/MM/yyyy'), 'days').days);
+                for (const t1 of data1.traces) {
+                    for (const t2 of data2.traces) {
+                        if (t1.prize === t2.prize && t1.position === t2.position) {
+                            patterns.push({ type: 'cycle', key: `${t1.prize}_p${t1.position}_cycle${dayDiff}`, length: 2, lastDate: date1, cycleDays: dayDiff });
+                        }
+                    }
+                }
+            }
+        }
+
+        // --- LOGIC MỚI: FREQUENCY PATTERNS (MẪU TẦN SUẤT) ---
+        // Mẫu này phân tích toàn bộ lịch sử trace, không theo cặp như các mẫu trên
+        const digitFrequency = new Map();
+        traceArray.forEach(([date, data]) => {
+            digitFrequency.set(data.digit, (digitFrequency.get(data.digit) || 0) + 1);
+        });
+
+        // Tìm các số có tần suất cao
+        const sortedFrequency = [...digitFrequency.entries()].sort((a, b) => b[1] - a[1]);
+        if (sortedFrequency.length > 0) {
+            // Lấy ra 2 số có tần suất cao nhất để coi là "hot"
+            for (let i = 0; i < Math.min(2, sortedFrequency.length); i++) {
+                const [digit, count] = sortedFrequency[i];
+                patterns.push({
+                    type: 'frequency_hot',
+                    key: `digit_${digit}_hot`, // Key này đặc biệt, chỉ định một con số
+                    digit: digit, // Lưu lại con số "hot"
+                    length: count, // Dùng độ dài là tần suất để tính điểm
+                    lastDate: traceArray[0][0] // Ngày gần nhất
+                });
+            }
+        }
+
         return this.consolidatePatterns(patterns);
     }
     
@@ -506,19 +582,40 @@ class PatternAnalysisService {
 
     getNextStep(pattern) {
         const parts = pattern.key.split('_');
-        if (parts.length < 2) return null;
-        
         const prizeKey = parts[0];
         const lastPrizeIndex = PRIZE_ORDER.indexOf(prizeKey);
-        if (lastPrizeIndex === -1 || lastPrizeIndex >= PRIZE_ORDER.length - 1) return null;
+
+        if (lastPrizeIndex === -1) {
+            // Xử lý các mẫu không có giải trong key, ví dụ như 'frequency_hot'
+            if (pattern.type === 'frequency_hot') {
+                // Mẫu tần suất không gợi ý một GIẢI cụ thể, nó gợi ý một CON SỐ.
+                // Chúng ta sẽ không trả về prize ở đây, nhưng điểm số của mẫu này
+                // sẽ được dùng ở các bước sau để tăng trọng số cho con số "hot".
+                return null;
+            }
+            return null;
+        }
         
-        if (pattern.type === 'streak') {
-            return { prize: PRIZE_ORDER[lastPrizeIndex] };
+        if (lastPrizeIndex >= PRIZE_ORDER.length - 1) return null;
+
+        // Xử lý các mẫu dựa trên vị trí/giải
+        switch (pattern.type) {
+            case 'streak':
+            case 'cycle':
+            case 'intra_prize_move': // Nếu nó di chuyển trong giải, giả định nó sẽ ở lại giải đó
+                return { prize: PRIZE_ORDER[lastPrizeIndex] };
+            
+            case 'diagonal_prize':
+                return { prize: PRIZE_ORDER[lastPrizeIndex + 1] };
+
+            case 'symmetry':
+                // Nếu mẫu là đối xứng, giả định nó sẽ lặp lại ở phía đối xứng
+                const symmetricIndex = PRIZE_ORDER.length - 1 - lastPrizeIndex;
+                return { prize: PRIZE_ORDER[symmetricIndex] };
+
+            default:
+                return null;
         }
-        if (pattern.type === 'diagonal_prize') {
-            return { prize: PRIZE_ORDER[lastPrizeIndex + 1] };
-        }
-        return null;
     }
 
     createPrizeToGroupMap() {
