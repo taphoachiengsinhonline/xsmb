@@ -7,7 +7,7 @@ const path = require('path');     // THÊM MỚI: Module để xử lý đườn
 
 // THÊM MỚI: Định nghĩa đường dẫn tuyệt đối đến file kqxs.html
 // Giả sử file crawlService.js và kqxs.html đều nằm trong cùng thư mục `services`
-const HTML_FILE_PATH = path.resolve(__dirname, '21.03.2024den14.01.2025.html');
+const HTML_FILE_PATH = path.resolve(__dirname, '15.01.2025den14..11.2025.html');
 
 const MONGO_URI = process.env.MONGO_URI;
 const CRAWL_URL = process.env.CRAWL_URL || 'https://ketqua04.net/so-ket-qua';
@@ -283,6 +283,7 @@ module.exports = {
 if (require.main === module) {
   runFromFileAndExit(); // CHỈNH SỬA: Chạy hàm đọc từ file làm mặc định
 }
+
 
 
 
