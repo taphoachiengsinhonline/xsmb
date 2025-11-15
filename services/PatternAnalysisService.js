@@ -201,49 +201,48 @@ class PatternAnalysisService {
      * TẠO DỰ ĐOÁN CHO TOÀN BỘ LỊCH SỬ (BACKTEST)
      */
     async generateHistoricalPredictions() {
-        console.log('🏛️ [PatternAI] Bắt đầu quá trình Backtest Lịch sử (Đã tối ưu hóa)...');
+        console.log('🏛️ [PatternAI] Bắt đầu quá trình Backtest Lịch sử (Phiên bản cuối cùng)...');
         
-        // BƯỚC 1: Tải toàn bộ dữ liệu và kiến thức một lần duy nhất
+        // BƯỚC 1: Tải toàn bộ dữ liệu MỘT LẦN DUY NHẤT
         await this.loadDataAndKnowledge(9999); 
         
-        const historicalDates = [...this.sortedDates].reverse(); // Sắp xếp từ cũ -> mới
+        // BƯỚC 2: Sắp xếp ngày tháng một cách chính xác, từ CŨ -> MỚI
+        const historicalDates = [...this.sortedDates].reverse(); 
         
         let createdCount = 0;
         const totalDaysToProcess = Math.max(0, historicalDates.length - ANALYSIS_LOOKBACK_DAYS);
         console.log(`[PatternAI] Sẽ xử lý khoảng ${totalDaysToProcess} ngày có đủ dữ liệu.`);
 
-        // BƯỚC 2: Lặp qua từng ngày lịch sử
+        // BƯỚC 3: Lặp qua từng ngày lịch sử theo đúng thứ tự thời gian
         for (let i = ANALYSIS_LOOKBACK_DAYS; i < historicalDates.length; i++) {
             const targetDate = historicalDates[i];
             
-            // Kiểm tra xem ngày đó có kết quả GĐB không
             const actualGDBResult = (this.resultsByDate.get(targetDate) || []).find(r => r.giai === 'ĐB');
             if (!actualGDBResult || !actualGDBResult.so) continue;
 
             console.log(`\n⏳ Backtesting for date: ${targetDate}...`);
 
-            // BƯỚC 3: Tạo một "cỗ máy thời gian" service
-            // Nó sẽ chỉ "nhìn thấy" dữ liệu cho đến trước ngày `targetDate`
+            // BƯỚC 4: Tạo "cỗ máy thời gian" service
             const timeMachineService = new PatternAnalysisService();
+            
+            // Cắt ra chính xác những ngày xảy ra TRƯỚC targetDate
             const dataForThisRun = historicalDates.slice(0, i); 
             
-            // Quan trọng: Truyền dữ liệu và kiến thức đã có sẵn, không đọc lại từ DB
-            timeMachineService.sortedDates = [...dataForThisRun].reverse(); // Dữ liệu lịch sử cho lần chạy này
-            timeMachineService.resultsByDate = this.resultsByDate; // Dùng chung map kết quả đã tải
-            timeMachineService.knowledge = this.knowledge; 
-            // BƯỚC 4: Lấy dự đoán từ cả 2 hệ thống AI cho ngày đó
-            
-            // 4a. Lấy dự đoán từ AI Transformer
+            // Truyền dữ liệu và kiến thức, KHÔNG ĐỌC LẠI TỪ DB
+            // Sửa logic: Chỉ truyền những ngày liên quan vào sortedDates
+            timeMachineService.sortedDates = [...dataForThisRun].reverse(); // Sắp xếp lại từ mới -> cũ cho service
+            timeMachineService.resultsByDate = this.resultsByDate;
+            timeMachineService.knowledge = this.knowledge; // Dùng chung "trí nhớ" để tích lũy
+
+            // BƯỚC 5: Lấy dự đoán từ cả 2 hệ thống AI
             const transformerPrediction = await timeMachineService.getTransformerPrediction();
 
-            // 4b. Lặp qua 5 vị trí để lấy dự đoán từ AI Mẫu hình và kết hợp
             const predictions = {};
             const positions = ['hangChucNgan', 'hangNgan', 'hangTram', 'hangChuc', 'hangDonVi'];
             for (let j = 0; j < positions.length; j++) {
                 const positionKey = positions[j];
                 const patternPrediction = await timeMachineService.runAnalysisPipelineForPosition(j);
 
-                // Logic kết hợp kết quả
                 if (transformerPrediction && transformerPrediction[positionKey] !== undefined) {
                     const transformerDigit = String(transformerPrediction[positionKey]);
                     const combinedDigits = [
@@ -257,13 +256,13 @@ class PatternAnalysisService {
                 predictions[positionKey] = patternPrediction;
             }
 
-            // BƯỚC 5: Lưu kết quả dự đoán vào DB
+            // BƯỚC 6: Lưu kết quả vào DB
             await PatternPrediction.findOneAndUpdate(
                 { ngayDuDoan: targetDate },
                 { 
                     ngayDuDoan: targetDate, 
                     ...predictions,
-                    hasActualResult: true // Vì đang backtest, chắc chắn đã có kết quả
+                    hasActualResult: true 
                 },
                 { upsert: true, new: true }
             );
@@ -277,6 +276,7 @@ class PatternAnalysisService {
         console.log(`✅ [PatternAI] Hoàn tất Backtest! Đã tạo/cập nhật ${createdCount} bản ghi lịch sử.`);
         return { created: createdCount, total: totalDaysToProcess };
     }
+
     /**
      * DẠY CHO AI HỌC TỪ KẾT QUẢ MỚI
      */
