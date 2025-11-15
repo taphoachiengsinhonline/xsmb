@@ -230,8 +230,7 @@ class PatternAnalysisService {
             // Quan trọng: Truyền dữ liệu và kiến thức đã có sẵn, không đọc lại từ DB
             timeMachineService.sortedDates = [...dataForThisRun].reverse(); // Dữ liệu lịch sử cho lần chạy này
             timeMachineService.resultsByDate = this.resultsByDate; // Dùng chung map kết quả đã tải
-            timeMachine-service.knowledge = this.knowledge; // Dùng chung "trí nhớ" để nó được tích lũy
-
+            timeMachineService.knowledge = this.knowledge; 
             // BƯỚC 4: Lấy dự đoán từ cả 2 hệ thống AI cho ngày đó
             
             // 4a. Lấy dự đoán từ AI Transformer
