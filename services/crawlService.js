@@ -2,7 +2,12 @@
 const axios = require('axios');
 const cheerio = require('cheerio');
 const mongoose = require('mongoose');
-// const { DateTime } = require('luxon'); // không bắt buộc ở đây nhưng để nguyên nếu cần dùng sau
+const fs = require('fs');         // THÊM MỚI: Module để đọc file hệ thống
+const path = require('path');     // THÊM MỚI: Module để xử lý đường dẫn file
+
+// THÊM MỚI: Định nghĩa đường dẫn tuyệt đối đến file kqxs.html
+// Giả sử file crawlService.js và kqxs.html đều nằm trong cùng thư mục `services`
+const HTML_FILE_PATH = path.resolve(__dirname, 'kqxs.html');
 
 const MONGO_URI = process.env.MONGO_URI;
 const CRAWL_URL = process.env.CRAWL_URL || 'https://ketqua04.net/so-ket-qua';
@@ -17,16 +22,10 @@ db.on('error', console.error.bind(console, 'MongoDB connection error:'));
 db.once('open', () => console.log('✅ MongoDB connected'));
 
 // ---------- Schema ----------
-const prizeSchema = new mongoose.Schema({
-  ngay: { type: String, required: true }, // dd/mm/yyyy
-  giai: String,
-  so: String,
-  basocuoi: String,
-  haisocuoi: String,
-  chanle: String,
-}, { versionKey: false });
-
+// Lưu ý: Đoạn này đã được sửa để import Model thay vì định nghĩa Schema lại
+// Điều này giúp tránh lỗi "OverwriteModelError" nếu service này được gọi nhiều lần
 const Result = require('../models/Result');
+
 // ---------- Helper: tính C/L từ 3 số ----------
 function getChanLe(numberStr) {
   // numberStr expected exactly 3 digits
@@ -117,9 +116,9 @@ function parseDayResults(dayText, ngay) {
   return resultData;
 }
 
-// ---------- Crawl toàn bộ ----------
+// ---------- Hàm Crawl từ URL (HÀM CŨ, GIỮ NGUYÊN) ----------
 async function extractXsData() {
-  console.log('⏳ Đang lấy dữ liệu từ', CRAWL_URL);
+  console.log('⏳ Đang lấy dữ liệu từ URL', CRAWL_URL);
   try {
     const res = await axios.get(CRAWL_URL, { headers: { 'User-Agent': 'Mozilla/5.0' }, timeout: 20000 });
     const $ = cheerio.load(res.data);
@@ -131,8 +130,6 @@ async function extractXsData() {
     for (let dm of dateMatches) {
       const dateStr = dm[0].replace(/-/g, '/');
       const startPos = dm.index + dm[0].length;
-      // lấy phần text từ ngày này tới ngày tiếp theo (nếu có) để giới hạn parse
-      // tìm vị trí của match tiếp theo
       const nextMatch = dateMatches.find(m => m.index > dm.index);
       const endPos = nextMatch ? nextMatch.index : allText.length;
       const dayText = allText.slice(startPos, endPos);
@@ -148,6 +145,45 @@ async function extractXsData() {
   }
 }
 
+// ---------- HÀM MỚI: Đọc và trích xuất dữ liệu từ file HTML local ----------
+async function extractXsDataFromFile() {
+  console.log('⏳ Đang đọc dữ liệu từ file local:', HTML_FILE_PATH);
+  try {
+    // 1. Kiểm tra file có tồn tại không
+    if (!fs.existsSync(HTML_FILE_PATH)) {
+        throw new Error(`File không tồn tại tại đường dẫn: ${HTML_FILE_PATH}`);
+    }
+
+    // 2. Đọc nội dung file HTML bằng module 'fs'
+    const htmlContent = fs.readFileSync(HTML_FILE_PATH, 'utf8');
+
+    // 3. Sử dụng Cheerio để parse nội dung HTML (giống hệt cách cũ)
+    const $ = cheerio.load(htmlContent);
+    const allText = $.text();
+
+    // 4. Logic parse text từ đây trở đi giống hệt hàm extractXsData
+    const dateMatches = [...allText.matchAll(/\d{1,2}[\/-]\d{1,2}[\/-]\d{4}/g)];
+    const resultData = [];
+
+    for (let dm of dateMatches) {
+      const dateStr = dm[0].replace(/-/g, '/');
+      const startPos = dm.index + dm[0].length;
+      const nextMatch = dateMatches.find(m => m.index > dm.index);
+      const endPos = nextMatch ? nextMatch.index : allText.length;
+      const dayText = allText.slice(startPos, endPos);
+      const dayData = parseDayResults(dayText, dateStr);
+      if (dayData.length) resultData.push(...dayData);
+    }
+
+    console.log(`✅ Đọc file xong, tổng bản ghi thu được: ${resultData.length}`);
+    return resultData;
+  } catch (e) {
+    console.error('Lỗi đọc và trích xuất file:', e && e.message ? e.message : e);
+    return [];
+  }
+}
+
+
 // ---------- Lưu DB: upsert (new inserted sẽ có chanle) ----------
 async function saveToDb(data) {
   if (!Array.isArray(data) || data.length === 0) {
@@ -155,28 +191,32 @@ async function saveToDb(data) {
     return;
   }
 
-  let inserted = 0;
+  let insertedCount = 0;
+  let processedCount = 0;
+
   for (const item of data) {
     try {
-      // SỬA: Prize thành Result
-      await Result.updateOne(
+      const result = await Result.updateOne(
         { ngay: item.ngay, giai: item.giai },
         { $setOnInsert: item },
         { upsert: true }
       );
-      inserted++;
+      if (result.upsertedId) {
+          insertedCount++;
+      }
+      processedCount++;
     } catch (e) {
       console.error('Lỗi insert/update:', e && e.message ? e.message : e, item);
     }
   }
-  console.log(`✅ Lưu xong (tổng phần tử đã xử lý): ${inserted}`);
+  console.log(`✅ Lưu xong! Đã xử lý ${processedCount} bản ghi. Số bản ghi mới được thêm: ${insertedCount}.`);
 }
 
 // ---------- Hàm fix toàn bộ chanle trong DB (cập nhật các bản ghi có chanle rỗng) ----------
 async function fixChanLeInDb() {
   console.log('🔧 Bắt đầu fix chanle cho các bản ghi cũ...');
   try {
-    const cursor = Prize.find({ $or: [{ chanle: '' }, { chanle: null }, { chanle: { $exists: false } }] }).cursor();
+    const cursor = Result.find({ $or: [{ chanle: '' }, { chanle: null }, { chanle: { $exists: false } }] }).cursor();
     let count = 0;
     for (let doc = await cursor.next(); doc != null; doc = await cursor.next()) {
       const baso = doc.basocuoi || '';
@@ -192,28 +232,33 @@ async function fixChanLeInDb() {
   }
 }
 
-// ---------- Nếu chạy trực tiếp file này (node crawlService.js) thì crawl + save ----------
-async function runOnceAndExit() {
+// ---------- CHỈNH SỬA: Hàm chạy chính khi gọi trực tiếp file này ----------
+async function runFromFileAndExit() {
   try {
-    const data = await extractXsData();
+    // Sửa ở đây: Gọi hàm đọc từ file thay vì hàm crawl URL
+    const data = await extractXsDataFromFile();
     await saveToDb(data);
   } catch (e) {
     console.error(e);
   } finally {
-    // không disconnect nếu app còn chạy trên server; nếu chạy script độc lập thì disconnect
-    try { await mongoose.disconnect(); } catch(e) {}
+    // ngắt kết nối DB sau khi chạy xong
+    try { 
+        await mongoose.disconnect(); 
+        console.log('🔌 MongoDB disconnected');
+    } catch(e) {}
   }
 }
 
-// Export functions
+// Export functions để có thể gọi từ các file khác
 module.exports = {
-  extractXsData,
+  extractXsData,          // Hàm cũ crawl từ URL
+  extractXsDataFromFile,  // Hàm mới đọc từ file
   saveToDb,
   fixChanLeInDb,
-  runOnceAndExit
 };
 
-// Nếu chạy trực tiếp: node crawlService.js
+// Nếu chạy trực tiếp file này bằng lệnh: node services/crawlService.js
+// Script sẽ tự động chạy hàm runFromFileAndExit
 if (require.main === module) {
-  runOnceAndExit();
+  runFromFileAndExit(); // CHỈNH SỬA: Chạy hàm đọc từ file làm mặc định
 }
