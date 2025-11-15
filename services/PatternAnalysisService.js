@@ -1,15 +1,9 @@
-const Result = require('../models/Result');
-const PatternPrediction = require('../models/PatternPrediction');
-const PatternKnowledge = require('../models/PatternKnowledge');
-const { GROUPS, PRIZE_ORDER } = require('./patternAnalysis/constants');
-const { DateTime } = require('luxon');
-
 // --- CÁC HẰNG SỐ CẤU HÌNH CHO AI ---
-const ANALYSIS_LOOKBACK_DAYS = 90; // AI sẽ nhìn lại 90 ngày để tìm mẫu
-const WEIGHT_INCREASE_FACTOR = 1.15; // Mức độ "thưởng" khi mẫu đoán đúng
-const WEIGHT_DECREASE_FACTOR = 0.90; // Mức độ "phạt" khi mẫu đoán sai
-const MIN_WEIGHT = 0.2;             // Trọng số tối thiểu, tránh bị loại bỏ hoàn toàn
-const MAX_WEIGHT = 5.0;             // Trọng số tối đa
+const ANALYSIS_LOOKBACK_DAYS = 90;
+const WEIGHT_INCREASE_FACTOR = 1.15;
+const WEIGHT_DECREASE_FACTOR = 0.90;
+const MIN_WEIGHT = 0.2;
+const MAX_WEIGHT = 5.0;
 
 class PatternAnalysisService {
     constructor() {
@@ -21,44 +15,114 @@ class PatternAnalysisService {
 
     /**
      * =================================================================
-     * HÀM API CHÍNH (Được gọi từ Controller)
+     * CÁC HÀM API CHÍNH (Được gọi từ Controller)
      * =================================================================
      */
 
     /**
-     * TẠO DỰ ĐOÁN CHO NGÀY TIẾP THEO (Chức năng hàng ngày)
+     * +++ HÀM MỚI: Reset, Huấn luyện lại từ đầu và Tạo dự đoán mới +++
      */
-    async generatePredictionForNextDay() {
-        console.log('🤖 [PatternAI] Bắt đầu phân tích cho ngày tiếp theo...');
-        await this.loadDataAndKnowledge(ANALYSIS_LOOKBACK_DAYS + 5);
+    async resetAndRebuildAll() {
+        console.log('💥 [PatternAI] BẮT ĐẦU QUÁ TRÌNH RESET VÀ HUẤN LUYỆN LẠI TOÀN BỘ!');
+        
+        // Bước 1: Xóa toàn bộ dự đoán cũ của model này
+        console.log('[PatternAI] Bước 1/3: Đang xóa dữ liệu dự đoán cũ...');
+        await PatternPrediction.deleteMany({});
+        console.log('[PatternAI] Xóa thành công!');
 
-        if (this.sortedDates.length === 0) {
-            throw new Error("Không có đủ dữ liệu để tạo dự đoán.");
+        // Bước 2: Chạy lại Backtest lịch sử
+        console.log('[PatternAI] Bước 2/3: Bắt đầu quá trình Backtest lịch sử...');
+        const backtestResult = await this.generateHistoricalPredictions();
+        console.log(`[PatternAI] Backtest hoàn tất, đã tạo ${backtestResult.created} bản ghi.`);
+
+        // Bước 3: Tạo dự đoán cho ngày tiếp theo
+        console.log('[PatternAI] Bước 3/3: Bắt đầu tạo dự đoán cho ngày tiếp theo...');
+        const nextDayPrediction = await this.generatePredictionForNextDay();
+        console.log(`[PatternAI] Đã tạo dự đoán cho ngày ${nextDayPrediction.ngayDuDoan}.`);
+
+        return {
+            message: `Reset và huấn luyện lại hoàn tất! Đã tạo ${backtestResult.created} dự đoán lịch sử và 1 dự đoán cho ngày tiếp theo.`,
+            historicalCount: backtestResult.created,
+            nextDay: nextDayPrediction.ngayDuDoan
+        };
+    }
+
+    /**
+     * +++ HÀM NÂNG CẤP: Học hỏi và lấp đầy các ngày còn thiếu +++
+     */
+    async learnAndPredictForward() {
+        console.log('📚 [PatternAI] Bắt đầu quy trình: HỌC & DỰ ĐOÁN TIẾN TỚI...');
+        
+        // Bước 1: Học từ các kết quả mới nhất
+        console.log('[PatternAI] Bước 1/2: Đang học hỏi từ kết quả mới...');
+        await this.learnFromResults();
+        
+        // Bước 2: Tìm và lấp đầy các ngày chưa có dự đoán
+        console.log('[PatternAI] Bước 2/2: Tìm và tạo dự đoán cho các ngày còn thiếu...');
+        await this.loadDataAndKnowledge(ANALYSIS_LOOKBACK_DAYS + 10); // Tải lại dữ liệu mới nhất
+
+        const lastPrediction = await PatternPrediction.findOne().sort({ ngayDuDoan: -1 });
+        const lastResultDateStr = this.sortedDates[0];
+        
+        if (!lastPrediction) {
+            console.log('[PatternAI] Không có dự đoán nào, sẽ chỉ tạo cho ngày mai.');
+            return [await this.generatePredictionForNextDay()];
         }
 
-        const latestDate = this.sortedDates[0];
-        const nextDay = DateTime.fromFormat(latestDate, 'dd/MM/yyyy').plus({ days: 1 }).toFormat('dd/MM/yyyy');
-        console.log(`🎯 Ngày dự đoán: ${nextDay}`);
+        let startDate = DateTime.fromFormat(lastPrediction.ngayDuDoan, 'dd/MM/yyyy');
+        const endDate = DateTime.fromFormat(lastResultDateStr, 'dd/MM/yyyy');
+
+        const predictionsMade = [];
+        if (startDate >= endDate) {
+            console.log('[PatternAI] Dữ liệu dự đoán đã được cập nhật. Chỉ tạo cho ngày mai.');
+        } else {
+             // Lặp để lấp đầy các ngày ở giữa
+            while(startDate < endDate) {
+                startDate = startDate.plus({ days: 1 });
+                const targetDate = startDate.toFormat('dd/MM/yyyy');
+                console.log(`[PatternAI] Phát hiện ngày còn thiếu: ${targetDate}. Đang tạo dự đoán...`);
+                const prediction = await this._generatePredictionForDate(targetDate);
+                predictionsMade.push(prediction);
+            }
+        }
+
+        // Luôn tạo cho ngày tiếp theo
+        const finalPrediction = await this.generatePredictionForNextDay();
+        predictionsMade.push(finalPrediction);
+
+        console.log(`✅ [PatternAI] Quy trình hoàn tất. Đã tạo ${predictionsMade.length} dự đoán mới.`);
+        return predictionsMade;
+    }
+
+    /**
+     * Hàm lõi để tạo dự đoán cho một ngày CỤ THỂ
+     * @private
+     */
+    async _generatePredictionForDate(targetDate) {
+        console.log(`[PatternAI] Generating for specific date: ${targetDate}...`);
+        
+        // Tải lại kiến thức và dữ liệu CÓ SẴN TRƯỚC ngày targetDate
+        const serviceForDate = new PatternAnalysisService();
+        await serviceForDate.loadDataAndKnowledge(9999);
+        const dateIndex = serviceForDate.sortedDates.indexOf(targetDate);
+        if (dateIndex > -1) {
+            // Cắt dữ liệu, chỉ giữ lại những gì xảy ra TRƯỚC ngày targetDate
+            serviceForDate.sortedDates = serviceForDate.sortedDates.slice(dateIndex + 1);
+        }
 
         const predictions = {};
         const positions = ['hangChucNgan', 'hangNgan', 'hangTram', 'hangChuc', 'hangDonVi'];
-
         for (let i = 0; i < positions.length; i++) {
-            const positionName = positions[i];
-            console.log(`--- Phân tích vị trí: ${positionName} ---`);
-            predictions[positionName] = await this.runAnalysisPipelineForPosition(i);
+            predictions[positions[i]] = await serviceForDate.runAnalysisPipelineForPosition(i);
         }
 
-        const savedPrediction = await PatternPrediction.findOneAndUpdate(
-            { ngayDuDoan: nextDay },
-            { ngayDuDoan: nextDay, ...predictions, hasActualResult: false },
+        return await PatternPrediction.findOneAndUpdate(
+            { ngayDuDoan: targetDate },
+            { ngayDuDoan: targetDate, ...predictions, hasActualResult: false },
             { upsert: true, new: true }
         );
-
-        console.log('✅ [PatternAI] Đã tạo và lưu dự đoán cho ngày tiếp theo thành công!');
-        return savedPrediction;
     }
-
+        
     /**
      * TẠO DỰ ĐOÁN CHO TOÀN BỘ LỊCH SỬ (BACKTEST)
      */
@@ -398,6 +462,13 @@ class PatternAnalysisService {
     }
     
     // --- CÁC HÀM TIỆN ÍCH ---
+    async generatePredictionForNextDay() {
+        await this.loadDataAndKnowledge(ANALYSIS_LOOKBACK_DAYS + 5);
+        if (this.sortedDates.length === 0) throw new Error("Không đủ dữ liệu.");
+        const latestDate = this.sortedDates[0];
+        const nextDay = DateTime.fromFormat(latestDate, 'dd/MM/yyyy').plus({ days: 1 }).toFormat('dd/MM/yyyy');
+        return this._generatePredictionForDate(nextDay);
+    }
 
     getDigitsForSubgroup(subgroupKey) {
         const groupKey = Object.keys(GROUPS).find(gk => GROUPS[gk].subgroups[subgroupKey]);
