@@ -187,31 +187,52 @@ async function extractXsDataFromFile() {
 // ---------- Lưu DB: upsert (new inserted sẽ có chanle) ----------
 async function saveToDb(data) {
   if (!Array.isArray(data) || data.length === 0) {
-    console.log('Không có dữ liệu để lưu');
-    return;
+    console.log('ℹ️ Không có dữ liệu mới để lưu.');
+    return { insertedCount: 0, processedCount: 0 };
   }
 
-  let insertedCount = 0;
-  let processedCount = 0;
+  console.log(`⚙️ Chuẩn bị ghi ${data.length} bản ghi vào CSDL...`);
 
-  for (const item of data) {
-    try {
-      const result = await Result.updateOne(
-        { ngay: item.ngay, giai: item.giai },
-        { $setOnInsert: item },
-        { upsert: true }
-      );
-      if (result.upsertedId) {
-          insertedCount++;
-      }
-      processedCount++;
-    } catch (e) {
-      console.error('Lỗi insert/update:', e && e.message ? e.message : e, item);
+  // 1. Tạo một mảng các "lệnh" để gửi đi cùng lúc
+  const operations = data.map(item => ({
+    updateOne: {
+      // Điều kiện để tìm bản ghi (giống như trước)
+      filter: { ngay: item.ngay, giai: item.giai },
+      // Dữ liệu để chèn vào nếu bản ghi không tồn tại (upsert)
+      update: { $setOnInsert: item },
+      // Bật cờ upsert
+      upsert: true
     }
-  }
-  console.log(`✅ Lưu xong! Đã xử lý ${processedCount} bản ghi. Số bản ghi mới được thêm: ${insertedCount}.`);
-}
+  }));
 
+  try {
+    // 2. Gọi hàm bulkWrite với mảng lệnh đã tạo
+    // { ordered: false } cho phép MongoDB xử lý các lệnh song song, tăng tốc độ
+    // và sẽ tiếp tục thực hiện ngay cả khi một vài lệnh bị lỗi.
+    const result = await Result.bulkWrite(operations, { ordered: false });
+
+    // 3. In ra kết quả
+    const insertedCount = result.upsertedCount || 0;
+    console.log('✅ Hoàn tất lưu trữ!');
+    console.log(`   - Bản ghi mới được thêm: ${insertedCount}`);
+    console.log(`   - Bản ghi đã tồn tại (bỏ qua): ${result.matchedCount || 0}`);
+    console.log(`   - Tổng số đã xử lý: ${data.length}`);
+    
+    if (result.hasWriteErrors()) {
+        console.warn('⚠️ Có một số lỗi ghi không nghiêm trọng:', result.getWriteErrors());
+    }
+
+    return { 
+        insertedCount: insertedCount, 
+        processedCount: data.length 
+    };
+
+  } catch (e) {
+    console.error('❌ Lỗi nghiêm trọng trong quá trình bulkWrite:', e.message);
+    // Ném lỗi ra để controller có thể bắt và xử lý
+    throw e;
+  }
+}
 // ---------- Hàm fix toàn bộ chanle trong DB (cập nhật các bản ghi có chanle rỗng) ----------
 async function fixChanLeInDb() {
   console.log('🔧 Bắt đầu fix chanle cho các bản ghi cũ...');
@@ -262,4 +283,5 @@ module.exports = {
 if (require.main === module) {
   runFromFileAndExit(); // CHỈNH SỬA: Chạy hàm đọc từ file làm mặc định
 }
+
 
