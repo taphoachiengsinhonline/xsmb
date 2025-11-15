@@ -1,3 +1,10 @@
+// File: services/PatternAnalysisService.js
+const Result = require('../models/Result');
+const PatternPrediction = require('../models/PatternPrediction');
+const PatternKnowledge = require('../models/PatternKnowledge');
+const { GROUPS, PRIZE_ORDER } = require('./patternAnalysis/constants');
+const { DateTime } = require('luxon');
+
 // --- CÁC HẰNG SỐ CẤU HÌNH CHO AI ---
 const ANALYSIS_LOOKBACK_DAYS = 90;
 const WEIGHT_INCREASE_FACTOR = 1.15;
