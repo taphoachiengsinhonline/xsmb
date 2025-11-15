@@ -1,40 +1,16 @@
-// File: services/PatternAnalysisService.js (Phiên bản V4 - Kiến trúc MLOps với GCS + MongoDB)
-
-const { Storage } = require('@google-cloud/storage');
+// File: services/PatternAnalysisService.js
 const Result = require('../models/Result');
 const PatternPrediction = require('../models/PatternPrediction');
-const NNState = require('../models/NNState'); // Sử dụng lại NNState để lưu metadata
+const PatternKnowledge = require('../models/PatternKnowledge');
 const { GROUPS, PRIZE_ORDER } = require('./patternAnalysis/constants');
 const { DateTime } = require('luxon');
 
-// --- CẤU HÌNH GCS & AI V4 ---
-const GCS_CREDENTIALS_JSON = process.env.GCS_CREDENTIALS;
-const GCS_BUCKET_NAME = process.env.GCS_BUCKET_NAME;
-const MODEL_NAME = 'PatternAnalyzerV1'; // Tên định danh cho AI này
-
-let storage;
-let bucket;
-
-if (GCS_CREDENTIALS_JSON && GCS_BUCKET_NAME) {
-    try {
-        const credentials = JSON.parse(GCS_CREDENTIALS_JSON);
-        storage = new Storage({ credentials, projectId: credentials.project_id });
-        bucket = storage.bucket(GCS_BUCKET_NAME);
-        console.log(`✅ [PatternAI GCS] Đã khởi tạo Google Cloud Storage cho bucket: ${GCS_BUCKET_NAME}`);
-    } catch (error) {
-        console.error("❌ [PatternAI GCS] LỖI NGHIÊM TRỌNG: Không thể parse GCS_CREDENTIALS.", error);
-        process.exit(1); // Dừng ứng dụng nếu cấu hình GCS lỗi
-    }
-} else {
-    console.warn("⚠️ [PatternAI GCS] Cảnh báo: GCS_CREDENTIALS hoặc GCS_BUCKET_NAME chưa được thiết lập.");
-}
-
+// --- CÁC HẰNG SỐ CẤU HÌNH CHO AI ---
 const ANALYSIS_LOOKBACK_DAYS = 90;
 const WEIGHT_INCREASE_FACTOR = 1.15;
 const WEIGHT_DECREASE_FACTOR = 0.90;
 const MIN_WEIGHT = 0.2;
 const MAX_WEIGHT = 5.0;
-const CONVERGENCE_BONUS = 1.5;
 
 class PatternAnalysisService {
     constructor() {
@@ -46,81 +22,294 @@ class PatternAnalysisService {
 
     /**
      * =================================================================
-     * CƠ CHẾ LƯU VÀ TẢI "TRÍ NHỚ" THEO KIẾN TRÚC MLOPS
+     * CÁC HÀM API CHÍNH (Được gọi từ Controller)
      * =================================================================
      */
 
-    async loadKnowledge() {
-        if (!bucket) {
-            console.warn('[PatternAI V4] Không thể tải "trí nhớ" vì GCS chưa được cấu hình.');
-            this.knowledge = new Map();
-            return false;
-        }
+    /**
+     * +++ HÀM MỚI: Reset, Huấn luyện lại từ đầu và Tạo dự đoán mới +++
+     */
+    async resetAndRebuildAll() {
+        console.log('💥 [PatternAI] BẮT ĐẦU QUÁ TRÌNH RESET VÀ HUẤN LUYỆN LẠI TOÀN BỘ!');
+        
+        // Bước 1: Xóa toàn bộ dự đoán cũ của model này
+        console.log('[PatternAI] Bước 1/3: Đang xóa dữ liệu dự đoán cũ...');
+        await PatternPrediction.deleteMany({});
+        console.log('[PatternAI] Xóa thành công!');
 
-        const modelState = await NNState.findOne({ modelName: MODEL_NAME }).lean();
+        // Bước 2: Chạy lại Backtest lịch sử
+        console.log('[PatternAI] Bước 2/3: Bắt đầu quá trình Backtest lịch sử...');
+        const backtestResult = await this.generateHistoricalPredictions();
+        console.log(`[PatternAI] Backtest hoàn tất, đã tạo ${backtestResult.created} bản ghi.`);
 
-        if (modelState && modelState.state && modelState.state.gcsPath) {
-            const knowledgeGcsPath = modelState.state.gcsPath.replace(`gs://${GCS_BUCKET_NAME}/`, '');
-            console.log(`[PatternAI V4] Tìm thấy metadata! Đang tải "trí nhớ" từ: ${modelState.state.gcsPath}`);
-            try {
-                const [file] = await bucket.file(knowledgeGcsPath).download();
-                const knowledgeObject = JSON.parse(file.toString());
-                this.knowledge = new Map(Object.entries(knowledgeObject));
-                console.log(`✅ [PatternAI V4] ĐÃ TẢI THÀNH CÔNG ${this.knowledge.size} "mảnh tri thức".`);
-                return true;
-            } catch (error) {
-                console.error(`❌ [PatternAI V4] Lỗi khi tải file từ GCS tại '${knowledgeGcsPath}':`, error.message);
-                this.knowledge = new Map();
-                return false;
-            }
-        } else {
-            console.log(`[PatternAI V4] Không tìm thấy metadata. Đây có thể là lần huấn luyện đầu tiên.`);
-            this.knowledge = new Map();
-            return false;
-        }
+        // Bước 3: Tạo dự đoán cho ngày tiếp theo
+        console.log('[PatternAI] Bước 3/3: Bắt đầu tạo dự đoán cho ngày tiếp theo...');
+        const nextDayPrediction = await this.generatePredictionForNextDay();
+        console.log(`[PatternAI] Đã tạo dự đoán cho ngày ${nextDayPrediction.ngayDuDoan}.`);
+
+        return {
+            message: `Reset và huấn luyện lại hoàn tất! Đã tạo ${backtestResult.created} dự đoán lịch sử và 1 dự đoán cho ngày tiếp theo.`,
+            historicalCount: backtestResult.created,
+            nextDay: nextDayPrediction.ngayDuDoan
+        };
     }
 
-    async saveKnowledge() {
-        if (!bucket) {
-            console.warn('[PatternAI V4] Không thể lưu "trí nhớ" vì GCS chưa được cấu hình.');
+    /**
+     * +++ HÀM NÂNG CẤP: Học hỏi và lấp đầy các ngày còn thiếu +++
+     */
+    async learnAndPredictForward() {
+        console.log('📚 [PatternAI] Bắt đầu quy trình: HỌC & DỰ ĐOÁN TIẾN TỚI...');
+        
+        // Bước 1: Học từ các kết quả mới nhất
+        console.log('[PatternAI] Bước 1/2: Đang học hỏi từ kết quả mới...');
+        await this.learnFromResults();
+        
+        // Bước 2: Tìm và lấp đầy các ngày chưa có dự đoán
+        console.log('[PatternAI] Bước 2/2: Tìm và tạo dự đoán cho các ngày còn thiếu...');
+        await this.loadDataAndKnowledge(ANALYSIS_LOOKBACK_DAYS + 10); // Tải lại dữ liệu mới nhất
+
+        const lastPrediction = await PatternPrediction.findOne().sort({ ngayDuDoan: -1 });
+        const lastResultDateStr = this.sortedDates[0];
+        
+        if (!lastPrediction) {
+            console.log('[PatternAI] Không có dự đoán nào, sẽ chỉ tạo cho ngày mai.');
+            return [await this.generatePredictionForNextDay()];
+        }
+
+        let startDate = DateTime.fromFormat(lastPrediction.ngayDuDoan, 'dd/MM/yyyy');
+        const endDate = DateTime.fromFormat(lastResultDateStr, 'dd/MM/yyyy');
+
+        const predictionsMade = [];
+        if (startDate >= endDate) {
+            console.log('[PatternAI] Dữ liệu dự đoán đã được cập nhật. Chỉ tạo cho ngày mai.');
+        } else {
+             // Lặp để lấp đầy các ngày ở giữa
+            while(startDate < endDate) {
+                startDate = startDate.plus({ days: 1 });
+                const targetDate = startDate.toFormat('dd/MM/yyyy');
+                console.log(`[PatternAI] Phát hiện ngày còn thiếu: ${targetDate}. Đang tạo dự đoán...`);
+                const prediction = await this._generatePredictionForDate(targetDate);
+                predictionsMade.push(prediction);
+            }
+        }
+
+        // Luôn tạo cho ngày tiếp theo
+        const finalPrediction = await this.generatePredictionForNextDay();
+        predictionsMade.push(finalPrediction);
+
+        console.log(`✅ [PatternAI] Quy trình hoàn tất. Đã tạo ${predictionsMade.length} dự đoán mới.`);
+        return predictionsMade;
+    }
+
+    /**
+     * Hàm lõi để tạo dự đoán cho một ngày CỤ THỂ
+     * @private
+     */
+    async _generatePredictionForDate(targetDate) {
+        console.log(`[PatternAI] Generating for specific date: ${targetDate}...`);
+        
+        // Tải lại kiến thức và dữ liệu CÓ SẴN TRƯỚC ngày targetDate
+        const serviceForDate = new PatternAnalysisService();
+        await serviceForDate.loadDataAndKnowledge(9999);
+        const dateIndex = serviceForDate.sortedDates.indexOf(targetDate);
+        if (dateIndex > -1) {
+            // Cắt dữ liệu, chỉ giữ lại những gì xảy ra TRƯỚC ngày targetDate
+            serviceForDate.sortedDates = serviceForDate.sortedDates.slice(dateIndex + 1);
+        }
+
+        const predictions = {};
+        const positions = ['hangChucNgan', 'hangNgan', 'hangTram', 'hangChuc', 'hangDonVi'];
+        for (let i = 0; i < positions.length; i++) {
+            predictions[positions[i]] = await serviceForDate.runAnalysisPipelineForPosition(i);
+        }
+
+        return await PatternPrediction.findOneAndUpdate(
+            { ngayDuDoan: targetDate },
+            { ngayDuDoan: targetDate, ...predictions, hasActualResult: false },
+            { upsert: true, new: true }
+        );
+    }
+        
+    /**
+     * TẠO DỰ ĐOÁN CHO TOÀN BỘ LỊCH SỬ (BACKTEST)
+     */
+    async generateHistoricalPredictions() {
+        console.log('🏛️ [PatternAI] Bắt đầu quá trình Backtest Lịch sử...');
+        
+        await this.loadDataAndKnowledge(9999); 
+        
+        const historicalDates = [...this.sortedDates].reverse(); 
+        
+        let createdCount = 0;
+        const totalDaysToProcess = historicalDates.length - ANALYSIS_LOOKBACK_DAYS;
+        console.log(`[PatternAI] Sẽ xử lý khoảng ${totalDaysToProcess} ngày có đủ dữ liệu.`);
+
+        for (let i = ANALYSIS_LOOKBACK_DAYS; i < historicalDates.length; i++) {
+            const targetDate = historicalDates[i];
+            
+            const actualGDBResult = (this.resultsByDate.get(targetDate) || []).find(r => r.giai === 'ĐB');
+            if (!actualGDBResult || !actualGDBResult.so) continue;
+
+            console.log(`\n⏳ Backtesting for date: ${targetDate}...`);
+
+            const timeMachineService = new PatternAnalysisService();
+            const dataForThisRun = historicalDates.slice(0, i); 
+            timeMachineService.sortedDates = [...dataForThisRun].reverse();
+            timeMachineService.resultsByDate = this.resultsByDate;
+            timeMachineService.knowledge = this.knowledge; 
+
+            const predictions = {};
+            const positions = ['hangChucNgan', 'hangNgan', 'hangTram', 'hangChuc', 'hangDonVi'];
+            
+            for (let j = 0; j < positions.length; j++) {
+                predictions[positions[j]] = await timeMachineService.runAnalysisPipelineForPosition(j);
+            }
+
+            await PatternPrediction.findOneAndUpdate(
+                { ngayDuDoan: targetDate },
+                { 
+                    ngayDuDoan: targetDate, 
+                    ...predictions,
+                    hasActualResult: true 
+                },
+                { upsert: true, new: true }
+            );
+            createdCount++;
+            
+            if (createdCount % 20 === 0) {
+                console.log(`... Đã xử lý ${createdCount} / ${totalDaysToProcess} ngày ...`);
+            }
+        }
+
+        console.log(`✅ [PatternAI] Hoàn tất Backtest! Đã tạo/cập nhật ${createdCount} bản ghi lịch sử.`);
+        return { created: createdCount, total: totalDaysToProcess };
+    }
+
+    /**
+     * DẠY CHO AI HỌC TỪ KẾT QUẢ MỚI
+     */
+    async learnFromResults() {
+        console.log('🧠 [PatternAI] Bắt đầu học hỏi từ kết quả mới...');
+        await this.loadDataAndKnowledge(ANALYSIS_LOOKBACK_DAYS + 5);
+        
+        const predictionsToLearn = await PatternPrediction.find({ hasActualResult: false }).lean();
+        if (predictionsToLearn.length === 0) {
+            console.log('[PatternAI] Không có dự đoán mới để học.');
             return;
         }
 
-        const knowledgeGcsPath = `pattern_knowledge/${MODEL_NAME}_${Date.now()}.json`;
-        console.log(`[PatternAI V4] Đang lưu ${this.knowledge.size} "mảnh tri thức" lên GCS tại: ${knowledgeGcsPath}`);
-        
-        const knowledgeObject = Object.fromEntries(this.knowledge);
-        const jsonString = JSON.stringify(knowledgeObject, null, 2);
+        let learnedCount = 0;
+        for (const pred of predictionsToLearn) {
+            const actualGDBResult = (this.resultsByDate.get(pred.ngayDuDoan) || []).find(r => r.giai === 'ĐB');
+            if (!actualGDBResult || !actualGDBResult.so) {
+                await PatternPrediction.updateOne({ _id: pred._id }, { hasActualResult: true }); 
+                continue;
+            }
+            const actualGDB = String(actualGDBResult.so).padStart(5, '0');
+            const dayBeforePrediction = this.sortedDates[this.sortedDates.indexOf(pred.ngayDuDoan) + 1];
 
-        try {
-            await bucket.file(knowledgeGcsPath).save(jsonString, { contentType: 'application/json' });
-            console.log(`✅ [PatternAI V4] Upload "trí nhớ" lên GCS thành công.`);
+            for (let i = 0; i < 5; i++) {
+                const actualDigit = actualGDB[i];
+                const timeMachineTraces = this.findHistoricalTraces(i, dayBeforePrediction); 
+                const patterns = this.detectPatterns(timeMachineTraces);
 
-            const modelInfo = {
-                modelName: MODEL_NAME,
-                knowledgeSize: this.knowledge.size,
-                savedAt: new Date().toISOString(),
-                gcsPath: `gs://${GCS_BUCKET_NAME}/${knowledgeGcsPath}`
-            };
+                for (const p of patterns) {
+                    const nextStep = this.getNextStep(p);
+                    if (!nextStep) continue;
+                    
+                    const resultsForNextStep = (this.resultsByDate.get(dayBeforePrediction) || []);
+                    const result = resultsForNextStep.find(r => r.giai === nextStep.prize);
 
-            await NNState.findOneAndUpdate(
-                { modelName: MODEL_NAME },
-                { state: modelInfo },
-                { upsert: true, new: true }
-            );
-            console.log(`✅ [PatternAI V4] Đã cập nhật metadata vào MongoDB.`);
-
-        } catch (error) {
-            console.error('❌ [PatternAI V4] Lỗi nghiêm trọng khi lưu "trí nhớ":', error.message);
+                    let isHit = false;
+                    if (result && result.so && String(result.so).includes(actualDigit)) {
+                        isHit = true;
+                    }
+                    this.updateKnowledge(p.key, p.type, isHit, pred.ngayDuDoan);
+                }
+            }
+            learnedCount++;
+            await PatternPrediction.updateOne({ _id: pred._id }, { hasActualResult: true });
         }
-    }
-    
-    async loadDataAndKnowledge(limitDays) {
-        await this.loadKnowledge();
         
-        console.log(`[PatternAI V4] Đang tải ${limitDays} ngày dữ liệu KQXS...`);
+        await PatternKnowledge.findOneAndUpdate(
+            { modelName: 'PatternAnalyzerV1' },
+            { knowledgeBase: this.knowledge, lastLearnedAt: new Date() },
+            { upsert: true }
+        );
+        console.log(`✅ [PatternAI] Học hỏi hoàn tất! Đã xử lý ${learnedCount} dự đoán.`);
+    }
+
+    /**
+     * =================================================================
+     * PIPELINE PHÂN TÍCH CỐT LÕI VÀ CÁC BƯỚC THỰC THI
+     * =================================================================
+     */
+
+    /**
+     * Pipeline các bước phân tích cho một vị trí GĐB cụ thể
+     */
+    async runAnalysisPipelineForPosition(gdbPositionIndex) {
+        // 1. Tìm các "dấu vết" lịch sử
+        const historicalTraces = this.findHistoricalTraces(gdbPositionIndex);
+
+        // 2. Phát hiện các mẫu hình từ dấu vết
+        const detectedPatterns = this.detectPatterns(historicalTraces);
+
+        // 3. Chấm điểm các mẫu hình dựa trên "trí nhớ" (knowledge base)
+        const scoredPatterns = this.scorePatterns(detectedPatterns);
+
+        // 4. Đánh giá "sức mạnh" của từng nhóm nhỏ
+        const subgroupStrengths = this.evaluateSubgroupStrength(scoredPatterns);
+
+        // 5. Lọc số dựa trên logic các nhóm lớn
+        const { g1_digits, g2_digits, g3_digits } = this.filterByGroupLogic(subgroupStrengths);
+        
+        // 6. Giao (intersect) và áp dụng bộ lọc loại trừ cơ bản
+        const primaryDigits = this.finalIntersectionAndFiltering({ g1_digits, g2_digits, g3_digits });
+        const filteredPrimaryDigits = this.applyAdvancedExclusion(primaryDigits);
+        
+        let finalDigits = filteredPrimaryDigits;
+
+        // 7. LOGIC FALLBACK THÔNG MINH: Nếu không đủ 5 số
+        if (finalDigits.length < 5) {
+            const initialPool = [...new Set([...g1_digits, ...g2_digits, ...g3_digits])];
+            const scoredPool = initialPool.map(digit => {
+                let score = 0;
+                for (const [sgKey, strength] of Object.entries(subgroupStrengths)) {
+                    const digitsOfSubgroup = this.getDigitsForSubgroup(sgKey);
+                    if (digitsOfSubgroup.includes(digit)) {
+                        score += strength;
+                    }
+                }
+                return { digit, score };
+            });
+
+            const remainingCandidates = scoredPool
+                .filter(item => !finalDigits.includes(item.digit))
+                .sort((a, b) => b.score - a.score);
+                
+            const needed = 5 - finalDigits.length;
+            const fallbackDigits = remainingCandidates.slice(0, needed).map(item => item.digit);
+            finalDigits = [...finalDigits, ...fallbackDigits];
+        }
+
+        // 8. Tìm số "hot" nhất từ dàn cuối cùng
+        const hotDigit = this.findHotDigit(finalDigits.slice(0, 5), scoredPatterns);
+
+        return {
+            promisingDigits: finalDigits.slice(0, 5),
+            hotDigit: hotDigit || (finalDigits.length > 0 ? finalDigits[0] : null),
+            analysisDetails: {
+                strongestPatterns: scoredPatterns.sort((a,b) => b.score - a.score).slice(0, 3)
+            }
+        };
+    }
+
+    // --- CÁC HÀM LÕI ---
+
+    async loadDataAndKnowledge(limitDays) {
+        console.log(`[PatternAI] Đang tải ${limitDays} ngày dữ liệu...`);
         const results = await Result.find().sort({ 'ngay': -1 }).limit(limitDays * 27).lean();
-        this.resultsByDate.clear();
         results.forEach(r => {
             if (!this.resultsByDate.has(r.ngay)) this.resultsByDate.set(r.ngay, []);
             this.resultsByDate.get(r.ngay).push(r);
@@ -129,212 +318,40 @@ class PatternAnalysisService {
         this.sortedDates = [...this.resultsByDate.keys()].sort((a, b) => 
             DateTime.fromFormat(b, 'dd/MM/yyyy') - DateTime.fromFormat(a, 'dd/MM/yyyy')
         );
-    }
 
-    /**
-     * =================================================================
-     * CÁC HÀM API CHÍNH (Được gọi từ Controller)
-     * =================================================================
-     */
-
-    async resetAndRebuildAll() {
-        console.log('💥 [PatternAI V4] BẮT ĐẦU QUÁ TRÌNH RESET VÀ HUẤN LUYỆN LẠI TOÀN BỘ!');
-        
-        await PatternPrediction.deleteMany({});
-        await NNState.deleteOne({ modelName: MODEL_NAME });
-        this.knowledge = new Map();
-        if (bucket) {
-            await bucket.file(`pattern_knowledge/${MODEL_NAME}_knowledge.json`).delete({ ignoreNotFound: true });
+        const knowledgeDoc = await PatternKnowledge.findOne({ modelName: 'PatternAnalyzerV1' });
+        if (knowledgeDoc && knowledgeDoc.knowledgeBase) {
+            this.knowledge = knowledgeDoc.knowledgeBase;
+            console.log(`[PatternAI] Đã tải ${this.knowledge.size} "mảnh tri thức".`);
         }
-        console.log('[PatternAI V4] Đã xóa dữ liệu cũ và reset "trí nhớ".');
-
-        const backtestResult = await this.generateHistoricalPredictions();
-        const nextDayPrediction = await this.generatePredictionForNextDay();
-        await this.saveKnowledge();
-
-        return {
-            message: `Reset và huấn luyện lại hoàn tất! Đã xây dựng lại "trí nhớ", tạo ${backtestResult.created} dự đoán lịch sử và 1 dự đoán cho ngày tiếp theo.`,
-            historicalCount: backtestResult.created,
-            nextDay: nextDayPrediction.ngayDuDoan
-        };
-    }
-
-    async learnAndPredictForward() {
-        console.log('📚 [PatternAI V4] Bắt đầu quy trình: HỌC & DỰ ĐOÁN TIẾN TỚI...');
-        
-        await this.learnFromResults(); // Đã bao gồm load và save knowledge
-        
-        console.log('[PatternAI V4] Tìm và tạo dự đoán cho các ngày còn thiếu...');
-        await this.loadDataAndKnowledge(ANALYSIS_LOOKBACK_DAYS + 10);
-
-        const lastPrediction = await PatternPrediction.findOne().sort({ ngayDuDoan: -1 });
-        const lastResultDateStr = this.sortedDates[0];
-        
-        if (!lastPrediction) {
-            return [await this.generatePredictionForNextDay()];
-        }
-
-        let startDate = DateTime.fromFormat(lastPrediction.ngayDuDoan, 'dd/MM/yyyy');
-        const endDate = DateTime.fromFormat(lastResultDateStr, 'dd/MM/yyyy');
-
-        const predictionsMade = [];
-        if (startDate < endDate) {
-            while(startDate < endDate) {
-                startDate = startDate.plus({ days: 1 });
-                const targetDate = startDate.toFormat('dd/MM/yyyy');
-                console.log(`[PatternAI V4] Lấp đầy ngày còn thiếu: ${targetDate}...`);
-                predictionsMade.push(await this._generatePredictionForDate(targetDate));
-            }
-        }
-
-        const finalPrediction = await this.generatePredictionForNextDay();
-        predictionsMade.push(finalPrediction);
-
-        console.log(`✅ [PatternAI V4] Quy trình hoàn tất. Đã tạo ${predictionsMade.length} dự đoán mới.`);
-        return predictionsMade;
     }
     
-    async generateHistoricalPredictions() {
-        console.log('🏛️ [PatternAI V4] Bắt đầu quá trình Backtest Lịch sử...');
-        await this.loadDataAndKnowledge(9999);
-        const historicalDates = [...this.sortedDates].reverse();
-        let createdCount = 0;
-        const totalDaysToProcess = Math.max(0, historicalDates.length - ANALYSIS_LOOKBACK_DAYS);
-
-        for (let i = ANALYSIS_LOOKBACK_DAYS; i < historicalDates.length; i++) {
-            const targetDate = historicalDates[i];
-            const actualGDBResult = (this.resultsByDate.get(targetDate) || []).find(r => r.giai === 'ĐB');
-            if (!actualGDBResult || !actualGDBResult.so) continue;
-
-            const timeMachineService = new PatternAnalysisService();
-            const dataForThisRun = historicalDates.slice(0, i);
-            timeMachineService.sortedDates = [...dataForThisRun].reverse();
-            timeMachineService.resultsByDate = this.resultsByDate;
-            timeMachineService.knowledge = this.knowledge; // Dùng chung trí nhớ để xây dựng dần
-
-            const predictions = {};
-            for (let j = 0; j < 5; j++) {
-                predictions[['hangChucNgan', 'hangNgan', 'hangTram', 'hangChuc', 'hangDonVi'][j]] = await timeMachineService.runAnalysisPipelineForPosition(j);
-            }
-
-            await PatternPrediction.findOneAndUpdate({ ngayDuDoan: targetDate }, { ngayDuDoan: targetDate, ...predictions, hasActualResult: true }, { upsert: true });
-            createdCount++;
-        }
-        console.log(`✅ [PatternAI V4] Hoàn tất Backtest! Đã tạo/cập nhật ${createdCount} bản ghi.`);
-        return { created: createdCount, total: totalDaysToProcess };
-    }
-
-    async learnFromResults() {
-        console.log('🧠 [PatternAI V4] Bắt đầu học hỏi...');
-        await this.loadDataAndKnowledge(ANALYSIS_LOOKBACK_DAYS + 10);
-        
-        const predictionsToLearn = await PatternPrediction.find({ hasActualResult: false }).lean();
-        if (predictionsToLearn.length === 0) return;
-
-        let learnedCount = 0;
-        for (const pred of predictionsToLearn) {
-            const actualGDBResult = (this.resultsByDate.get(pred.ngayDuDoan) || []).find(r => r.giai === 'ĐB');
-            if (!actualGDBResult || !actualGDBResult.so) {
-                await PatternPrediction.updateOne({ _id: pred._id }, { hasActualResult: true });
-                continue;
-            }
-            const actualGDB = String(actualGDBResult.so).padStart(5, '0');
-            const dayBeforePrediction = this.sortedDates[this.sortedDates.indexOf(pred.ngayDuDoan) + 1];
-
-            for (let i = 0; i < 5; i++) {
-                const actualDigit = actualGDB[i];
-                const timeMachineTraces = this.findHistoricalTraces(i, dayBeforePrediction);
-                const patterns = this.detectPatterns(timeMachineTraces);
-                for (const p of patterns) {
-                    const nextStep = this.getNextStep(p);
-                    if (!nextStep) continue;
-                    const result = (this.resultsByDate.get(dayBeforePrediction) || []).find(r => r.giai === nextStep.prize);
-                    const isHit = result && result.so && String(result.so).includes(actualDigit);
-                    this.updateKnowledge(p.key, p.type, isHit, pred.ngayDuDoan);
-                }
-            }
-            learnedCount++;
-            await PatternPrediction.updateOne({ _id: pred._id }, { hasActualResult: true });
-        }
-        await this.saveKnowledge();
-        console.log(`✅ [PatternAI V4] Học hỏi từ ${learnedCount} kết quả và lưu trí nhớ hoàn tất!`);
-    }
-
-    async _generatePredictionForDate(targetDate) {
-        console.log(`[PatternAI V4] Generating for specific date: ${targetDate}...`);
-        const serviceForDate = new PatternAnalysisService();
-        await serviceForDate.loadDataAndKnowledge(9999);
-        const dateIndex = serviceForDate.sortedDates.indexOf(targetDate);
-        if (dateIndex > -1) {
-            serviceForDate.sortedDates = serviceForDate.sortedDates.slice(dateIndex + 1);
-        }
-
-        const predictions = {};
-        for (let j = 0; j < 5; j++) {
-            predictions[['hangChucNgan', 'hangNgan', 'hangTram', 'hangChuc', 'hangDonVi'][j]] = await serviceForDate.runAnalysisPipelineForPosition(j);
-        }
-
-        return await PatternPrediction.findOneAndUpdate({ ngayDuDoan: targetDate }, { ngayDuDoan: targetDate, ...predictions, hasActualResult: false }, { upsert: true, new: true });
-    }
-    
-    async generatePredictionForNextDay() {
-        await this.loadDataAndKnowledge(ANALYSIS_LOOKBACK_DAYS + 5);
-        if (this.sortedDates.length === 0) throw new Error("Không đủ dữ liệu.");
-        const latestDate = this.sortedDates[0];
-        const nextDay = DateTime.fromFormat(latestDate, 'dd/MM/yyyy').plus({ days: 1 }).toFormat('dd/MM/yyyy');
-        return this._generatePredictionForDate(nextDay);
-    }
-    
-    // ... (Toàn bộ các hàm logic phân tích cốt lõi và tiện ích được giữ nguyên từ phiên bản trước)
-    // Dưới đây là các hàm đó để đảm bảo file đầy đủ.
-
-    async runAnalysisPipelineForPosition(gdbPositionIndex) {
-        const historicalTraces = this.findHistoricalTraces(gdbPositionIndex);
-        const detectedPatterns = this.detectPatterns(historicalTraces);
-        const scoredPatterns = this.scorePatterns(detectedPatterns);
-        const subgroupStrengths = this.evaluateSubgroupStrength(scoredPatterns);
-        const { g1_digits, g2_digits, g3_digits } = this.filterByGroupLogic(subgroupStrengths);
-        const primaryDigits = this.finalIntersectionAndFiltering({ g1_digits, g2_digits, g3_digits });
-        const filteredPrimaryDigits = this.applyAdvancedExclusion(primaryDigits);
-        let finalDigits = filteredPrimaryDigits;
-
-        if (finalDigits.length < 5) {
-            const initialPool = [...new Set([...g1_digits, ...g2_digits, ...g3_digits])];
-            const scoredPool = initialPool.map(digit => {
-                let score = 0;
-                for (const [sgKey, strength] of Object.entries(subgroupStrengths)) {
-                    if (this.getDigitsForSubgroup(sgKey).includes(digit)) score += strength;
-                }
-                return { digit, score };
-            });
-            const remainingCandidates = scoredPool.filter(item => !finalDigits.includes(item.digit)).sort((a, b) => b.score - a.score);
-            const needed = 5 - finalDigits.length;
-            finalDigits.push(...remainingCandidates.slice(0, needed).map(item => item.digit));
-        }
-        const hotDigit = this.findHotDigit(finalDigits.slice(0, 5), scoredPatterns);
-        return {
-            promisingDigits: finalDigits.slice(0, 5),
-            hotDigit: hotDigit || (finalDigits.length > 0 ? finalDigits[0] : null),
-            analysisDetails: { strongestPatterns: scoredPatterns.sort((a, b) => b.score - a.score).slice(0, 3) }
-        };
-    }
-
     findHistoricalTraces(gdbPositionIndex, fromDate = null) {
         const historicalTraces = new Map();
         const datesToScan = fromDate ? this.sortedDates.slice(this.sortedDates.indexOf(fromDate)) : this.sortedDates;
+
         for (let i = 0; i < Math.min(datesToScan.length - 1, ANALYSIS_LOOKBACK_DAYS); i++) {
             const currentDate = datesToScan[i];
             const previousDate = datesToScan[i + 1];
+
             const currentGDB = (this.resultsByDate.get(currentDate) || []).find(r => r.giai === 'ĐB');
             if (!currentGDB || !currentGDB.so) continue;
+
             const digitToTrace = String(currentGDB.so).padStart(5, '0')[gdbPositionIndex];
+            const previousDayResults = this.resultsByDate.get(previousDate) || [];
+            
             const traces = [];
-            for (const result of (this.resultsByDate.get(previousDate) || [])) {
-                String(result.so).split('').forEach((d, pos) => {
-                    if (d === digitToTrace) traces.push({ prize: result.giai, position: pos + 1 });
-                });
+            for (const result of previousDayResults) {
+                const digits = String(result.so).split('');
+                for (let pos = 0; pos < digits.length; pos++) {
+                    if (digits[pos] === digitToTrace) {
+                        traces.push({ prize: result.giai, position: pos + 1 });
+                    }
+                }
             }
-            if (traces.length > 0) historicalTraces.set(currentDate, { digit: digitToTrace, traces });
+            if (traces.length > 0) {
+                historicalTraces.set(currentDate, { digit: digitToTrace, traces });
+            }
         }
         return historicalTraces;
     }
@@ -342,154 +359,194 @@ class PatternAnalysisService {
     detectPatterns(traces) {
         const patterns = [];
         const traceArray = [...traces.entries()];
+
         for (let i = 0; i < traceArray.length - 1; i++) {
-            const [currentDate, currentData] = traceArray[i];
-            for (const ct of currentData.traces) {
-                for (let j = i + 1; j < traceArray.length; j++) {
-                    const [prevDate, prevData] = traceArray[j];
-                    for (const pt of prevData.traces) {
-                        if (ct.prize === pt.prize && ct.position === pt.position) {
-                            patterns.push({ type: 'streak', key: `${ct.prize}_p${ct.position}`, length: j - i + 1, lastDate: currentDate });
-                        }
-                        const prizeIndexDiff = PRIZE_ORDER.indexOf(ct.prize) - PRIZE_ORDER.indexOf(pt.prize);
-                        if (prizeIndexDiff === 1 && ct.position === pt.position) {
-                            patterns.push({ type: 'diagonal_prize', key: `${pt.prize}_to_${ct.prize}`, length: 2, lastDate: currentDate });
-                        }
+            const [currentDate, currentTraceData] = traceArray[i];
+            const [prevDate, prevTraceData] = traceArray[i + 1];
+
+            for (const ct of currentTraceData.traces) {
+                for (const pt of prevTraceData.traces) {
+                    if (ct.prize === pt.prize && ct.position === pt.position) {
+                        patterns.push({ type: 'streak', key: `${ct.prize}_p${ct.position}`, length: 2, lastDate: currentDate });
                     }
-                }
-            }
-        }
-        for (let i = 0; i < traceArray.length; i++) {
-            const [date1, data1] = traceArray[i];
-            for (let j = i + 2; j < traceArray.length; j++) {
-                const [date2, data2] = traceArray[j];
-                const dayDiff = Math.round(DateTime.fromFormat(date1, 'dd/MM/yyyy').diff(DateTime.fromFormat(date2, 'dd/MM/yyyy'), 'days').days);
-                for (const t1 of data1.traces) {
-                    for (const t2 of data2.traces) {
-                        if (t1.prize === t2.prize && t1.position === t2.position) {
-                            patterns.push({ type: 'cycle', key: `${t1.prize}_p${t1.position}_cycle${dayDiff}`, length: 2, lastDate: date1, cycleDays: dayDiff });
-                        }
+                    const prizeIndexDiff = PRIZE_ORDER.indexOf(ct.prize) - PRIZE_ORDER.indexOf(pt.prize);
+                    if (prizeIndexDiff === 1 && ct.position === pt.position) {
+                        patterns.push({ type: 'diagonal_prize', key: `${pt.prize}_to_${ct.prize}`, length: 2, lastDate: currentDate });
                     }
                 }
             }
         }
         return this.consolidatePatterns(patterns);
     }
-
+    
     scorePatterns(patterns) {
         return patterns.map(p => {
             const recency = (ANALYSIS_LOOKBACK_DAYS - this.sortedDates.indexOf(p.lastDate)) / ANALYSIS_LOOKBACK_DAYS;
             const baseScore = p.length * 10 * recency;
-            const weight = (this.knowledge.get(p.key) || { weight: 1.0 }).weight;
+            const knowledgeItem = this.knowledge.get(p.key);
+            const weight = knowledgeItem ? knowledgeItem.weight : 1.0;
             return { ...p, score: baseScore * weight };
         });
     }
 
     evaluateSubgroupStrength(scoredPatterns) {
-        const strengths = {}, convergenceMap = {};
-        Object.values(GROUPS).forEach(g => Object.keys(g.subgroups).forEach(sg => { strengths[sg] = 0; convergenceMap[sg] = 0; }));
+        const strengths = {};
+        Object.values(GROUPS).forEach(g => Object.keys(g.subgroups).forEach(sg => strengths[sg] = 0));
+
         for (const p of scoredPatterns) {
             const nextStep = this.getNextStep(p);
             if (nextStep) {
                 const subgroup = this.prizeToGroupMap.subgroup[nextStep.prize];
                 if (subgroup && strengths[subgroup] !== undefined) {
                     strengths[subgroup] += p.score;
-                    convergenceMap[subgroup]++;
                 }
-            }
-        }
-        for (const sgKey in strengths) {
-            if (convergenceMap[sgKey] > 1) {
-                strengths[sgKey] += strengths[sgKey] * CONVERGENCE_BONUS * (convergenceMap[sgKey] - 1);
             }
         }
         return strengths;
     }
 
     filterByGroupLogic(subgroupStrengths) {
-        const findStrongestSubgroup = (groupKey) => Object.keys(GROUPS[groupKey].subgroups).reduce((s, c) => (subgroupStrengths[c] > subgroupStrengths[s]) ? c : s);
-        const g1_digits = this.getDigitsForSubgroup(findStrongestSubgroup('G1'));
-        const g2_digits = this.getDigitsForSubgroup(findStrongestSubgroup('G2'));
-        const g3_digits_all = ['G3A', 'G3B', 'G3C'].map(sg => this.getDigitsForSubgroup(sg));
-        const excludedDigits = g3_digits_all[0].filter(d => g3_digits_all[1].includes(d) && g3_digits_all[2].includes(d));
-        const g3_digits = this.getDigitsForSubgroup(findStrongestSubgroup('G3')).filter(d => !excludedDigits.includes(d));
+        const findStrongestSubgroup = (groupKey) => {
+            const subgroupKeys = Object.keys(GROUPS[groupKey].subgroups);
+            return subgroupKeys.reduce((strongest, current) => 
+                (subgroupStrengths[current] > subgroupStrengths[strongest]) ? current : strongest
+            );
+        };
+
+        const strongestG1 = findStrongestSubgroup('G1');
+        const strongestG2 = findStrongestSubgroup('G2');
+        const g1_digits = this.getDigitsForSubgroup(strongestG1);
+        const g2_digits = this.getDigitsForSubgroup(strongestG2);
+
+        const g3a_digits = this.getDigitsForSubgroup('G3A');
+        const g3b_digits = this.getDigitsForSubgroup('G3B');
+        const g3c_digits = this.getDigitsForSubgroup('G3C');
+        const excludedDigits = g3a_digits.filter(d => g3b_digits.includes(d) && g3c_digits.includes(d));
+        
+        const strongestG3 = findStrongestSubgroup('G3');
+        const strongestG3_digits = this.getDigitsForSubgroup(strongestG3);
+        const g3_digits = strongestG3_digits.filter(d => !excludedDigits.includes(d));
+        
         return { g1_digits, g2_digits, g3_digits };
     }
-
+    
     finalIntersectionAndFiltering({ g1_digits, g2_digits, g3_digits }) {
-        const counts = [...g1_digits, ...g2_digits, ...g3_digits].reduce((acc, d) => ({ ...acc, [d]: (acc[d] || 0) + 1 }), {});
-        return Object.keys(counts).filter(d => counts[d] >= 2);
+        const allDigits = [...g1_digits, ...g2_digits, ...g3_digits];
+        const counts = allDigits.reduce((acc, digit) => {
+            acc[digit] = (acc[digit] || 0) + 1;
+            return acc;
+        }, {});
+        return Object.keys(counts).filter(digit => counts[digit] >= 2);
     }
-
+    
     applyAdvancedExclusion(digits) {
-        const g7b = (this.resultsByDate.get(this.sortedDates[0]) || []).find(r => r.giai === 'G7b');
-        const excluded = new Set(g7b && g7b.so ? String(g7b.so).split('') : []);
+        const lastDayResults = this.resultsByDate.get(this.sortedDates[0]) || [];
+        const g7b = lastDayResults.find(r => r.giai === 'G7b');
+        const excluded = new Set();
+        if (g7b && g7b.so) String(g7b.so).split('').forEach(d => excluded.add(d));
         return digits.filter(d => !excluded.has(d));
     }
 
     findHotDigit(digits, scoredPatterns) {
         if (!digits || digits.length === 0) return null;
         const digitScores = digits.reduce((acc, d) => ({ ...acc, [d]: 0 }), {});
+
         for (const p of scoredPatterns) {
             const nextStep = this.getNextStep(p);
             if (nextStep) {
-                const result = (this.resultsByDate.get(this.sortedDates[0]) || []).find(r => r.giai === nextStep.prize);
+                const lastDayResults = this.resultsByDate.get(this.sortedDates[0]) || [];
+                const result = lastDayResults.find(r => r.giai === nextStep.prize);
                 if (result && result.so) {
                     String(result.so).split('').forEach(d => {
-                        if (digitScores[d] !== undefined) digitScores[d] += p.score;
+                        if (digitScores[d] !== undefined) {
+                            digitScores[d] += p.score;
+                        }
                     });
                 }
             }
         }
         return Object.keys(digitScores).reduce((a, b) => digitScores[a] > digitScores[b] ? a : b, digits[0]);
     }
+    
+    // --- CÁC HÀM TIỆN ÍCH ---
+    async generatePredictionForNextDay() {
+        await this.loadDataAndKnowledge(ANALYSIS_LOOKBACK_DAYS + 5);
+        if (this.sortedDates.length === 0) throw new Error("Không đủ dữ liệu.");
+        const latestDate = this.sortedDates[0];
+        const nextDay = DateTime.fromFormat(latestDate, 'dd/MM/yyyy').plus({ days: 1 }).toFormat('dd/MM/yyyy');
+        return this._generatePredictionForDate(nextDay);
+    }
 
     getDigitsForSubgroup(subgroupKey) {
         const groupKey = Object.keys(GROUPS).find(gk => GROUPS[gk].subgroups[subgroupKey]);
         if (!groupKey) return [];
+        const prizes = GROUPS[groupKey].subgroups[subgroupKey].prizes;
         const digits = new Set();
-        for (const p of GROUPS[groupKey].subgroups[subgroupKey].prizes) {
-            const result = (this.resultsByDate.get(this.sortedDates[0]) || []).find(r => r.giai === p);
-            if (result && result.so) String(result.so).split('').forEach(d => digits.add(d));
+        const lastDayResults = this.resultsByDate.get(this.sortedDates[0]) || [];
+        for (const p of prizes) {
+            const result = lastDayResults.find(r => r.giai === p);
+            if (result && result.so) {
+                String(result.so).split('').forEach(d => digits.add(d));
+            }
         }
         return [...digits];
     }
-
+    
     consolidatePatterns(patterns) {
         const consolidated = new Map();
-        patterns.forEach(p => {
-            if (consolidated.has(p.key)) consolidated.get(p.key).length = Math.max(consolidated.get(p.key).length, p.length);
-            else consolidated.set(p.key, { ...p });
-        });
+        for (const p of patterns) {
+            if (consolidated.has(p.key)) {
+                consolidated.get(p.key).length++;
+            } else {
+                consolidated.set(p.key, { ...p });
+            }
+        }
         return [...consolidated.values()];
     }
 
     getNextStep(pattern) {
         const parts = pattern.key.split('_');
+        if (parts.length < 2) return null;
+        
         const prizeKey = parts[0];
         const lastPrizeIndex = PRIZE_ORDER.indexOf(prizeKey);
         if (lastPrizeIndex === -1 || lastPrizeIndex >= PRIZE_ORDER.length - 1) return null;
-        if (pattern.type === 'streak') return { prize: PRIZE_ORDER[lastPrizeIndex] };
-        if (pattern.type === 'diagonal_prize') return { prize: PRIZE_ORDER[lastPrizeIndex + 1] };
-        if (pattern.type === 'cycle') return { prize: PRIZE_ORDER[lastPrizeIndex] };
+        
+        if (pattern.type === 'streak') {
+            return { prize: PRIZE_ORDER[lastPrizeIndex] };
+        }
+        if (pattern.type === 'diagonal_prize') {
+            return { prize: PRIZE_ORDER[lastPrizeIndex + 1] };
+        }
         return null;
     }
 
     createPrizeToGroupMap() {
         const map = { subgroup: {}, group: {} };
-        for (const [gk, gv] of Object.entries(GROUPS)) {
-            for (const [sgk, sgv] of Object.entries(gv.subgroups)) {
-                sgv.prizes.forEach(p => { map.subgroup[p] = sgk; map.group[p] = gk; });
+        for (const [groupKey, groupData] of Object.entries(GROUPS)) {
+            for (const [subgroupKey, subgroupData] of Object.entries(groupData.subgroups)) {
+                for (const prize of subgroupData.prizes) {
+                    map.subgroup[prize] = subgroupKey;
+                    map.group[prize] = groupKey;
+                }
             }
         }
         return map;
     }
 
     updateKnowledge(key, type, isHit, hitDate) {
-        const current = this.knowledge.get(key) || { patternKey: key, type, weight: 1.0, hitCount: 0, missCount: 0 };
-        current.weight = isHit ? Math.min(MAX_WEIGHT, current.weight * WEIGHT_INCREASE_FACTOR) : Math.max(MIN_WEIGHT, current.weight * WEIGHT_DECREASE_FACTOR);
-        if(isHit) current.hitCount++; else current.missCount++;
-        if(isHit) current.lastHit = hitDate;
+        const current = this.knowledge.get(key) || { 
+            patternKey: key, type, weight: 1.0, hitCount: 0, missCount: 0 
+        };
+        
+        if (isHit) {
+            current.weight = Math.min(MAX_WEIGHT, current.weight * WEIGHT_INCREASE_FACTOR);
+            current.hitCount++;
+            current.lastHit = hitDate;
+        } else {
+            current.weight = Math.max(MIN_WEIGHT, current.weight * WEIGHT_DECREASE_FACTOR);
+            current.missCount++;
+        }
         this.knowledge.set(key, current);
     }
 }
