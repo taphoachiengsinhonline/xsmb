@@ -49,49 +49,59 @@ exports.generateHistorical = async (req, res) => {
  */
 exports.getAllPredictions = async (req, res) => {
     try {
-        // 1. Lấy 100 dự đoán gần nhất (không cần sort ở đây nữa)
+        // 1. Lấy tham số page và limit từ query string, với giá trị mặc định
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 20; // Mặc định 20 item mỗi trang
+        const skip = (page - 1) * limit;
+
+        // 2. Lấy tổng số dự đoán để tính toán phân trang
+        const totalDocuments = await PatternPrediction.countDocuments();
+        const totalPages = Math.ceil(totalDocuments / limit);
+
+        // 3. Lấy đúng "lát cắt" dữ liệu cho trang hiện tại
         const predictions = await PatternPrediction.find()
-            .sort({ _id: -1 }) // Sắp xếp theo ID (thời gian tạo) để lấy 100 bản ghi mới nhất
-            .limit(100) 
+            .sort({ _id: -1 }) // Vẫn lấy theo thứ tự tạo mới nhất
+            .skip(skip)
+            .limit(limit)
             .lean();
         
-        // --- BƯỚC SẮP XẾP LẠI ---
-        // Hàm helper để chuyển chuỗi dd/MM/yyyy thành đối tượng Date
+        // Hàm helper để sắp xếp
         const parseDate = (dateStr) => {
-            if (!dateStr || typeof dateStr !== 'string') return null;
+            if (!dateStr) return null;
             const parts = dateStr.split('/');
             if (parts.length !== 3) return null;
-            // new Date(year, monthIndex, day)
             return new Date(parts[2], parts[1] - 1, parts[0]);
         };
         
-        // Sắp xếp lại mảng predictions theo ngày giảm dần
+        // Sắp xếp lại lát cắt dữ liệu này
         predictions.sort((a, b) => {
             const dateA = parseDate(a.ngayDuDoan);
             const dateB = parseDate(b.ngayDuDoan);
-            if (!dateA || !dateB) return 0;
-            return dateB - dateA; // Sắp xếp từ mới nhất -> cũ nhất
+            return (dateB || 0) - (dateA || 0);
         });
-        // ------------------------
 
-        // 2. Lấy danh sách các ngày có dự đoán để truy vấn kết quả thực tế
+        // 4. Các bước kết hợp dữ liệu còn lại giữ nguyên
         const dates = predictions.map(p => p.ngayDuDoan);
-        
-        // 3. Lấy kết quả GĐB thực tế cho những ngày đó
         const results = await Result.find({ ngay: { $in: dates }, giai: 'ĐB' }).lean();
-        
-        // 4. Tạo một Map để tra cứu kết quả thực tế nhanh hơn
         const resultsMap = new Map(results.map(r => [r.ngay, r.so]));
-
-        // 5. Kết hợp dữ liệu
         const dataWithActuals = predictions.map(p => ({
             ...p,
             actualGDB: resultsMap.get(p.ngayDuDoan) || null
         }));
 
-        res.json({ success: true, predictions: dataWithActuals });
+        // 5. Trả về dữ liệu cùng với thông tin phân trang
+        res.json({
+            success: true,
+            predictions: dataWithActuals,
+            pagination: {
+                page: page,
+                limit: limit,
+                total: totalDocuments,
+                pages: totalPages,
+            }
+        });
     } catch (error) {
-        console.error('Error getting all predictions:', error);
+        console.error('Error getting all predictions with pagination:', error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
