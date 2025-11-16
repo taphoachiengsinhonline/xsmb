@@ -60,7 +60,7 @@ exports.getAllPredictions = async (req, res) => {
 
         // 3. Lấy đúng "lát cắt" dữ liệu cho trang hiện tại
         const predictions = await PatternPrediction.find()
-            .sort({ _id: -1 }) // Vẫn lấy theo thứ tự tạo mới nhất
+            .sort({ _id: -1 }) // Lấy theo thứ tự tạo mới nhất
             .skip(skip)
             .limit(limit)
             .lean();
@@ -73,7 +73,7 @@ exports.getAllPredictions = async (req, res) => {
             return new Date(parts[2], parts[1] - 1, parts[0]);
         };
         
-        // Sắp xếp lại lát cắt dữ liệu này
+        // Sắp xếp lại lát cắt dữ liệu này theo ngày giảm dần
         predictions.sort((a, b) => {
             const dateA = parseDate(a.ngayDuDoan);
             const dateB = parseDate(b.ngayDuDoan);
